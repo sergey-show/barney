@@ -1,0 +1,12 @@
+**/*.test.ts
+**/*.test.tsx
+*.sqlite
+*.sqlite-journal
+.env
+.env.*
+dist/
+node_modules/
+.barney/
+.git/
+*.tgz
+scripts/

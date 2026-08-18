@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.barney/
+.npmrc
+*.sqlite
+*.sqlite-journal
+*.tgz
+.DS_Store
+apps/web/dist/
+apps/web/public/vendor/

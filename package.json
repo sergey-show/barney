@@ -1,0 +1,49 @@
+{
+  "name": "@encsch/barney",
+  "version": "0.1.0",
+  "private": true,
+  "description": "An AI agent with developing capabilities. The kernel is immutable; the body lives in ~/.barney.",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "bun": ">=1.2.0"
+  },
+  "bin": {
+    "barney": "./bin/barney"
+  },
+  "files": [
+    "bin",
+    "src",
+    "apps/web/dist"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "cli": "bun run src/presentation/cli/main.ts cli",
+    "web": "bun run src/presentation/cli/main.ts web",
+    "dev:ui": "vite --config apps/web/vite.config.ts",
+    "build:web": "vite build --config apps/web/vite.config.ts",
+    "build:bin": "bun run scripts/build-bin.ts",
+    "pack:npm": "bun run build:web && npm pack --dry-run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "citty": "^0.1.6",
+    "hono": "^4.9.6",
+    "playwright": "^1.62.1"
+  },
+  "devDependencies": {
+    "@types/react": "^19.1.12",
+    "@types/react-dom": "^19.1.9",
+    "@vitejs/plugin-react": "^5.0.2",
+    "bun-types": "latest",
+    "mermaid": "^11.16.1",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
+    "typescript": "^5.9.2",
+    "vite": "^7.1.5"
+  }
+}
