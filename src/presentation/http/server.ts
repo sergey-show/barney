@@ -43,11 +43,12 @@ export function createApp() {
 
   app.post("/api/providers", async (c) => {
     try {
-      const body = await c.req.json<{ name: string; host: string; apiKey?: string }>();
+      const body = await c.req.json<{ name: string; host: string; apiKey?: string; dialect?: string }>();
       return c.json(await kernel.addOpenAiProvider({
         name: body.name,
         host: body.host,
         apiKey: body.apiKey,
+        dialect: body.dialect,
       }));
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 400);
@@ -61,7 +62,7 @@ export function createApp() {
 
   app.patch("/api/providers/:id", async (c) => {
     try {
-      const body = await c.req.json<{ name?: string; host?: string; apiKey?: string | null }>();
+      const body = await c.req.json<{ name?: string; host?: string; apiKey?: string | null; dialect?: string }>();
       return c.json(await kernel.updateProvider(c.req.param("id"), body));
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 400);

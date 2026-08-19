@@ -1,3 +1,5 @@
+import { asText } from "../context/packSession.ts";
+
 export type ExistenceKind = "act" | "observe" | "review" | "idle";
 
 export type ExistenceBlock = {
@@ -21,7 +23,7 @@ export function parseExistence(body: string): ExistenceBlock[] {
 }
 
 export function appendExistence(blocks: ExistenceBlock[], next: Omit<ExistenceBlock, "at"> & { at?: string }): ExistenceBlock[] {
-  const text = next.text.replace(/\s+/g, " ").trim();
+  const text = asText(next.text).replace(/\s+/g, " ").trim();
   if (!text) return blocks;
   const last = blocks.at(-1);
   if (last && last.kind === next.kind && last.text === text) return blocks;
@@ -40,9 +42,9 @@ export function formatExistence(blocks: ExistenceBlock[]): string {
 }
 
 export function renderExistencePrompt(blocks: ExistenceBlock[]): string {
-  if (!blocks.length) return "Existence (draft of this life): empty — write a deed, not a program of the self.";
+  if (!blocks.length) return "Draft of this life: empty — write a deed, not a program of the self.";
   return [
-    "Existence (Sartre/Camus) — a draft of living. Act first; essence follows.",
+    "Draft of this life. Act first; essence follows.",
     ...blocks.slice(-6).map((block) => `- ${block.kind}: ${block.text}`),
   ].join("\n");
 }

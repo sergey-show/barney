@@ -19,21 +19,35 @@ export function toolFamily(name: string): string {
   return name.split("_")[0] || name;
 }
 
-export function wantingWithoutLiking(input: { attempts: number; failed: number; passed?: boolean }): boolean {
+export function familyKey(call: { name: string; arguments?: Record<string, unknown> }): string {
+  if (call.name !== "shell") return toolFamily(call.name);
+  const verb = shellHead(String(call.arguments?.command ?? ""));
+  return verb ? `shell:${verb}` : "shell";
+}
+
+export function shellHead(command: string): string {
+  const rest = command.trim().replace(/^(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)+/, "");
+  const first = rest.split(/\s+/)[0] ?? "";
+  return first.replace(/^.*\//, "").replace(/\.exe$/i, "").toLowerCase();
+}
+
+/** Extra approaches this operator message (research, recovery, persist). Not run.attempts. Family fails stay in observe. */
+export function wantingWithoutLiking(input: { extraApproaches: number; passed?: boolean }): boolean {
   if (input.passed) return false;
-  return input.attempts >= 2 || input.failed >= 2;
+  return input.extraApproaches >= 1;
 }
 
 export function familySaturated(fails: number): boolean {
   return fails >= 2;
 }
 
-export function cycleStrategy(used: StrategyName[], attempts: number): StrategyName {
-  const unused = SOLVE_CYCLE.find((name) => !used.includes(name));
+export function cycleStrategy(used: StrategyName[], attempts: number, skipResearch = false): StrategyName {
+  const cycle = skipResearch ? SOLVE_CYCLE.filter((name) => name !== "research") : SOLVE_CYCLE;
+  const unused = cycle.find((name) => !used.includes(name));
   if (unused) return unused;
-  const next = SOLVE_CYCLE[attempts % SOLVE_CYCLE.length] ?? "recall_failures";
+  const next = cycle[attempts % cycle.length] ?? "recall_failures";
   if (next === used.at(-1)) {
-    return SOLVE_CYCLE[(attempts + 1) % SOLVE_CYCLE.length] ?? "research";
+    return cycle[(attempts + 1) % cycle.length] ?? "recall_failures";
   }
   return next;
 }
@@ -47,14 +61,25 @@ export function needsUser(review: { missing?: string; summary: string }): boolea
   return false;
 }
 
+export type HaltReason = "pass" | "abort" | "budget" | "attempts" | "need_user" | "wanting" | "continue";
+
 export function stopAfterFail(
   review: { verdict: string; missing?: string; summary: string },
-  limits: { aborted?: boolean; exhausted: boolean; attempts: number; maxAttempts: number; minStrategies: number; used: number },
-): "pass" | "abort" | "budget" | "attempts" | "need_user" | "continue" {
+  limits: {
+    aborted?: boolean;
+    exhausted: boolean;
+    attempts: number;
+    maxAttempts: number;
+    minStrategies: number;
+    used: number;
+    wanting?: boolean;
+  },
+): HaltReason {
   if (review.verdict === "pass") return "pass";
   if (limits.aborted) return "abort";
   if (limits.exhausted) return "budget";
   if (limits.attempts >= limits.maxAttempts) return "attempts";
   if (needsUser(review) && limits.used >= Math.max(1, limits.minStrategies)) return "need_user";
+  if (limits.wanting) return "wanting";
   return "continue";
 }

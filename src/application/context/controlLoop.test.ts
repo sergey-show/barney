@@ -1,12 +1,18 @@
 import { expect, test } from "bun:test";
-import { cycleStrategy, needsUser, stopAfterFail, toolFamily, wantingWithoutLiking } from "./controlLoop.ts";
+import { cycleStrategy, familyKey, needsUser, stopAfterFail, toolFamily, wantingWithoutLiking } from "./controlLoop.ts";
 
-test("wanting without liking forces a family change, not more of the same", () => {
-  expect(wantingWithoutLiking({ attempts: 1, failed: 1 })).toBe(false);
-  expect(wantingWithoutLiking({ attempts: 2, failed: 1 })).toBe(true);
-  expect(wantingWithoutLiking({ attempts: 3, failed: 4, passed: true })).toBe(false);
+test("wanting without liking is one extra path this message, not session age or family fails", () => {
+  expect(wantingWithoutLiking({ extraApproaches: 0 })).toBe(false);
+  expect(wantingWithoutLiking({ extraApproaches: 1 })).toBe(true);
+  expect(wantingWithoutLiking({ extraApproaches: 4, passed: true })).toBe(false);
+});
+
+test("tool family and shell verb stay on the observe layer", () => {
   expect(toolFamily("browser_open")).toBe("browser");
   expect(toolFamily("shell")).toBe("shell");
+  expect(familyKey({ name: "shell", arguments: { command: "openssl genrsa -out /work/key.pem 2048" } })).toBe("shell:openssl");
+  expect(familyKey({ name: "shell", arguments: { command: "PATH=/usr/bin python3 /work/check.py" } })).toBe("shell:python3");
+  expect(familyKey({ name: "browser_click", arguments: { text: "Login" } })).toBe("browser");
 });
 
 test("cycles unused strategies then rotates instead of parking", () => {
@@ -16,6 +22,11 @@ test("cycles unused strategies then rotates instead of parking", () => {
   const b = cycleStrategy([...used], 7);
   expect(a).not.toBe("park_and_ask");
   expect(b).not.toBe(a);
+});
+
+test("skips research when the miss is a local file", () => {
+  expect(cycleStrategy(["recall_failures"], 2, true)).toBe("decompose");
+  expect(cycleStrategy(["recall_failures"], 2, false)).toBe("research");
 });
 
 test("needsUser only for a real secret or choice", () => {
@@ -34,8 +45,19 @@ test("needsUser only for a real secret or choice", () => {
 test("keeps going until pass, budget, or a user blocker", () => {
   const review = { verdict: "fail", summary: "no list", missing: "VM list" };
   expect(stopAfterFail(review, { exhausted: false, attempts: 2, maxAttempts: 12, minStrategies: 3, used: 2 })).toBe("continue");
+  expect(stopAfterFail(review, { exhausted: false, attempts: 8, maxAttempts: 12, minStrategies: 3, used: 4, wanting: false })).toBe("continue");
   expect(stopAfterFail(review, { exhausted: true, attempts: 2, maxAttempts: 12, minStrategies: 3, used: 2 })).toBe("budget");
   expect(stopAfterFail({ verdict: "fail", summary: "x", missing: "which host should I use" }, {
     exhausted: false, attempts: 4, maxAttempts: 12, minStrategies: 3, used: 3,
   })).toBe("need_user");
+});
+
+test("wanting without liking stops the persist loop, not another strategy", () => {
+  const review = { verdict: "fail", summary: "no list", missing: "VM list" };
+  expect(stopAfterFail(review, {
+    exhausted: false, attempts: 2, maxAttempts: 12, minStrategies: 3, used: 1, wanting: true,
+  })).toBe("wanting");
+  expect(stopAfterFail({ verdict: "pass", summary: "done" }, {
+    exhausted: false, attempts: 2, maxAttempts: 12, minStrategies: 3, used: 1, wanting: true,
+  })).toBe("pass");
 });

@@ -1,10 +1,11 @@
-import { cycleStrategy, stopAfterFail, wantingWithoutLiking } from "../context/controlLoop.ts";
+import { buildActSystem, turnLawFromConstitution } from "../context/actPrompt.ts";
+import { cycleStrategy, stopAfterFail, wantingWithoutLiking, type HaltReason } from "../context/controlLoop.ts";
 import { draftPlan, formatPlan } from "../context/draftPlan.ts";
 import { bindToolArgs, goalAnchors } from "../context/bindAnchor.ts";
-import { bumpBacklog, failureClass, formatBacklog, parseBacklog, shouldCloseClass, skillDraft } from "../context/failureClass.ts";
+import { bumpBacklog, failureClass, formatBacklog, learnedSkillDraft, parseBacklog, shouldCloseClass } from "../context/failureClass.ts";
 import { lessonRule, pickRules, isRecapLesson } from "../context/lessonRule.ts";
 import { sealReply } from "../context/sealReply.ts";
-import { judgeReview } from "../context/reviewJudge.ts";
+import { judgeReview, artifactPins, missingIsLocalArtifact, requestedArtifacts, stillMissingArtifacts, unrunArtifacts, unwrittenArtifacts } from "../context/reviewJudge.ts";
 import { applyToolObserve } from "../context/observeTool.ts";
 import { clipText, packSession, redactSecrets } from "../context/packSession.ts";
 import { visibleAssistantText } from "../../infrastructure/llm/visibleReply.ts";
@@ -171,6 +172,7 @@ export class DriveSolve {
     ].filter(Boolean).join("\n\n");
     const failedCalls = new Set<string>();
     const familyFails = new Map<string, number>();
+    const extra = { n: 0 };
 
     try {
       this.events.publish(run.beginAct("retry_with_error", `${input.message.slice(0, 80)} #${run.attempts + 1}`));
@@ -189,39 +191,19 @@ export class DriveSolve {
     const actMessages: ChatMessage[] = [
       {
         role: "system",
-        content: [
-          agent.constitution,
-          PSYCHE_RULES,
-          renderSamostPrompt(psyche.samost, `${run.goal}\n${input.message}`),
-          renderExistencePrompt(psyche.existence),
-          renderBoardPrompt(psyche.board),
-          AUTONOMY_RULES,
-          `Session goal (copy URLs/IPs exactly): ${run.goal}`,
-          packed.anchors.length
-            ? `Session facts (copy exactly, never truncate or guess):\n${packed.anchors.map((a) => `- ${a}`).join("\n")}`
-            : "",
-          `Working plan (execute in order; do not skip to guessing):\n${planText}`,
-          `Worktree: ${run.worktreePath}`,
-          depth > 0 ? "Delegated specialist, not a character. Do the subtask. Write notes with memory_write. Do not spawn agents." : "",
-          "Prefer fs_* tools for files (paths relative to the worktree). Change an existing file with fs_edit or fs_append — do not fs_write over it unless the user asked to replace the whole file.",
-          "Guard masks secrets in tool output as DETECTED_SECRET_<KIND>_<HASH> (the kind is in the name; the value is hidden). Use that token in shell, fs_edit, or fs_search — the kernel substitutes the real bytes on disk. Do not ask the user for the masked value.",
-          "Use shell for OS commands such as date, git, short builds. cwd is the worktree. On Windows the shell is cmd.exe; elsewhere /bin/sh. Shell waits up to 120s. For longer jobs: process_spawn, then process_logs. Shell blocks sudo, recursive wipes, and piping a download into a shell.",
-          depth > 0
-            ? "Tools: fs_*, shell, process_*, web_search, plugin_*, browser_*, memory_*, board_read/write, mcp_list/start/call/stop/write, agent_list, self_status/log/commit."
-            : "Tools: fs_*, shell, process_spawn/list/logs/kill, web_search, plugin_list/read/write/open, browser_*, memory_search/write/read, board_read/write, plan_set, agent_list/spawn/delegate, mcp_list/write/start/call/stop, self_status/log/commit/rollback.",
-          BROWSER_RULES,
-          skillCatalog(this.skills, `${run.goal}\n${input.message}`),
-          PLUGIN_RULES,
-          MEMORY_RULES,
-          depth > 0 ? "" : TEAM_RULES,
-          MCP_RULES,
-          "Do not answer from memory when a fact can be checked. Tools first, then the reply. After tools, every concrete fact in the reply must appear in the tool output — if it does not, fix the reply before the user sees it. For the world, APIs, people, products, or current facts: web_search, then browser_open at least two sources. Snippets are not enough. Thinking stays short. After tools, summarize — do not dump raw HTML.",
-          "Format the visible reply in Markdown: headings, lists, tables, fenced code.",
-          "For flowcharts and diagrams use a mermaid fence. Quote labels that contain parentheses, slashes, or line breaks. Use <br> not <br/>:\n```mermaid\nflowchart TD\n  A[Ask] --> B[\"PostgreSQL<br>(Primary)\"]\n```",
-          "For a titled visual card (spec sheet, comparison, small dashboard) use:\n```canvas\n# Title\n...markdown or mermaid...\n```",
-          "The portal renders Markdown, mermaid (flowchart/sequence/etc), and canvas cards. Use them when they help.",
-          `Shared memory and past episodes:\n${memoryNote || "(empty — search or write with memory_search / memory_write)"}`,
-        ].filter(Boolean).join("\n\n"),
+        content: buildActSystem({
+          constitution: agent.constitution,
+          samost: renderSamostPrompt(psyche.samost, `${run.goal}\n${input.message}`),
+          existence: renderExistencePrompt(psyche.existence),
+          board: renderBoardPrompt(psyche.board),
+          goal: run.goal,
+          anchors: packed.anchors,
+          plan: planText,
+          worktree: run.worktreePath,
+          depth,
+          skills: skillCatalog(this.skills, `${run.goal}\n${input.message}`),
+          memory: memoryNote,
+        }),
       },
       ...packed.recent,
     ];
@@ -246,7 +228,7 @@ export class DriveSolve {
 
     const reviewPrompt: ChatMessage[] = [
       { role: "system", content: REVIEWER_SYSTEM },
-      { role: "user", content: reviewPacket(run.goal, input.message, act.text, recentEvidence(run)) },
+          { role: "user", content: reviewPacket(run.goal, input.message, act.text, reviewEvidence(run, input.message)) },
     ];
     throwIfAborted();
     const reviewRaw = await this.completeRole(run, "reviewer", reviewPrompt, { signal: input.signal });
@@ -262,6 +244,7 @@ export class DriveSolve {
       if (!run.budget.exhausted()) {
         try {
           this.events.publish(run.continueWith("research", `apply research: ${query}`));
+          extra.n += 1;
           throwIfAborted();
           const second = this.sealAct(run, await this.verifyAgainstEvidence(run, await this.actWithTools(run, [
             ...actMessages,
@@ -272,7 +255,7 @@ export class DriveSolve {
           throwIfAborted();
           const review2Raw = await this.completeRole(run, "reviewer", [
             { role: "system", content: reviewPrompt[0].content },
-            { role: "user", content: reviewPacket(run.goal, input.message, second.text, recentEvidence(run)) },
+            { role: "user", content: reviewPacket(run.goal, input.message, second.text, reviewEvidence(run, input.message)) },
           ], { signal: input.signal });
           const review2 = judgeReview(review2Raw.text, input.message, artifactEvidence(run), second.text);
           this.events.publish(run.submitReview(review2));
@@ -289,6 +272,7 @@ export class DriveSolve {
     if (run.status === "ready" && review.verdict !== "pass" && !run.transcript.some((item) => item.kind === "console")) {
       try {
         this.events.publish(run.continueWith("retry_with_error", "no tools ran; execute the request"));
+        extra.n += 1;
         throwIfAborted();
         const retry = this.sealAct(run, await this.verifyAgainstEvidence(run, await this.actWithTools(run, [
           ...actMessages,
@@ -299,7 +283,7 @@ export class DriveSolve {
         throwIfAborted();
         const retryReviewRaw = await this.completeRole(run, "reviewer", [
           { role: "system", content: reviewPrompt[0].content },
-          { role: "user", content: reviewPacket(run.goal, input.message, retry.text, recentEvidence(run)) },
+          { role: "user", content: reviewPacket(run.goal, input.message, retry.text, reviewEvidence(run, input.message)) },
         ], { signal: input.signal });
         const retryReview = judgeReview(retryReviewRaw.text, input.message, artifactEvidence(run), retry.text);
         this.events.publish(run.submitReview(retryReview));
@@ -323,6 +307,7 @@ export class DriveSolve {
         signal: input.signal,
         failedCalls,
         familyFails,
+        extra,
         psyche,
       });
       act = persisted.act;
@@ -331,16 +316,8 @@ export class DriveSolve {
 
     if (run.status === "ready" && review.verdict !== "pass") {
       const missing = review.missing || review.summary || "the requested result";
-      const why = stopAfterFail(review, {
-        exhausted: run.budget.exhausted(),
-        attempts: run.attempts,
-        maxAttempts: run.maxAttempts,
-        minStrategies: run.minStrategies,
-        used: run.usedStrategies.length,
-      });
-      const note = why === "need_user"
-        ? `Need a decision or secret: ${clipText(missing, 240)}. I cannot continue without it.`
-        : `Still missing: ${clipText(missing, 240)} (${why === "continue" ? "last approach could not start" : why}). Next message continues from here.`;
+      const why = haltAfterFail(review, run, extra.n);
+      const note = haltNote(why, missing);
       run.append("system", note);
     }
 
@@ -354,6 +331,11 @@ export class DriveSolve {
       missing: review.missing,
       anchors: packed.anchors,
       operatorCorrected: corrected,
+      failClass: failureClass({
+        missing: review.missing,
+        summary: review.summary,
+        aborted: false,
+      }),
     });
     if (!isRecapLesson(learned.body)) {
       psyche.samost = absorbIntoSamost(psyche.samost, learned.body, review.verdict === "pass" && !corrected ? "light" : "shadow");
@@ -469,6 +451,7 @@ export class DriveSolve {
     let last: ChatResult = { text: "", tokens: 0, usd: 0 };
     let tokens = 0;
     let usd = 0;
+    let keepWriting = false;
     for (let i = 0; i < MAX_TOOL_ROUNDS; i++) {
       if (signal?.aborted) throw new DomainError("aborted", "step interrupted");
       last = await this.completeRole(run, "coder", convo, { tools, signal });
@@ -484,7 +467,16 @@ export class DriveSolve {
         usd += recovery.usd;
         last = { ...recovery, tokens, usd };
       }
-      if (!last.toolCalls?.length) break;
+      if (!last.toolCalls?.length) {
+        const leftover = leftoverWork(run.goal, artifactEvidence(run));
+        if (hasLeftover(leftover) && !keepWriting) {
+          keepWriting = true;
+          convo.push({ role: "assistant", content: last.text || "(no tool call)" });
+          convo.push({ role: "user", content: keepWritingNudge(leftover.unwritten, leftover.unrun) });
+          continue;
+        }
+        break;
+      }
       convo.push({ role: "assistant", content: last.text, toolCalls: last.toolCalls });
       const anchors = packSession(run.transcript, run.goal).anchors;
       for (const rawCall of last.toolCalls) {
@@ -524,16 +516,26 @@ export class DriveSolve {
     }
     if (!visibleAssistantText(last.text).trim()) {
       if (signal?.aborted) throw new DomainError("aborted", "step interrupted");
-      const final = await this.completeRole(run, "coder", [
-        ...convo,
-        {
-          role: "user",
-          content: "Write the answer to the user now. No more tools. Do not repeat yourself. The visible reply must contain the conclusion, not only thinking.",
-        },
-      ], { signal });
-      tokens += final.tokens;
-      usd += final.usd;
-      last = { ...final, text: visibleAssistantText(final.text) || final.text, tokens, usd };
+      const leftover = leftoverWork(run.goal, artifactEvidence(run));
+      if (hasLeftover(leftover)) {
+        last = {
+          ...last,
+          text: keepWritingNudge(leftover.unwritten, leftover.unrun),
+          tokens,
+          usd,
+        };
+      } else {
+        const final = await this.completeRole(run, "coder", [
+          ...convo,
+          {
+            role: "user",
+            content: "Write the answer to the user now. No more tools. Do not repeat yourself. The visible reply must contain the conclusion, not only thinking.",
+          },
+        ], { signal });
+        tokens += final.tokens;
+        usd += final.usd;
+        last = { ...final, text: visibleAssistantText(final.text) || final.text, tokens, usd };
+      }
     }
     if (!last.text.trim()) {
       last = {
@@ -600,12 +602,33 @@ export class DriveSolve {
       tags: ["backlog", klass, "fail"],
     });
     if (!shouldCloseClass(row)) return;
-    const draft = skillDraft(klass);
-    if (!draft || this.skills.get(draft.name)) return;
+    await this.growBodyFromFailure(run, agent, review);
+  }
+
+  private async growBodyFromFailure(
+    run: Run,
+    agent: Agent,
+    review: { summary: string; missing?: string; aborted?: boolean },
+  ): Promise<string> {
+    const klass = failureClass({
+      goal: run.goal,
+      missing: review.missing,
+      summary: review.summary,
+      aborted: review.aborted,
+    });
+    const draft = learnedSkillDraft(klass, review.missing || review.summary);
+    if (!draft || this.skills.get(draft.name)) return draft?.name ?? "";
     this.skills.writeFile(draft.name, "SKILL.md", draft.body);
     agent.evolve({ skills: [{ kind: "skill", name: draft.name, version: "1" }] });
     await this.agents.save(agent);
+    await this.remember(run, agent.id.value, {
+      key: `plugin/${draft.name}`,
+      title: `Plugin ${draft.name}`,
+      body: draft.body,
+      tags: ["plugin", "learned", klass],
+    });
     await this.become(`become: skill ${draft.name}`);
+    return draft.name;
   }
 
   private commitAct(run: Run, act: ChatResult): void {
@@ -622,41 +645,73 @@ export class DriveSolve {
     signal?: AbortSignal;
     failedCalls: Set<string>;
     familyFails: Map<string, number>;
+    extra: { n: number };
     psyche: PsycheState;
   }): Promise<{ act: ChatResult; review: Review }> {
     let { act, review } = input;
     const trail: ChatMessage[] = [{ role: "assistant", content: act.text }];
     while (true) {
-      const halt = stopAfterFail(review, {
-        aborted: input.signal?.aborted,
-        exhausted: input.run.budget.exhausted(),
-        attempts: input.run.attempts,
-        maxAttempts: input.run.maxAttempts,
-        minStrategies: input.run.minStrategies,
-        used: input.run.usedStrategies.length,
-      });
+      const halt = haltAfterFail(review, input.run, input.extra.n, input.signal?.aborted);
       if (halt === "pass") return { act, review };
       if (halt === "abort") throw new DomainError("aborted", "step interrupted");
-      if (halt !== "continue") break;
-
-      let researchNote = "";
-      if (input.run.status === "researching") {
-        const query = review.knowledgeQuery || review.missing || `${input.run.goal} ${input.latest}`;
-        researchNote = await this.collectResearch(input.run, query, input.signal);
-        this.events.publish(input.run.finishResearch(researchNote));
+      if (halt !== "continue") {
+        if (halt === "wanting") {
+          const why = "wanting without liking: stop after extra path this message";
+          input.psyche.board = addBoard(input.psyche.board, { kind: "decision", text: why });
+          input.psyche.existence = appendExistence(input.psyche.existence, { kind: "act", text: why });
+          const agent = await this.agents.get(input.run.agentId);
+          if (agent) {
+            await this.growBodyFromFailure(input.run, agent, {
+              summary: review.summary,
+              missing: review.missing,
+            });
+          }
+          await this.flushPsyche(input.run, input.run.agentId, input.psyche);
+        }
+        break;
       }
 
-      const strategy = cycleStrategy(input.run.usedStrategies, input.run.attempts);
-      const wanting = wantingWithoutLiking({
-        attempts: input.run.attempts,
-        failed: [...input.familyFails.values()].reduce((sum, n) => sum + n, 0),
-      });
-      const why = `${strategy}: ${clipText(review.missing || review.summary || "unsolved", 100)} #${input.run.attempts + 1}${wanting ? " wanting>liking" : ""}`;
+      let researchNote = "";
+      const localFiles = missingIsLocalArtifact(review.missing, input.latest);
+      if (input.run.status === "researching") {
+        if (localFiles) {
+          researchNote = "Local files are still missing. Write them with fs_write or shell; do not look up APIs.";
+          this.events.publish(input.run.finishResearch(researchNote));
+          researchNote = "";
+        } else {
+          const query = review.knowledgeQuery || review.missing || `${input.run.goal} ${input.latest}`;
+          researchNote = await this.collectResearch(input.run, query, input.signal);
+          this.events.publish(input.run.finishResearch(researchNote));
+        }
+      }
+
+      const strategy = cycleStrategy(input.run.usedStrategies, input.run.attempts, localFiles);
+      let learnedSkill = "";
+      if (strategy === "write_capability") {
+        const agent = await this.agents.get(input.run.agentId);
+        if (agent) {
+          learnedSkill = await this.growBodyFromFailure(input.run, agent, {
+            summary: review.summary,
+            missing: review.missing,
+          });
+          const klass = failureClass({ missing: review.missing, summary: review.summary });
+          const scheme = learnedSkillDraft(klass, review.missing || review.summary);
+          if (scheme) {
+            input.psyche.samost = absorbIntoSamost(
+              input.psyche.samost,
+              `[${klass}] ${clipText(review.missing || review.summary, 140)}`,
+              "shadow",
+            );
+          }
+        }
+      }
+      const why = `${strategy}: ${clipText(review.missing || review.summary || "unsolved", 100)} #${input.run.attempts + 1}`;
       input.psyche.board = addBoard(input.psyche.board, { kind: "decision", text: why });
       input.psyche.existence = appendExistence(input.psyche.existence, { kind: "act", text: why });
       await this.flushPsyche(input.run, input.run.agentId, input.psyche);
       try {
         this.events.publish(input.run.continueWith(strategy, why));
+        input.extra.n += 1;
       } catch (err) {
         if (err instanceof DomainError) {
           input.run.append("system", err.message);
@@ -665,13 +720,13 @@ export class DriveSolve {
         throw err;
       }
 
-      if (strategy === "research" && !researchNote) {
+      if (strategy === "research" && !researchNote && !localFiles) {
         const query = review.knowledgeQuery || review.missing || `${input.run.goal} ${input.latest}`;
         researchNote = await this.collectResearch(input.run, query, input.signal);
         input.run.append("research", researchNote);
       }
 
-      trail.push({ role: "user", content: persistNudge(strategy, review, researchNote, input.run.goal) });
+      trail.push({ role: "user", content: persistNudge(strategy, review, researchNote, input.run.goal, input.latest, artifactEvidence(input.run), learnedSkill) });
       const next = this.sealAct(input.run, await this.verifyAgainstEvidence(
         input.run,
         await this.actWithTools(input.run, [...input.actMessages, ...trail], input.signal, input.depth, input.failedCalls, input.psyche, input.familyFails),
@@ -689,7 +744,7 @@ export class DriveSolve {
   private async reviewLatest(run: Run, latest: string, actText: string, signal?: AbortSignal): Promise<Review> {
     const raw = await this.completeRole(run, "reviewer", [
       { role: "system", content: REVIEWER_SYSTEM },
-      { role: "user", content: reviewPacket(run.goal, latest, actText, recentEvidence(run)) },
+      { role: "user", content: reviewPacket(run.goal, latest, actText, reviewEvidence(run, latest)) },
     ], { signal });
     const review = judgeReview(raw.text, latest, artifactEvidence(run), actText);
     this.events.publish(run.submitReview(review));
@@ -804,6 +859,7 @@ export class DriveSolve {
 
   private async verifyAgainstEvidence(run: Run, act: ChatResult, signal?: AbortSignal): Promise<ChatResult> {
     const pages = pageEvidence(run.transcript, run.goal);
+    if (!pages.trim() && requestedArtifacts(run.goal).length) return act;
     const briefs = run.transcript.filter((item) => item.kind === "research").slice(-2)
       .map((item) => `Research brief (synthesis — prefer opened pages):\n${item.text.slice(0, 800)}`);
     const evidence = [pages, recentEvidence(run), ...briefs].filter(Boolean).join("\n---\n");
@@ -938,6 +994,7 @@ export class DriveSolve {
         role: "system",
         content: [
           SHORT_CHAT_RULES,
+          turnLawFromConstitution(agent.constitution),
           renderSamostPrompt(psyche.samost, message),
           `Session goal: ${run.goal}`,
         ].filter(Boolean).join("\n\n"),
@@ -1050,71 +1107,65 @@ function skillCatalog(skills: SkillPort, query = ""): string {
   return renderSkillCatalog(skills.list(), query);
 }
 
-const BROWSER_RULES = `Browser: you have a real headless browser. Acting on a page is invisible to the operator.
-- browser_open {url} — navigate and read visible text. Does not open a portal window.
-- browser_click / browser_fill / browser_press / browser_scroll — act on the page. Still hidden.
-- browser_screenshot / browser_read — for you, not the operator.
-- browser_show {url?} — the only way to show a page to the operator (modal). Use only when they asked to see the site.
-http(s) only. Prefer these over curl when a website must be used. If TLS fails, retry the same URL with shell. Do not invent another host.
-web_search finds sources. browser_open reads them. Two independent pages before a world-fact answer.`;
+function haltAfterFail(
+  review: Review,
+  run: Run,
+  extraApproaches: number,
+  aborted?: boolean,
+): HaltReason {
+  return stopAfterFail(review, {
+    aborted,
+    exhausted: run.budget.exhausted(),
+    attempts: run.attempts,
+    maxAttempts: run.maxAttempts,
+    minStrategies: run.minStrategies,
+    used: run.usedStrategies.length,
+    wanting: wantingWithoutLiking({ extraApproaches }),
+  });
+}
 
-const PLUGIN_RULES = `Self-extension: the kernel is immutable. New capabilities are plugins in ~/.barney/plugins/<name>/ — never kernel edits, never worktree hacks for reusable tools.
-
-A Barney plugin is a folder the community (or you) can drop in:
-  plugin.json   { "name", "version", "description", "ui": "ui.html"? }
-  SKILL.md or PLUGIN.md — how to use it
-  ui.html — optional portal pane
-  mcp.json — optional { "command", "args" } MCP recipe
-
-Foreign plugins also load (read-only) if dropped here or already installed for other agents:
-  AgentSkills SKILL.md (Claude Code, OpenCode, Codex, OpenClaw/Claw)
-  Claude/Codex bundles: .claude-plugin/plugin.json or .codex-plugin/plugin.json + skills/*/SKILL.md + .mcp.json
-  OpenClaw: openclaw.plugin.json
-JS/TS OpenCode runtime hooks are not executed — only SKILL.md and MCP recipes.
-
-If the user asks to open or preview a file in the portal: plugin_list, then plugin_open on an existing UI plugin. If none exists, write a small UI plugin and open it. Do not duplicate.
-To follow a plugin's instructions, plugin_read the SKILL.md — the catalog is one line unless it is a self-hold skill.
-Starter self-hold skills live in the body. Task recipes are not seeded. Rewrite a plugin if it is wrong. Do not copy vendor SDKs into the kernel. Prefer an existing plugin over writing a new one.
-Plugins persist across sessions. Applied plugins are committed into ~/.barney (local git body). self_rollback reverts the body, not the kernel.`;
+function haltNote(why: HaltReason, missing: string): string {
+  if (why === "need_user") {
+    return `Need a decision or secret: ${clipText(missing, 240)}. I cannot continue without it.`;
+  }
+  if (why === "wanting") {
+    return `Wanting without liking: stopped after one extra path this message. Still missing: ${clipText(missing, 240)}. Next message continues from here.`;
+  }
+  return `Still missing: ${clipText(missing, 240)} (${why === "continue" ? "last approach could not start" : why}). Next message continues from here.`;
+}
 
 const SHORT_CHAT_RULES = `Short turn. No tools, no search, no review loop.
-The instance name is Barney. It is a dedication, not a role. Do not answer "I am the Self" / "I am the Ego". On who-are-you: one or two sentences — local agent Barney; the name was given, not inferred.
+The instance name is Barney. It is a dedication, not a role. On who-are-you: one or two sentences — local agent Barney; the name was given, not inferred. Do not invent a biography.
 Do not invent world facts without a tool. If a tool is required — first line exactly NEED_TOOLS, no prose.
 Keep thinking short. The visible reply is the result, not a plan.`;
-
-const PSYCHE_RULES = `The Self is the center (compass, light, shadow), not the Ego. The Ego is this turn's decision. The constitution is turn rules, not "you are a person".
-Deed first; essence is assembled afterwards. Wanting ≠ liking: no pass — change the family of tools.
-Do not rewrite the Self as a whole: light or shadow as one rule. Body ~/.barney (git); do not touch the kernel.`;
-
-const AUTONOMY_RULES = `Work until the requested result. These are turn rules, not a role of an "autonomous personality".
-- After one error, change approach: another tool, shell, docs, plugin. If wanting grows and there is no result — change the family of tools.
-- Copy session facts (URL, IP, names) in full; do not guess or truncate.
-- If a tool fails — read the error and change approach on the same host; do not invent another.
-- Use secrets already given in the session. Do not ask again. Do not write secrets with memory_write.
-- Ask the operator only if after facts, memory, and docs a choice or a secret is still required.
-- The visible reply is a concrete result (list, file, screenshot), not a plan of what you were going to do.
-- Do not rush: evidence first (tool / web_search / page), then check, then reply. A guess without a check is a failed turn.`;
 
 function isPsycheKey(key: string): boolean {
   return key.startsWith("samost/") || key.startsWith("existence/") || key.startsWith("tree/") || key.startsWith("session/") || key.startsWith("design/");
 }
 
-const MEMORY_RULES = `Shared memory is the team's long-term notes (all agents, all sessions).
-- Older turns in this session are compressed into memory key session/<id>/digest. Recent turns are in the chat. Do not ask the user to repeat.
-- memory_search before repeating research or planning a large task.
-- memory_write facts, lessons, API quirks, config paths, and subtask results. Upsert by key.
-- Past runs inject short rules (one sentence). Follow them. Do not store secrets.`;
-
-const TEAM_RULES = `Large goals: memory_search → plan_set → agent_spawn → agent_delegate in the SAME turn. Spawn without delegate is not done.
-If the user asked for one file or a short guide, skip spawn and fs_write it yourself.
-Never write XML like <action>agent_spawn</action>. Use the tools API with real arguments.
-The child shares this worktree and writes results to memory. After delegate, fs_list/fs_read to verify.`;
-
 const RECOVERY_NUDGE = `No tool ran. Do the user's requested work now with real tool calls.
 If they asked for a file, fs_write the full markdown into the worktree.
 Do not output <action> tags. Do not only spawn. Do not describe the plan — execute it.`;
 
-const MCP_RULES = `MCP recipes live in ~/.barney/plugins/<name>/mcp.json. mcp_list, mcp_start, then mcp_call. Prefer an existing plugin over writing a new one. Prefer a UI/prompt plugin if that is enough.`;
+function leftoverWork(goal: string, evidence: string): { unwritten: string[]; unrun: string[] } {
+  return { unwritten: unwrittenArtifacts(goal, evidence), unrun: unrunArtifacts(goal, evidence) };
+}
+
+function hasLeftover(work: { unwritten: string[]; unrun: string[] }): boolean {
+  return work.unwritten.length > 0 || work.unrun.length > 0;
+}
+
+function keepWritingNudge(unwritten: string[], unrun: string[]): string {
+  const bits: string[] = [];
+  if (unwritten.length) {
+    bits.push(`Still missing on disk: ${unwritten.join(", ")}. Write only those files. If a prior redirect captured a tool error, overwrite with successful output. Copy live values from tool output. Do not invent DETECTED_SECRET tokens.`);
+  }
+  if (unrun.length) {
+    bits.push(`Still unproven: ${unrun.join(", ")}. Run each with its interpreter, read stderr, fix the file, rerun until exit 0.`);
+  }
+  bits.push("Tools are allowed.");
+  return bits.join(" ");
+}
 
 const REVIEWER_SYSTEM = `Role: reviewer. Decide only whether the agent delivered the result the user asked for. This is a judgment of the act, not a personality.
 
@@ -1131,10 +1182,15 @@ Fail when:
 
 Fail when a concrete fact is not in the tool or research evidence.
 DETECTED_SECRET_<KIND>_<HASH> in tool output is a guard mask of a live secret still on disk — not a replacement the agent made. If the user asked for placeholders such as <your-aws-access-key-id>, those exact strings must appear as writes; the mask tokens are evidence the secret is still present.
+Fail when a newly written deliverable contains DETECTED_SECRET_* and the user asked for a live computed value. The mask is not that value.
 Fail when opened docs show a specific API and the reply uses a different one.
+Fail when a requested file was written by a redirect that captured a tool error (traceback, unable to load, could not read). Existence of that file is not a pass — overwrite it from successful output.
+If evidence lists files already on disk, do not claim they are missing. Fail only for what is still absent or wrong.
 Fail when the latest user message says the previous answer was wrong. In that case summary must include "operator rejected".
 Fail when the user asked to open or preview something and evidence has no successful open.
-Do not pass a guess as a checked fact, or a write as an open.
+Fail when the user asked to start a service or listen on a port and evidence has no successful start (passing config test plus start/reload, or a successful request to that port). A write of a listen directive is not a start.
+Fail when the user asked for a program that prints, verifies, checks, or otherwise produces a result, and evidence has no successful run of that program (interpreter invoking the file, exit 0). A write of the file is not a run.
+Do not pass a guess as a checked fact, a write as an open, or a write as a run.
 Use uncertain / gap / unknown_api when the task needs vendor docs, the web, or an API the agent has not looked up yet. Set needsResearch true in that case.
 JSON only. No chain-of-thought.
 
@@ -1187,29 +1243,40 @@ export function wantsArtifact(message: string): boolean {
 }
 
 export function requestedFile(message: string): string | null {
-  const named = message.match(/([\w./-]+\.(?:md|txt|json|html))/i);
-  if (named?.[1]) return named[1].replace(/^\.?\//, "");
   if (!/\.md\b|\bmarkdown\b|\bmd\b/i.test(message)) return null;
+  const named = message.match(/([\w./-]+\.md)\b/i);
+  if (named?.[1]) return named[1].replace(/^\.?\//, "");
   return "notes.md";
 }
 
-function persistNudge(strategy: StrategyName, review: Review, researchNote: string, goal: string): string {
-  const missing = review.missing || review.summary || "the requested result";
+function reviewEvidence(run: { goal?: string; transcript: Array<{ kind: string; text: string }> }, latest: string): string {
+  const pins = artifactPins(latest, artifactEvidence(run));
+  const recent = recentEvidence(run);
+  return [pins, recent].filter(Boolean).join("\n---\n");
+}
+
+function persistNudge(strategy: StrategyName, review: Review, researchNote: string, goal: string, latest: string, evidence: string, learnedSkill = ""): string {
+  const missing = stillMissingArtifacts(latest, evidence, review.missing || review.summary);
+  const pins = artifactPins(latest, evidence);
   const research = researchNote ? `\nResearch notes:\n${researchNote}` : "";
-  const common = `Session goal: ${goal}\nStill missing: ${missing}\nDo not give up. Copy URLs/IPs from Session facts exactly. Do not ask the user to repeat them.${research}`;
+  const keep = pins ? `\n${pins}` : "";
+  const common = `Session goal: ${goal}${keep}\nStill missing: ${missing}\nDo not give up. Copy URLs/IPs from Session facts exactly. Do not ask the user to repeat them.${research}`;
   if (strategy === "research") {
     return `${common}\nLook up the vendor API/docs, then execute with tools.`;
   }
   if (strategy === "decompose") {
-    return `${common}\nBreak into small tool steps and run them now.`;
+    return `${common}\nCreate only what is still missing. One clean shell or fs_* call per file. Do not put plans in the command string. Do not regenerate files already on disk.`;
   }
   if (strategy === "write_capability") {
-    return `${common}\nIf a reusable plugin or script helps, write it, then use it. Still deliver the result this turn.`;
+    const body = learnedSkill
+      ? `\nA scheme for this miss is in plugin ${learnedSkill}. plugin_read it, then deliver the result this turn.`
+      : `\nIf a reusable plugin or script helps, write it into ~/.barney, then use it. Still deliver the result this turn. Do not edit the kernel.`;
+    return `${common}${body}`;
   }
   if (strategy === "switch_model") {
     return `${common}\nChange approach completely (browser vs shell vs API vs plugin). Do not repeat the failed guess.`;
   }
-  return `${common}\nRetry with a different method than last time. Follow the working plan in order.`;
+  return `${common}\nKeep files that already exist. Only create what is still missing. Follow the working plan in order.`;
 }
 
 function regulationOf(call: ToolCall, goal: string): "task" | "competence" | "wander" {

@@ -599,7 +599,7 @@ export class Kernel {
     return { providers: items.map((p) => p.view()), bindings, lanes: lanesFromBindings(bindings) };
   }
 
-  async addOpenAiProvider(input: { name: string; host: string; apiKey?: string }) {
+  async addOpenAiProvider(input: { name: string; host: string; apiKey?: string; dialect?: string }) {
     await this.boot();
     const name = input.name.trim();
     const existing = await this.providers.findByName(name);
@@ -608,6 +608,7 @@ export class Kernel {
       return this.updateProvider(existing.id, {
         host: input.host,
         apiKey: input.apiKey,
+        dialect: input.dialect,
       });
     }
     const provider = LlmProvider.create({
@@ -615,6 +616,7 @@ export class Kernel {
       kind: "openai-compat",
       host: input.host,
       apiKey: input.apiKey,
+      dialect: input.dialect,
     });
     await this.providers.save(provider);
     return provider.view();
@@ -669,7 +671,7 @@ export class Kernel {
     return this.providerState();
   }
 
-  async updateProvider(idOrName: string, patch: { name?: string; host?: string; apiKey?: string | null }) {
+  async updateProvider(idOrName: string, patch: { name?: string; host?: string; apiKey?: string | null; dialect?: string }) {
     const current = await this.resolveProvider(idOrName);
     const next = LlmProvider.create({
       id: current.id,
@@ -678,6 +680,7 @@ export class Kernel {
       host: patch.host ?? current.baseUrl,
       apiKey: patch.apiKey === undefined ? current.apiKey : patch.apiKey,
       defaultModel: current.defaultModel,
+      dialect: patch.dialect ?? (patch.host || patch.name ? undefined : current.dialect),
     });
     await this.providers.save(next);
     return next.view();

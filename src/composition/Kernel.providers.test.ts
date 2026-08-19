@@ -12,6 +12,7 @@ test("saving a provider with an existing name updates host instead of failing", 
   expect(second.baseUrl).toBe("http://192.168.68.122:11434/v1");
   const listed = await kernel.providerState();
   expect(listed.providers.filter((item) => item.name === "local-dev")).toHaveLength(1);
+  expect(second.dialect).toBe("llamacpp");
 });
 
 test("useLanes binds large to coder and small to reviewer", async () => {

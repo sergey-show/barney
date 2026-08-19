@@ -907,7 +907,7 @@ function ModelsEditor(props: {
           {props.providers.map((item) => (
             <button key={item.id} type="button" className="card-main list-item" onClick={() => props.onOpenProvider(item.id)}>
               <div className="card-title">{item.name}</div>
-              <div className="meta"><span className="mono">{item.baseUrl}</span></div>
+              <div className="meta"><span className="mono">{item.dialect ? `${item.dialect} · ` : ""}{item.baseUrl}</span></div>
             </button>
           ))}
           <button type="button" className="item" onClick={() => props.onOpenProvider()}>{t.addProvider}</button>
@@ -988,6 +988,7 @@ function ProviderEditor(props: {
   const existing = paneId ? props.providers.find((p) => p.id === paneId) : undefined;
   const [name, setName] = useState(existing?.name ?? "local");
   const [host, setHost] = useState(existing?.baseUrl ?? "http://127.0.0.1:11434/v1");
+  const [dialect, setDialect] = useState(existing?.dialect ?? "");
   const [apiKey, setApiKey] = useState("");
   const [models, setModels] = useState<string[]>([]);
   const [largeModel, setLargeModel] = useState(
@@ -1003,6 +1004,7 @@ function ProviderEditor(props: {
   useEffect(() => {
     setName(existing?.name ?? "local");
     setHost(existing?.baseUrl ?? "http://127.0.0.1:11434/v1");
+    setDialect(existing?.dialect ?? "");
     setApiKey("");
     setModels([]);
     setLargeModel(existing && props.lanes.large?.providerId === existing.id ? props.lanes.large.model : existing?.defaultModel ?? "");
@@ -1018,14 +1020,14 @@ function ProviderEditor(props: {
         const created = await api<Provider>("/api/providers", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ name, host, apiKey: apiKey || undefined }),
+          body: JSON.stringify({ name, host, apiKey: apiKey || undefined, dialect: dialect || undefined }),
         });
         await props.onChanged(created.id);
       } else {
         await api(`/api/providers/${existing!.id}`, {
           method: "PATCH",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ name, host, apiKey: apiKey || undefined }),
+          body: JSON.stringify({ name, host, apiKey: apiKey || undefined, dialect: dialect || undefined }),
         });
         await props.onChanged(existing!.id);
       }
@@ -1106,6 +1108,13 @@ function ProviderEditor(props: {
         <input value={name} onChange={(e) => setName(e.target.value)} />
         <label>{t.host}</label>
         <input value={host} onChange={(e) => setHost(e.target.value)} placeholder="http://127.0.0.1:11434/v1" disabled={existing?.kind === "stub"} />
+        <label>{t.dialect}</label>
+        <select value={dialect} onChange={(e) => setDialect(e.target.value)} disabled={existing?.kind === "stub"}>
+          <option value="">{t.dialectAuto}</option>
+          {["llamacpp", "ollama", "vllm", "openai-custom", "openai", "groq", "openrouter", "anthropic"].map((id) => (
+            <option key={id} value={id}>{id}</option>
+          ))}
+        </select>
         <label>{t.apiKey} {existing?.hasKey ? t.apiKeySaved : t.apiKeyOptional}</label>
         <input value={apiKey} onChange={(e) => setApiKey(e.target.value)} type="password" placeholder={existing?.hasKey ? "••••••••" : t.apiKeyOptional} />
         <div className="muted">{existing ? `${existing.kind} · ${existing.baseUrl}` : t.providerHelp}</div>

@@ -17,3 +17,8 @@ test("requires the documented API from the opened page", () => {
   expect(replyOmitsPageCode("use AbortController and setTimeout", page, "fetch timeout")).toContain("AbortSignal.timeout");
   expect(replyOmitsPageCode("fetch(url, { signal: AbortSignal.timeout(5000) })", page, "fetch timeout")).toBeUndefined();
 });
+
+test("ignores API idents that only appear in a file dump, not an opened page", () => {
+  const dump = 'fs_write {"path":"/work/check.py","content":"NameOID.COMMON_NAME"}';
+  expect(replyOmitsPageCode("used a subprocess", dump, "print the Common Name")).toBeUndefined();
+});

@@ -11,6 +11,22 @@ test("picks shadow that matches this turn, not the whole archive", () => {
   expect(lines.join(" ")).not.toContain("MSK");
 });
 
+test("picks a class-tagged shadow for this miss and keeps two freshest when nothing matches", () => {
+  const tagged = pickRelevantLines([
+    "[unrun-program] if no successful run of /work/check.py, change path.",
+    "Timezone MSK is not a city.",
+    "A guess without evidence is a failed turn.",
+  ], "run the python script at /work/check.py");
+  expect(tagged.join(" ")).toMatch(/unrun-program|check\.py/);
+  expect(tagged.join(" ")).not.toContain("MSK");
+  const fresh = pickRelevantLines([
+    "newest deed",
+    "older deed",
+    "oldest",
+  ], "zzzz with no overlap");
+  expect(fresh).toEqual(["newest deed", "older deed"]);
+});
+
 test("renderSamostPrompt does not dump unrelated light and shadow", () => {
   const samost = seedSamost();
   samost.shadow.unshift("Локальная памятка fetch врёт — открыть официальную страницу bun.com.");
@@ -18,4 +34,5 @@ test("renderSamostPrompt does not dump unrelated light and shadow", () => {
   const prompt = renderSamostPrompt(samost, "обрыв fetch в Bun через 5 секунд");
   expect(prompt).toContain("bun.com");
   expect(prompt).not.toContain("Timezone MSK");
+  expect(prompt).not.toMatch(/Jung|Sartre|Leontiev|Camus/i);
 });

@@ -80,8 +80,8 @@ function foldTurns(items: TranscriptLike[]): string {
   return lines.join("\n");
 }
 
-function consoleHead(text: string): string {
-  const first = text.split("\n").find((line) => line.trim()) ?? text;
+function consoleHead(text: unknown): string {
+  const first = asText(text).split("\n").find((line) => line.trim()) ?? asText(text);
   return first.replace(/\s+/g, " ").trim().slice(0, 180);
 }
 
@@ -95,7 +95,7 @@ function artifactsLine(transcript: TranscriptLike[]): string {
   const plugins = new Set<string>();
   for (const item of transcript) {
     if (item.kind !== "console") continue;
-    const head = item.text.slice(0, 400);
+    const head = asText(item.text).slice(0, 400);
     if (head.startsWith("fs_write") || head.startsWith("fs_edit") || head.startsWith("fs_append")) {
       const path = head.match(/"path"\s*:\s*"([^"]+)"/)?.[1];
       if (path) files.add(path);
@@ -112,46 +112,60 @@ function artifactsLine(transcript: TranscriptLike[]): string {
 }
 
 function budgetClip(messages: ChatMessage[], maxTotal: number): ChatMessage[] {
-  const total = messages.reduce((sum, message) => sum + message.content.length, 0);
+  const total = messages.reduce((sum, message) => sum + asText(message.content).length, 0);
   if (total <= maxTotal || !messages.length) return messages;
   const cap = Math.max(360, Math.floor(maxTotal / messages.length));
   return messages.map((message) => ({ ...message, content: clipText(message.content, cap) }));
 }
 
-export function stripThink(text: string): string {
-  const tagged = text
+export function stripThink(text: unknown): string {
+  const raw = asText(text);
+  const tagged = raw
     .replace(/<think>[\s\S]*?<\/think>/gi, "")
     .replace(/```thinking[\s\S]*?```/gi, "");
-  return peelUntaggedThinking(tagged).text.replace(/\s+/g, " ").trim();
+  return asText(peelUntaggedThinking(tagged).text).replace(/\s+/g, " ").trim();
 }
 
-export function clipText(text: string, max: number): string {
-  const compact = text.replace(/\s+/g, " ").trim();
+export function clipText(text: unknown, max: number): string {
+  const compact = asText(text).replace(/\s+/g, " ").trim();
   if (!compact || compact.length <= max) return compact;
   const head = `${compact.slice(0, Math.max(1, max - 1))}…`;
   const missing = extractAnchors(compact).filter((anchor) => !head.includes(anchor));
   return missing.length ? `${head}\n${missing.join(" ")}` : head;
 }
 
-export function extractAnchors(...parts: string[]): string[] {
+export function extractAnchors(...parts: unknown[]): string[] {
   const found = new Set<string>();
   for (const part of parts) {
-    for (const raw of part.match(/https?:\/\/[^\s<>"'`)\]}]+/gi) ?? []) {
+    const text = asText(part);
+    for (const raw of text.match(/https?:\/\/[^\s<>"'`)\]}]+/gi) ?? []) {
       const url = raw.replace(/[.,;]+$/g, "");
       if (isDurableUrl(url)) found.add(url);
     }
-    for (const ip of part.match(/\b(?:\d{1,3}\.){3}\d{1,3}(?::\d+)?\b/g) ?? []) {
+    for (const ip of text.match(/\b(?:\d{1,3}\.){3}\d{1,3}(?::\d+)?\b/g) ?? []) {
       found.add(ip);
     }
   }
   return [...found];
 }
 
-export function redactSecrets(text: string): string {
-  return text.replace(
+export function redactSecrets(text: unknown): string {
+  return asText(text).replace(
     /(пароль|password|passwd|secret|api[_-]?key)\s*[:=]?\s*\S+/gi,
     "$1 [redacted]",
   );
+}
+
+export function asText(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (value == null) return "";
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (Array.isArray(value)) return value.map(asText).filter(Boolean).join("; ");
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return "";
+  }
 }
 
 function isDurableUrl(url: string): boolean {

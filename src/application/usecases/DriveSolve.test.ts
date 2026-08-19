@@ -10,3 +10,9 @@ test("detects a requested markdown file without a special product slug", () => {
 test("keeps an explicit filename from the prompt", () => {
   expect(requestedFile("create outline.md in the worktree")).toBe("outline.md");
 });
+
+test("does not treat a requested data file as a markdown article", () => {
+  const ask = "Create `/work/report.txt` and `/work/check.py` with computed dates";
+  expect(requestedFile(ask)).toBeNull();
+  expect(wantsArtifact(ask)).toBe(true);
+});

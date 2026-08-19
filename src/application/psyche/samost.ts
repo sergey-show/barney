@@ -50,7 +50,6 @@ export function parseSamost(body: string): Samost {
 export function formatSamost(samost: Samost): string {
   return [
     `# Self ${INSTANCE_NAME}`,
-    "The center, not the Ego. The sun of the psyche: compass, light, and shadow. The Ego is the decision of this turn.",
     NAME_NOTE,
     "",
     "## Compass",
@@ -74,14 +73,17 @@ export function absorbIntoSamost(samost: Samost, rule: string, side: "light" | "
   const target = side === "light" ? next.light : next.shadow;
   if (target.some((item) => item.toLowerCase() === line.toLowerCase())) return samost;
   target.unshift(line);
-  next.light = uniq(next.light).slice(0, 8);
-  next.shadow = uniq(next.shadow).slice(0, 8);
+  next.light = uniq(next.light).slice(0, SAMOST_KEEP);
+  next.shadow = uniq(next.shadow).slice(0, SAMOST_KEEP);
   return next;
 }
 
-export function pickRelevantLines(lines: string[], query: string, limit = 2): string[] {
-  const hay = query.toLowerCase();
-  const tokens = hay.split(/[^\p{L}\p{N}]+/u).filter((token) => token.length > 3);
+const SAMOST_KEEP = 12;
+const TURN_LINES = 4;
+
+export function pickRelevantLines(lines: string[], query: string, limit = TURN_LINES): string[] {
+  if (!lines.length || limit <= 0) return [];
+  const tokens = tokenize(query);
   const scored = lines.map((line, index) => {
     const text = line.toLowerCase();
     const hits = tokens.reduce((sum, token) => sum + (text.includes(token) ? 1 : 0), 0);
@@ -89,14 +91,22 @@ export function pickRelevantLines(lines: string[], query: string, limit = 2): st
   });
   const matched = scored.filter((row) => row.hits > 0).sort((a, b) => b.hits - a.hits || a.index - b.index);
   if (matched.length) return matched.slice(0, limit).map((row) => row.line);
-  return lines.slice(0, Math.min(1, limit));
+  return lines.slice(0, Math.min(2, limit));
+}
+
+function tokenize(query: string): string[] {
+  return query
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}]+/u)
+    .flatMap((token) => token.split("-"))
+    .filter((token) => token.length > 3);
 }
 
 export function renderSamostPrompt(samost: Samost, query = ""): string {
-  const light = query.trim() ? pickRelevantLines(samost.light, query, 2) : samost.light.slice(0, 2);
-  const shadow = query.trim() ? pickRelevantLines(samost.shadow, query, 2) : samost.shadow.slice(0, 2);
+  const light = query.trim() ? pickRelevantLines(samost.light, query) : samost.light.slice(0, TURN_LINES);
+  const shadow = query.trim() ? pickRelevantLines(samost.shadow, query) : samost.shadow.slice(0, TURN_LINES);
   return [
-    `Self (Jung) — the center, not the Ego. Instance ${INSTANCE_NAME}. ${NAME_NOTE}`,
+    `Instance ${INSTANCE_NAME}. ${NAME_NOTE}`,
     `Compass: ${samost.compass}`,
     samost.character.length ? `Character:\n${samost.character.map((line) => `- ${line}`).join("\n")}` : "",
     light.length ? `Light (for this turn):\n${light.map((line) => `- ${line}`).join("\n")}` : "",

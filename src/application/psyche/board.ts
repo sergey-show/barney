@@ -1,3 +1,5 @@
+import { asText } from "../context/packSession.ts";
+
 export const BOARD_KINDS = ["motive", "action", "operation", "fact", "blocker", "decision", "note"] as const;
 export type BoardKind = (typeof BOARD_KINDS)[number];
 const LOCKED = new Set<BoardKind>(["motive"]);
@@ -23,7 +25,7 @@ export function parseBoard(body: string): BoardEntry[] {
 }
 
 export function addBoard(entries: BoardEntry[], next: BoardEntry): BoardEntry[] {
-  const text = next.text.replace(/\s+/g, " ").trim();
+  const text = asText(next.text).replace(/\s+/g, " ").trim();
   if (!text) return entries;
   if (LOCKED.has(next.kind)) {
     const current = entries.find((item) => item.kind === "motive");
@@ -38,7 +40,7 @@ export function refuseMotiveChange(entries: BoardEntry[], next: BoardEntry): str
   if (next.kind !== "motive") return null;
   const current = entries.find((item) => item.kind === "motive");
   if (!current) return null;
-  const incoming = next.text.replace(/\s+/g, " ").trim();
+  const incoming = asText(next.text).replace(/\s+/g, " ").trim();
   if (current.text === incoming) return null;
   return "error: the session motive is set by the operator. It cannot change without a new goal.";
 }
@@ -55,7 +57,7 @@ export function renderBoardPrompt(entries: BoardEntry[]): string {
   const operation = entries.find((item) => item.kind === "operation");
   const rest = entries.filter((item) => !SINGLE.has(item.kind)).slice(-8);
   return [
-    "Board (Leontiev): session motive ≠ turn action ≠ tool operation. Do not change the motive without the operator.",
+    "Session motive ≠ turn action ≠ tool operation. Do not change the motive without the operator.",
     motive ? `Motive: ${motive.text}` : "",
     action ? `Action: ${action.text}` : "",
     operation ? `Operation: ${operation.text}` : "",

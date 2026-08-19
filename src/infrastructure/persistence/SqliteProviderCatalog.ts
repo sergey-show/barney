@@ -23,15 +23,16 @@ export class SqliteProviderCatalog implements ProviderCatalog {
 
   async save(provider: LlmProvider): Promise<void> {
     this.db.run(
-      `INSERT INTO providers (id, name, kind, base_url, api_key, default_model)
-       VALUES (?, ?, ?, ?, ?, ?)
+      `INSERT INTO providers (id, name, kind, dialect, base_url, api_key, default_model)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
          name = excluded.name,
          kind = excluded.kind,
+         dialect = excluded.dialect,
          base_url = excluded.base_url,
          api_key = excluded.api_key,
          default_model = excluded.default_model`,
-      [provider.id, provider.name, provider.kind, provider.baseUrl, provider.apiKey, provider.defaultModel],
+      [provider.id, provider.name, provider.kind, provider.dialect, provider.baseUrl, provider.apiKey, provider.defaultModel],
     );
   }
 
@@ -66,11 +67,20 @@ type Row = {
   id: string;
   name: string;
   kind: LlmProvider["kind"];
+  dialect?: string | null;
   base_url: string;
   api_key: string | null;
   default_model: string | null;
 };
 
 function fromRow(row: Row): LlmProvider {
-  return new LlmProvider(row.id, row.name, row.kind, row.base_url, row.api_key, row.default_model);
+  return LlmProvider.create({
+    id: row.id,
+    name: row.name,
+    kind: row.kind,
+    host: row.base_url,
+    apiKey: row.api_key,
+    defaultModel: row.default_model,
+    dialect: row.dialect,
+  });
 }

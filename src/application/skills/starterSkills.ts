@@ -31,8 +31,6 @@ Do not write a program of the self. Essence is assembled from deeds. Orders come
 
 export const STARTER_SKILLS: StarterSkill[] = SELF_HOLD;
 
-const SELF_NAMES = new Set(SELF_HOLD.map((skill) => skill.name));
-
 export function formatStarterSkill(skill: StarterSkill): string {
   return [
     "---",
@@ -69,16 +67,8 @@ export function renderSkillCatalog(
   if (!listed.length) {
     return "Plugins: none. The instance has no task skills. Extend the body only if a new capability is needed.";
   }
-  const lines = [
-    "Plugins live in ~/.barney. Full text — only self-hold skills. Everything else is a one-line index. Do not touch the kernel:",
+  return [
+    "Plugins in ~/.barney (one-line index; plugin_read for the body):",
     ...listed.map((plugin) => `- ${plugin.name}${plugin.ui ? " [ui]" : ""}: ${plugin.description}`),
-  ];
-  const hold = listed.filter((plugin) => SELF_NAMES.has(plugin.name) && plugin.prompt.trim());
-  if (hold.length) {
-    lines.push("", "Self-hold:");
-    for (const plugin of hold) {
-      lines.push(`### ${plugin.name}\n${plugin.prompt.trim().slice(0, 400)}`);
-    }
-  }
-  return lines.join("\n");
+  ].join("\n");
 }

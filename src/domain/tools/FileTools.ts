@@ -113,7 +113,7 @@ export const FILE_TOOLS: ToolSpec[] = [
 export const SHELL_TOOL: ToolSpec = {
   name: "shell",
   description:
-    "Run a command in the session worktree and wait (up to 120s). Cross-platform: cmd.exe on Windows, /bin/sh elsewhere. cwd is the worktree. For builds/servers that take longer, process_spawn then process_logs. Prefer fs_* for files. Privileged, recursive wipe, and remote|sh commands are blocked. DETECTED_SECRET_* in the command is substituted with the real secret before exec; stdout is remasked.",
+    "Run a command in the session worktree and wait (up to 120s). Cross-platform: cmd.exe on Windows, /bin/sh elsewhere. cwd is the worktree. For builds/servers that take longer, process_spawn then process_logs. Prefer fs_* for files. Privileged, recursive wipe, and remote|sh commands are blocked. `command` is only the shell line — no plans, commentary, or wait. A full DETECTED_SECRET_<KIND>_<HASH> in the command is substituted with the real secret before exec; stdout is remasked. grep for the letters DETECTED_SECRET will miss live secrets — use the full token in sed or fs_edit.",
   parameters: {
     type: "object",
     properties: {

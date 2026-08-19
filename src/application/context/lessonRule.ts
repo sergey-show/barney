@@ -10,6 +10,7 @@ export type LessonInput = {
   missing?: string;
   anchors?: string[];
   operatorCorrected?: boolean;
+  failClass?: string;
 };
 
 export type LessonRule = {
@@ -67,6 +68,12 @@ function genericLesson(input: LessonInput, topic: string): string {
     return oneSentence(passTactic(input, topic));
   }
   const miss = input.missing || input.summary || "the previous approach failed";
+  const klass = input.failClass && input.failClass !== "general" && input.failClass !== "aborted-unfinished"
+    ? input.failClass
+    : "";
+  if (klass) {
+    return oneSentence(`[${klass}] if ${miss}, change path; do not repeat the failed call.`);
+  }
   return oneSentence(`For ${topic}: if ${miss}, change tool or path; do not repeat the failed call.`);
 }
 

@@ -1,8 +1,17 @@
 import { expect, test } from "bun:test";
-import { addBoard, parseBoard } from "./board.ts";
-import { appendExistence, EXISTENCE_CAP, parseExistence } from "./existence.ts";
+import { addBoard, parseBoard, renderBoardPrompt } from "./board.ts";
+import { appendExistence, EXISTENCE_CAP, parseExistence, renderExistencePrompt } from "./existence.ts";
 import { LONG_IDLE_MS, STUDY_COOLDOWN_MS, nextIdleWork, pickStudyTopic } from "./idleTick.ts";
 import { absorbIntoSamost, formatSamost, parseSamost, seedSamost } from "./samost.ts";
+
+test("existence and board coerce non-string notes", () => {
+  const blocks = appendExistence([], { kind: "review", text: { missing: ["server.pem"] } as unknown as string });
+  expect(blocks).toHaveLength(1);
+  expect(blocks[0]?.text).toContain("server.pem");
+  const entries = addBoard([], { kind: "note", text: ["blocker", "path"] as unknown as string });
+  expect(entries).toHaveLength(1);
+  expect(entries[0]?.text).toContain("blocker");
+});
 
 test("existence is a FIFO draft of acts", () => {
   let blocks = parseExistence("");
@@ -12,6 +21,7 @@ test("existence is a FIFO draft of acts", () => {
   expect(blocks).toHaveLength(EXISTENCE_CAP);
   expect(blocks[0]?.text).toBe("step 2");
   expect(blocks.at(-1)?.text).toBe("step 11");
+  expect(renderExistencePrompt(blocks)).not.toMatch(/Sartre|Camus|Jung|Leontiev/i);
 });
 
 test("samost keeps compass and absorbs shadow without wiping light", () => {
@@ -83,6 +93,9 @@ test("board locks motive and replaces the current operation", () => {
   const moved = addBoard(addBoard(locked, { kind: "operation", text: "browser_open" }), { kind: "operation", text: "shell" });
   expect(moved.filter((item) => item.kind === "operation")).toHaveLength(1);
   expect(moved.at(-1)?.text).toBe("shell");
+  const prompt = renderBoardPrompt(moved);
+  expect(prompt).toContain("Motive:");
+  expect(prompt).not.toMatch(/Leontiev|Jung|Sartre/i);
 });
 
 test("board dedupes facts and idle promotes an open blocker", () => {

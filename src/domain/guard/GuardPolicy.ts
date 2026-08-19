@@ -17,7 +17,6 @@ export class GuardPolicy {
     this.denyPathGlobs = props.denyPathGlobs ?? [
       "**/.env",
       "**/.env.*",
-      "**/*.pem",
       "**/id_rsa",
       "**/id_ed25519",
       "**/credentials.json",

@@ -16,13 +16,25 @@ export function pageCodeIdents(evidence: string): string[] {
 }
 
 export function replyOmitsPageCode(reply: string, evidence: string, query = ""): string | undefined {
-  const idents = pageCodeIdents(evidence);
+  const pages = openedPageEvidence(evidence);
+  if (!pages.trim()) return;
+  const idents = pageCodeIdents(pages);
   if (!idents.length) return;
   const terms = queryTerms(query);
   const relevant = terms.length ? idents.filter((id) => terms.some((term) => id.toLowerCase().includes(term))) : idents;
   const check = relevant.length ? relevant : idents;
   if (check.some((id) => reply.includes(id))) return;
   return `reply omits documented API from the opened page (${check.slice(0, 3).join(", ")})`;
+}
+
+export function openedPageEvidence(evidence: string): string {
+  const pages = evidence
+    .split(/(?=(?:browser_open|web_search|opened) )/gi)
+    .filter((block) => /^(?:browser_open|web_search|opened) /i.test(block))
+    .join("\n");
+  if (pages.trim()) return pages;
+  if (/(?:^|\n)(?:fs_write|fs_edit|shell) /m.test(evidence)) return "";
+  return evidence;
 }
 
 export function pageEvidence(transcript: Array<{ kind: string; text: string }>, query: string): string {

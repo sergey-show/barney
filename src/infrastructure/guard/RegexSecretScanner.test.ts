@@ -80,4 +80,18 @@ test("URI userinfo, JWT, and PEM are masked by shape", () => {
   const pemMasked = scan(pem);
   expect(pemMasked.text).not.toContain("MIIHideMeNow");
   expect(pemMasked.text).toMatch(/DETECTED_SECRET_PEM_[A-F0-9]+/);
+  const pemFile = scan(`${pem}\n-----BEGIN CERTIFICATE-----\nMIICert\n-----END CERTIFICATE-----\n`, "ssl/server.pem");
+  expect(pemFile.text).not.toMatch(/DENIED_PATH/);
+  expect(pemFile.text).toContain("BEGIN CERTIFICATE");
+  expect(pemFile.text).toMatch(/DETECTED_SECRET_PEM_[A-F0-9]+/);
+  const certBody = "MIICijCCAXKgAwIBAgIU5e0a1b2c3d4e5f6g7h8i9j0k1l2w=";
+  const cert = scan(`-----BEGIN CERTIFICATE-----\n${certBody}\n-----END CERTIFICATE-----`);
+  expect(cert.text).toContain(certBody);
+  expect(cert.text).not.toMatch(/DETECTED_SECRET_HIGH_ENTROPY_/);
+});
+
+test("denied paths still hide .env, not worktree pem artifacts", () => {
+  const env = scan("AWS_SECRET_ACCESS_KEY=not-used-here", ".env");
+  expect(env.text).toMatch(/DETECTED_SECRET_DENIED_PATH_/);
+  expect(env.text).not.toContain("not-used-here");
 });

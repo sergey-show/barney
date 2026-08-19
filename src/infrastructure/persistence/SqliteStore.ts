@@ -27,6 +27,7 @@ export function openStore(path: string): Database {
       id TEXT PRIMARY KEY,
       name TEXT UNIQUE,
       kind TEXT NOT NULL,
+      dialect TEXT,
       base_url TEXT NOT NULL,
       api_key TEXT,
       default_model TEXT
@@ -48,5 +49,12 @@ export function openStore(path: string): Database {
       updated_at TEXT NOT NULL
     );
   `);
+  ensureColumn(db, "providers", "dialect", "TEXT");
   return db;
+}
+
+function ensureColumn(db: Database, table: string, column: string, type: string): void {
+  const cols = db.query<{ name: string }, []>(`PRAGMA table_info(${table})`).all();
+  if (cols.some((col) => col.name === column)) return;
+  db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
 }

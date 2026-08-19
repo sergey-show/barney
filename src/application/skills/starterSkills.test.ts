@@ -22,7 +22,7 @@ test("seeds self-hold only and does not overwrite an adapted hold", () => {
   expect(store.get("hold-the-act")?.prompt).toContain("агент переписал");
 });
 
-test("catalog expands self-hold and only indexes other plugins", () => {
+test("catalog indexes every plugin as one line, including self-hold", () => {
   const listed = [
     ...STARTER_SKILLS.map((skill) => ({
       name: skill.name,
@@ -32,9 +32,11 @@ test("catalog expands self-hold and only indexes other plugins", () => {
     { name: "jira-mcp", description: "user plugin", prompt: "do not dump this recipe" },
   ];
   const catalog = renderSkillCatalog(listed, "найди документацию API");
-  expect(catalog).toContain("### hold-the-act");
-  expect(catalog).toContain("### no-persona");
+  expect(catalog).toContain("- hold-the-act:");
+  expect(catalog).toContain("- no-persona:");
   expect(catalog).toContain("- jira-mcp:");
+  expect(catalog).not.toContain("### hold-the-act");
+  expect(catalog).not.toContain(STARTER_SKILLS[0]?.body ?? "Wanting without liking");
   expect(catalog).not.toContain("do not dump this recipe");
   expect(catalog).not.toMatch(/timezone|Session facts|research-web/i);
 });

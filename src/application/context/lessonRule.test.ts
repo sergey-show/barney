@@ -40,6 +40,20 @@ test("does not inject a preview or city recipe from the wording of the goal", ()
   expect(city.body).not.toMatch(/timezone is not a city|MSK|Moscow/i);
 });
 
+test("class-tagged fail lessons stay generic and match this turn's miss", () => {
+  const rule = lessonRule({
+    taskClass: "general",
+    goal: "write a checker script",
+    verdict: "fail",
+    summary: "file exists",
+    missing: "no successful run of /work/check.py",
+    failClass: "unrun-program",
+  });
+  expect(rule.body).toContain("[unrun-program]");
+  expect(rule.body).toMatch(/change path|do not repeat/i);
+  expect(rule.body).not.toMatch(/openssl|check_cert/i);
+});
+
 test("operator correction becomes a fail-and-recheck rule", () => {
   const rule = lessonRule({
     taskClass: "general",

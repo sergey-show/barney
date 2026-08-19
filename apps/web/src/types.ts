@@ -12,7 +12,7 @@ export type Run = {
   attempts?: number;
 };
 export type FileEntry = { name: string; path: string; dir: boolean };
-export type Provider = { id: string; name: string; kind: string; baseUrl: string; hasKey: boolean; defaultModel: string | null };
+export type Provider = { id: string; name: string; kind: string; dialect?: string; baseUrl: string; hasKey: boolean; defaultModel: string | null };
 export type Binding = { role: string; providerId: string; model: string };
 export type LanePick = { providerId: string; model: string };
 export type Lanes = { large: LanePick | null; small: LanePick | null };

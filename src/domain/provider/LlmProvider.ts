@@ -1,3 +1,4 @@
+import { detectDialect, type DialectId } from "./dialect.ts";
 import { InvariantError } from "../shared/DomainError.ts";
 import { newId } from "../shared/Id.ts";
 
@@ -7,6 +8,7 @@ export type ProviderView = {
   id: string;
   name: string;
   kind: ProviderKind;
+  dialect: DialectId;
   baseUrl: string;
   hasKey: boolean;
   defaultModel: string | null;
@@ -20,6 +22,7 @@ export class LlmProvider {
     readonly baseUrl: string,
     readonly apiKey: string | null,
     public defaultModel: string | null,
+    readonly dialect: DialectId,
   ) {
     if (!name.trim()) throw new InvariantError("provider name is required");
     if (kind === "openai-compat" && !baseUrl.trim()) throw new InvariantError("openai-compat provider needs a host");
@@ -32,14 +35,24 @@ export class LlmProvider {
     host?: string;
     apiKey?: string | null;
     defaultModel?: string | null;
+    dialect?: string | null;
   }): LlmProvider {
+    const baseUrl = input.kind === "openai-compat"
+      ? normalizeOpenAiRoot(input.host ?? "")
+      : (input.host ?? "").replace(/\/$/, "");
     return new LlmProvider(
       input.id ?? newId("prov"),
       input.name.trim(),
       input.kind,
-      input.kind === "openai-compat" ? normalizeOpenAiRoot(input.host ?? "") : (input.host ?? "").replace(/\/$/, ""),
+      baseUrl,
       input.apiKey?.trim() || null,
       input.defaultModel ?? null,
+      detectDialect({
+        name: input.name,
+        host: baseUrl,
+        kind: input.kind,
+        dialect: input.dialect,
+      }),
     );
   }
 
@@ -48,6 +61,7 @@ export class LlmProvider {
       id: this.id,
       name: this.name,
       kind: this.kind,
+      dialect: this.dialect,
       baseUrl: this.baseUrl,
       hasKey: Boolean(this.apiKey),
       defaultModel: this.defaultModel,

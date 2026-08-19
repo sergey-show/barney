@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { packSession, redactSecrets, stripThink } from "./packSession.ts";
+import { clipText, packSession, redactSecrets, stripThink } from "./packSession.ts";
 
 test("keeps tool output in the recent window so the next turn can see it", () => {
   const transcript = [];
@@ -65,6 +65,14 @@ test("stripThink drops tagged and untagged chain-of-thought", () => {
     "Модель: MacBookPro10,2.",
   ].join("\n\n");
   expect(stripThink(leaked)).toBe("Модель: MacBookPro10,2.");
+});
+
+test("clipText and stripThink coerce non-strings instead of crashing", () => {
+  expect(clipText(undefined, 100)).toBe("");
+  expect(clipText(["out.bin", "report.txt"], 100)).toBe("out.bin; report.txt");
+  expect(clipText({ missing: ["out.bin"] }, 80)).toContain("out.bin");
+  expect(stripThink(undefined)).toBe("");
+  expect(redactSecrets(undefined)).toBe("");
 });
 
 test("redactSecrets strips passwords before memory upsert", () => {

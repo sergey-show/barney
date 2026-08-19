@@ -32,21 +32,21 @@ test("does not treat a docs page about timeout as a connection error", () => {
   expect(classifyToolResult("web_search bun fetch timeout\n(no hits) Try a different query").error).toBe(false);
 });
 
-test("does not treat openssl and ssl paths as a network TLS failure", () => {
-  expect(classifyToolResult("mkdir /app/ssl").error).toBe(false);
-  expect(classifyToolResult("wrote /app/ssl/server.crt (1220 chars)").error).toBe(false);
-  const openssl = [
+test("does not treat a successful cert CLI as a network TLS failure", () => {
+  expect(classifyToolResult("mkdir /work/certs").error).toBe(false);
+  expect(classifyToolResult("wrote /work/certs/server.crt (1220 chars)").error).toBe(false);
+  const certCli = [
     "exit 0",
-    "subject=O = DevOps Team, CN = dev-internal.company.local",
+    "subject=O = Example Org, CN = example.local",
     "notBefore=Aug 18 20:09:50 2026 GMT",
     "sha256 Fingerprint=C2:30:58:4C:FC:DB:2B:5F:DD:42:FA:C9:D9:A1:9D:D7:66:EB:44:DB:93:83:CE:71:23:36:E2:BB:88:DB:EE:88",
   ].join("\n");
-  expect(classifyToolResult(openssl).error).toBe(false);
+  expect(classifyToolResult(certCli).error).toBe(false);
   const failed = new Set<string>();
   const familyFails = new Map<string, number>();
   const seen = applyToolObserve(
-    { name: "shell", arguments: { command: "openssl req -x509 -out /app/ssl/server.crt" } },
-    openssl,
+    { name: "shell", arguments: { command: "openssl req -x509 -out /work/certs/server.crt" } },
+    certCli,
     failed,
     familyFails,
   );
@@ -77,18 +77,51 @@ test("still allows browser_open of a new URL after the family is saturated", () 
 test("shell stays usable after two different failures; exact same command still blocks", () => {
   const familyFails = new Map<string, number>([["shell", 2]]);
   const next = applyToolObserve(
-    { name: "shell", arguments: { command: "openssl genrsa -out /app/ssl/server.key 2048" } },
+    { name: "shell", arguments: { command: "python3 /work/check.py" } },
     "exit 0\n(no output)",
     new Set(),
     familyFails,
   );
   expect(next.skip).toBe(false);
   const failed = new Set<string>();
-  const call = { name: "shell", arguments: { command: "openssl x509 -in / app/ssl/server.crt" } };
-  applyToolObserve(call, "exit 1\nx509: Use -help for summary.", failed, new Map());
-  const repeat = applyToolObserve(call, "exit 1\nx509: Use -help for summary.", failed, new Map());
+  const call = { name: "shell", arguments: { command: "python3 / work/check.py" } };
+  applyToolObserve(call, "exit 1\npython3: can't open file", failed, new Map());
+  const repeat = applyToolObserve(call, "exit 1\npython3: can't open file", failed, new Map());
   expect(repeat.skip).toBe(true);
   expect(repeat.out).toContain("exact same");
+});
+
+test("saturates a shell verb after two fails, not the whole shell family", () => {
+  const familyFails = new Map<string, number>();
+  const failed = new Set<string>();
+  const err = "exit 1\nreq: Use -help for summary.";
+  applyToolObserve(
+    { name: "shell", arguments: { command: "openssl req -x509 -out /work/a.crt" } },
+    err,
+    failed,
+    familyFails,
+  );
+  applyToolObserve(
+    { name: "shell", arguments: { command: "openssl genrsa -out /work/key.pem 2048" } },
+    "exit 1\ngenrsa: Use -help for summary.",
+    failed,
+    familyFails,
+  );
+  const third = applyToolObserve(
+    { name: "shell", arguments: { command: "openssl x509 -in /work/a.crt -noout" } },
+    "exit 0",
+    new Set(),
+    familyFails,
+  );
+  expect(third.skip).toBe(true);
+  expect(third.out).toMatch(/wanting without liking|shell:openssl/i);
+  const other = applyToolObserve(
+    { name: "shell", arguments: { command: "python3 /work/check.py" } },
+    "exit 0\nok",
+    new Set(),
+    familyFails,
+  );
+  expect(other.skip).toBe(false);
 });
 
 test("path outside the worktree tells the model to use shell and does not saturate fs", () => {
@@ -113,4 +146,96 @@ test("path outside the worktree tells the model to use shell and does not satura
   const repeat = applyToolObserve(call, out, failed, familyFails);
   expect(repeat.skip).toBe(true);
   expect(repeat.out).toContain("exact same");
+});
+
+test("fs_read of a Python file is not a network error and does not saturate fs", () => {
+  const py = [
+    "#!/usr/bin/env python3",
+    "import ssl",
+    "from datetime import datetime, timezone",
+    "try:",
+    "    ctx = ssl.create_default_context()",
+    "except TimeoutError:",
+    "    raise Exception('timeout')",
+  ].join("\n");
+  expect(classifyToolResult(py, "fs_read").error).toBe(false);
+  const familyFails = new Map<string, number>();
+  const failed = new Set<string>();
+  const first = applyToolObserve(
+    { name: "fs_read", arguments: { path: "work/check.py" } },
+    py,
+    failed,
+    familyFails,
+  );
+  expect(first.skip).toBe(false);
+  expect(first.out).not.toContain("Observe:");
+  expect(familyFails.get("fs") ?? 0).toBe(0);
+  applyToolObserve(
+    { name: "fs_read", arguments: { path: "work/notes.txt" } },
+    "TimeoutError in a comment\n",
+    failed,
+    familyFails,
+  );
+  const listed = applyToolObserve(
+    { name: "fs_list", arguments: { path: "." } },
+    "dir work\nfile check.py",
+    failed,
+    familyFails,
+  );
+  expect(listed.skip).toBe(false);
+  expect(familyFails.get("fs") ?? 0).toBe(0);
+});
+
+test("grep for the mask letters tells the model to use the full token", () => {
+  const seen = applyToolObserve(
+    { name: "shell", arguments: { command: "grep -rn DETECTED_SECRET --include='*.py' ." } },
+    "exit 1\n(no output)",
+    new Set(),
+  );
+  expect(seen.out).toMatch(/full DETECTED_SECRET_|fs_edit|sed/i);
+  const token = applyToolObserve(
+    {
+      name: "shell",
+      arguments: { command: "sed -i 's/DETECTED_SECRET_CREDENTIAL_12D84780/<your-aws-access-key-id>/' f.py" },
+    },
+    "exit 0\n(no output)",
+    new Set(),
+  );
+  expect(token.out).not.toContain("Observe:");
+});
+
+test("shell redirect that fails after > tells the model to ls, not retry", () => {
+  const seen = applyToolObserve(
+    {
+      name: "shell",
+      arguments: { command: "cat /work/a.bin /work/b.bin > /work/out.bin && chmod 600 /work/out.bi" },
+    },
+    "exit 1\nchmod: cannot access '/work/out.bi': No such file or directory",
+    new Set(),
+  );
+  expect(seen.skip).toBe(false);
+  expect(seen.out).toMatch(/redirect|ls the target/i);
+});
+
+test("shell command with leaked commentary is not executed", () => {
+  const failed = new Set<string>();
+  const familyFails = new Map<string, number>();
+  const leaked = applyToolObserve(
+    {
+      name: "shell",
+      arguments: { command: "mkdir -p /work && python3 /work/check.py... wait, the user wants me to break into small tool steps" },
+    },
+    "would not run",
+    failed,
+    familyFails,
+  );
+  expect(leaked.skip).toBe(true);
+  expect(leaked.out).toMatch(/commentary|clean one-liner/i);
+  expect(familyFails.get("shell") ?? 0).toBe(0);
+  const clean = applyToolObserve(
+    { name: "shell", arguments: { command: "python3 /work/check.py" } },
+    "exit 0\n(no output)",
+    new Set(),
+  );
+  expect(clean.skip).toBe(false);
 });

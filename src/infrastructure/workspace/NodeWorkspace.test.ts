@@ -103,8 +103,8 @@ if (!sed.includes("<your-aws-access-key-id>") || sed.includes("AKIA1234567890123
 const appRoot = join(mkdtempSync(join(tmpdir(), "barney-app-")), "app");
 mkdirSync(appRoot, { recursive: true });
 const appWs = new NodeWorkspace(appRoot, (text) => text);
-await appWs.write("app/ssl/verification.txt", "from-prefix");
-if ((await appWs.read("ssl/verification.txt")) !== "from-prefix") {
+await appWs.write("app/out/report.txt", "from-prefix");
+if ((await appWs.read("out/report.txt")) !== "from-prefix") {
   throw new Error("worktree-named prefix should map to a path inside the jail");
 }
 

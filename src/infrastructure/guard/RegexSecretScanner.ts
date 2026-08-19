@@ -15,6 +15,7 @@ const CREDENTIAL_NAME =
 /** JSON object header (`{"`) in base64url — the JWT shape, not a vendor. */
 const JWT = /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g;
 const PEM = /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]+?-----END [A-Z0-9 ]*PRIVATE KEY-----/g;
+const PUBLIC_PEM = /-----BEGIN (CERTIFICATE|PUBLIC KEY|RSA PUBLIC KEY)-----[\s\S]+?-----END \1-----/g;
 const URI_USERINFO = /([a-z][a-z0-9+.-]*:\/\/)([^/\s@]+):([^/\s@]+)@/gi;
 const ASSIGNMENT = /([A-Za-z_][A-Za-z0-9_.-]*)[^A-Za-z0-9_.-=:]{0,8}[:=][ \t]*['"]?([^\s'"]{8,})/g;
 const OPAQUE = /\b[A-Za-z0-9_\-+]{24,}\b/g;
@@ -47,10 +48,16 @@ export class RegexSecretScanner {
       const token = this.replaceValue(raw, value, "credential", hits);
       return token === raw ? raw : raw.replace(value, token);
     });
+    const publicHoles: string[] = [];
+    masked = masked.replace(PUBLIC_PEM, (raw) => {
+      publicHoles.push(raw);
+      return `\0PUBLIC_PEM_${publicHoles.length - 1}\0`;
+    });
     masked = masked.replace(OPAQUE, (raw) => {
       if (shannon(raw) < this.policy.entropyThreshold) return raw;
       return this.replaceValue(raw, raw, "high_entropy", hits);
     });
+    masked = masked.replace(/\0PUBLIC_PEM_(\d+)\0/g, (_, index: string) => publicHoles[Number(index)] ?? "");
     return new MaskedText(masked, hits);
   }
 

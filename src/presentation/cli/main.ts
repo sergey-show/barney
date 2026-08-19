@@ -198,7 +198,7 @@ const providersCmd = defineCommand({
           "providers",
           state.providers.map((p) => {
             const mark = active?.providerId === p.id ? "●" : " ";
-            return `${mark} ${p.name}  ${p.kind}  ${p.defaultModel ?? "-"}  key=${p.hasKey ? "yes" : "no"}`;
+            return `${mark} ${p.name}  ${p.dialect}  ${p.defaultModel ?? "-"}  key=${p.hasKey ? "yes" : "no"}`;
           }),
         );
         if (state.lanes.large) printMeta("large", `${state.lanes.large.model}`);
@@ -211,6 +211,7 @@ const providersCmd = defineCommand({
         name: { type: "string", required: true },
         host: { type: "string", required: true, description: "http://127.0.0.1:1234 or .../v1" },
         key: { type: "string", description: "API key, optional" },
+        dialect: { type: "string", description: "llamacpp | ollama | vllm | openai-custom | openai | groq | openrouter" },
         use: { type: "boolean", default: false },
       },
       async run({ args }) {
@@ -219,8 +220,9 @@ const providersCmd = defineCommand({
           name: String(args.name),
           host: String(args.host),
           apiKey: args.key ? String(args.key) : undefined,
+          dialect: args.dialect ? String(args.dialect) : undefined,
         });
-        printMeta("provider", `${provider.name}  ${provider.baseUrl}`);
+        printMeta("provider", `${provider.name}  ${provider.dialect}  ${provider.baseUrl}`);
         if (args.use) {
           const used = await kernel.useProvider(provider.id);
           printMeta("coder", `${used.provider.name} / ${used.model}`);
