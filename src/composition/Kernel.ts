@@ -41,7 +41,9 @@ import { listRemoteModels, preferFastModel, RoleRouter, seedBuiltinProviders, se
 import type { McpPort } from "../application/ports.ts";
 import { SqliteAgentRepository } from "../infrastructure/persistence/SqliteAgentRepository.ts";
 import { SqliteEpisodeRepository } from "../infrastructure/persistence/SqliteEpisodeRepository.ts";
+import { SqliteExperienceGraph } from "../infrastructure/persistence/SqliteExperienceGraph.ts";
 import { SqliteMemoryRepository } from "../infrastructure/persistence/SqliteMemoryRepository.ts";
+import { memoryShelf } from "../domain/memory/experienceGraph.ts";
 import { SqliteProviderCatalog } from "../infrastructure/persistence/SqliteProviderCatalog.ts";
 import { SqliteRunRepository } from "../infrastructure/persistence/SqliteRunRepository.ts";
 import { openStore } from "../infrastructure/persistence/SqliteStore.ts";
@@ -63,6 +65,7 @@ export class Kernel {
   readonly runs: SqliteRunRepository;
   readonly episodes: SqliteEpisodeRepository;
   readonly memories: SqliteMemoryRepository;
+  readonly experience: SqliteExperienceGraph;
   readonly providers: SqliteProviderCatalog;
   readonly plugins: FsPluginStore;
   readonly skills: FsPluginStore;
@@ -89,6 +92,7 @@ export class Kernel {
     this.runs = new SqliteRunRepository(db, this.agents);
     this.episodes = new SqliteEpisodeRepository(db);
     this.memories = new SqliteMemoryRepository(db);
+    this.experience = new SqliteExperienceGraph(db);
     this.providers = new SqliteProviderCatalog(db);
     this.processes = new ProcessTable();
     this.vault = new MemoryVault();
@@ -116,6 +120,7 @@ export class Kernel {
       this.skills,
       this.browser,
       this.memories,
+      this.experience,
       this.mcp,
       {
         list: () => this.listTeam(),
@@ -446,37 +451,49 @@ export class Kernel {
     const notes = query?.trim()
       ? await this.memories.search(query.trim(), limit)
       : await this.memories.recent(limit);
-    return notes.map((note) => note.view());
+    return notes.map((note) => ({ ...note.view(), shelf: memoryShelf(note) }));
+  }
+
+  async experienceGraph(limit = 80) {
+    await this.boot();
+    return this.experience.snapshot(limit);
   }
 
   async getMemory(idOrKey: string) {
     await this.boot();
     const note = await this.memories.get(idOrKey);
-    return note?.view() ?? null;
+    return note ? { ...note.view(), shelf: memoryShelf(note) } : null;
   }
 
   async writeMemory(input: { key?: string; title: string; body: string; tags?: string[]; sourceRunId?: string }) {
     await this.boot();
     const agent = await this.ensureAgent.execute();
+    const key = input.key?.trim();
+    if (key) {
+      const existing = await this.memories.get(key);
+      if (existing && memoryShelf(existing) !== "yours") {
+        throw new Error("Lessons grow from work and cannot be edited by hand");
+      }
+    }
     const title = this.mask(input.title);
     const body = this.mask(input.body);
     const saved = await this.memories.save(new MemoryNote({
-      key: input.key?.trim() || slugKey(title),
+      key: key || slugKey(title),
       title,
       body,
-      tags: input.tags ?? ["operator"],
+      tags: ["operator"],
       sourceRunId: input.sourceRunId ?? "",
       sourceAgentId: agent.id.value,
     }));
-    return saved.view();
+    return { ...saved.view(), shelf: memoryShelf(saved) };
   }
 
   async removeMemory(idOrKey: string) {
     await this.boot();
     const note = await this.memories.get(idOrKey);
     if (!note) return false;
-    if (/^(samost|design)\//.test(note.key)) {
-      throw new Error("Self and design are edited in Psyche, not deleted from memory");
+    if (memoryShelf(note) !== "yours") {
+      throw new Error("Only your notes can be deleted here");
     }
     return this.memories.remove(note.id);
   }

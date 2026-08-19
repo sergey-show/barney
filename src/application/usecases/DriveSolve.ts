@@ -27,6 +27,7 @@ import { boardKey, designKey, existenceKey, samostKey } from "../psyche/keys.ts"
 import { absorbIntoSamost, formatSamost, parseSamost, renderSamostPrompt, seedSamost, type Samost } from "../psyche/samost.ts";
 import { renderSkillCatalog } from "../skills/starterSkills.ts";
 import { Episode } from "../../domain/memory/Episode.ts";
+import { classKey, pluginMemoryKey } from "../../domain/memory/experienceGraph.ts";
 import { MemoryNote, slugKey } from "../../domain/memory/MemoryNote.ts";
 import type { ChatMessage, ChatResult, Role } from "../../domain/provider/Role.ts";
 import type { ToolSpec } from "../../domain/tools/FileTools.ts";
@@ -43,6 +44,7 @@ import type {
   BrowserPort,
   EpisodeRepository,
   EventBus,
+  ExperienceGraph,
   LlmPort,
   McpPort,
   McpRuntimePort,
@@ -85,6 +87,7 @@ export class DriveSolve {
     private readonly skills: SkillPort,
     private readonly browser: BrowserPort,
     private readonly memory: MemoryRepository,
+    private readonly graph: ExperienceGraph,
     private readonly mcp: McpPort,
     private readonly team: TeamPort,
     private readonly home: HomeRepoPort,
@@ -134,7 +137,14 @@ export class DriveSolve {
       && !note.tags.includes("digest"),
     );
     const recentMemories = await this.memory.recent(40);
-    const rules = pickRules(recentMemories, run.taskClass);
+    const relatedKeys = await this.graph.neighborhood([
+      classKey(run.taskClass),
+      ...past.slice(0, 6).flatMap((episode) => episode.failureMode ? [classKey(episode.failureMode)] : []),
+    ], 2);
+    const hopNotes = (await Promise.all(relatedKeys.map((key) => this.memory.get(key)))).filter(
+      (note): note is NonNullable<typeof note> => Boolean(note),
+    );
+    const rules = pickRules([...recentMemories, ...hopNotes], run.taskClass, 5, relatedKeys);
     const psyche = await this.loadPsyche(run, agent.id.value);
     psyche.existence = appendExistence(psyche.existence, { kind: "act", text: clipText(input.message, 180) });
     psyche.board = addBoard(psyche.board, { kind: "motive", text: clipText(run.goal, 200) });
@@ -322,6 +332,11 @@ export class DriveSolve {
     }
 
     const corrected = /operator rejected/i.test(`${review.summary} ${review.missing ?? ""}`);
+    const klass = failureClass({
+      missing: review.missing,
+      summary: review.summary,
+      aborted: false,
+    });
     const learned = lessonRule({
       taskClass: run.taskClass,
       goal: run.goal,
@@ -331,11 +346,7 @@ export class DriveSolve {
       missing: review.missing,
       anchors: packed.anchors,
       operatorCorrected: corrected,
-      failClass: failureClass({
-        missing: review.missing,
-        summary: review.summary,
-        aborted: false,
-      }),
+      failClass: klass,
     });
     if (!isRecapLesson(learned.body)) {
       psyche.samost = absorbIntoSamost(psyche.samost, learned.body, review.verdict === "pass" && !corrected ? "light" : "shadow");
@@ -352,6 +363,7 @@ export class DriveSolve {
         body: learned.body,
         tags: ["rule", "lesson", run.taskClass],
       });
+      await this.graph.link(classKey(run.taskClass), learned.key, "learned");
       await this.episodes.save(
         new Episode({
           agentId: agent.id.value,
@@ -376,6 +388,7 @@ export class DriveSolve {
         body: learned.body,
         tags: ["rule", "fail", "experience", run.taskClass, review.verdict],
       });
+      await this.graph.link(classKey(klass), learned.key, "failed-as");
       await this.episodes.save(
         new Episode({
           agentId: agent.id.value,
@@ -601,6 +614,7 @@ export class DriveSolve {
       body: formatBacklog(row),
       tags: ["backlog", klass, "fail"],
     });
+    await this.graph.link(classKey(klass), key, "failed-as");
     if (!shouldCloseClass(row)) return;
     await this.growBodyFromFailure(run, agent, review);
   }
@@ -627,6 +641,8 @@ export class DriveSolve {
       body: draft.body,
       tags: ["plugin", "learned", klass],
     });
+    await this.graph.link(classKey(klass), pluginMemoryKey(draft.name), "learned");
+    await this.graph.link(slugKey(`backlog/${klass}`), pluginMemoryKey(draft.name), "recovered-by");
     await this.become(`become: skill ${draft.name}`);
     return draft.name;
   }

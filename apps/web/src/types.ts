@@ -28,7 +28,11 @@ export type MemoryNote = {
   sourceAgentId: string;
   createdAt: string;
   updatedAt: string;
+  shelf?: "yours" | "learned" | "internal";
 };
+export type ExperienceNode = { id: string; kind: "class" | "rule" | "plugin" | "note"; title: string; shelf: string };
+export type ExperienceEdge = { src: string; dst: string; kind: "failed-as" | "learned" | "recovered-by"; createdAt: string };
+export type ExperienceGraph = { nodes: ExperienceNode[]; edges: ExperienceEdge[] };
 export type PsycheState = {
   agent: { id: string; name: string; version: number; constitution: string; taskClass: string };
   samost: { compass: string; character: string[]; light: string[]; shadow: string[] };

@@ -84,3 +84,11 @@ test("skips For-general success recaps", () => {
   ], "general", 3);
   expect(lines).toEqual(["Change tool after a fail."]);
 });
+
+test("graph neighbors of a fail class reuse a lesson from another task class", () => {
+  const lines = pickRules([
+    { key: "rule/certs/host", title: "x", body: "[unrun-program] run the checker; do not repeat the failed call.", tags: ["rule", "fail", "certs"] },
+    { key: "rule/general/hold", title: "hold", body: "Change tool after a fail.", tags: ["rule", "fail", "general"] },
+  ], "login", 3, ["rule/certs/host"]);
+  expect(lines[0]).toContain("unrun-program");
+});

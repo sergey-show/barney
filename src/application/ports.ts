@@ -34,6 +34,15 @@ export interface MemoryRepository {
   remove(idOrKey: string): Promise<boolean>;
 }
 
+export interface ExperienceGraph {
+  link(src: string, dst: string, kind: import("../domain/memory/experienceGraph.ts").ExperienceKind): Promise<void>;
+  neighborhood(keys: string[], hops?: number): Promise<string[]>;
+  snapshot(limit?: number): Promise<{
+    nodes: import("../domain/memory/experienceGraph.ts").ExperienceNode[];
+    edges: import("../domain/memory/experienceGraph.ts").ExperienceEdge[];
+  }>;
+}
+
 export type McpServer = {
   name: string;
   description: string;

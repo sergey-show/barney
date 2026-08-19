@@ -97,6 +97,11 @@ export function createApp() {
     return c.json(await kernel.listMemory(query, Math.min(limit, 200)));
   });
 
+  app.get("/api/memory/graph", async (c) => {
+    const limit = Number(c.req.query("limit") ?? "80") || 80;
+    return c.json(await kernel.experienceGraph(Math.min(limit, 200)));
+  });
+
   app.get("/api/memory/:key", async (c) => {
     const note = await kernel.getMemory(decodeURIComponent(c.req.param("key")));
     if (!note) return c.json({ error: "not found" }, 404);

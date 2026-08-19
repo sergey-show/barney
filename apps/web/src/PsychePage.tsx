@@ -11,9 +11,6 @@ export function PsychePage(props: { runId?: string }) {
   const [state, setState] = useState<PsycheState | null>(null);
   const [compass, setCompass] = useState("");
   const [character, setCharacter] = useState("");
-  const [light, setLight] = useState("");
-  const [shadow, setShadow] = useState("");
-  const [constitution, setConstitution] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const { t } = useLocale();
@@ -23,9 +20,6 @@ export function PsychePage(props: { runId?: string }) {
     setState(next);
     setCompass(next.samost.compass);
     setCharacter(next.samost.character.join("\n"));
-    setLight(next.samost.light.join("\n"));
-    setShadow(next.samost.shadow.join("\n"));
-    setConstitution(next.agent.constitution);
   }
 
   useEffect(() => {
@@ -41,9 +35,6 @@ export function PsychePage(props: { runId?: string }) {
         ...jsonBody({
           compass,
           character: linesOf(character),
-          light: linesOf(light),
-          shadow: linesOf(shadow),
-          constitution,
         }),
       });
       setState(next);
@@ -68,57 +59,42 @@ export function PsychePage(props: { runId?: string }) {
       <header className="page-head">
         <div>
           <h2>{t.characterTitle}</h2>
-          <p className="lede">{t.characterLede(state.agent.name, state.agent.version, state.designSealed)}</p>
+          <p className="lede">{t.characterLede(state.agent.name, String(state.agent.version), state.designSealed)}</p>
         </div>
         <button className="primary" type="button" disabled={busy} onClick={() => void save()}>{t.saveCharacter}</button>
       </header>
       <div className="page-body wide">
+        <p className="lede">{t.characterIntro}</p>
         <div className="grid-2">
           <div>
             <label htmlFor="compass">{t.compass}</label>
             <p className="lede">{t.compassHint}</p>
             <textarea id="compass" value={compass} onChange={(e) => setCompass(e.target.value)} rows={4} />
             <label htmlFor="character">{t.traits}</label>
+            <p className="lede">{t.traitsHint}</p>
             <textarea id="character" value={character} onChange={(e) => setCharacter(e.target.value)} rows={5} />
-            <label htmlFor="constitution">{t.constitution}</label>
-            <textarea id="constitution" value={constitution} onChange={(e) => setConstitution(e.target.value)} rows={8} />
           </div>
           <div>
-            <label htmlFor="light">{t.light}</label>
-            <textarea id="light" value={light} onChange={(e) => setLight(e.target.value)} rows={6} />
-            <label htmlFor="shadow">{t.shadow}</label>
-            <textarea id="shadow" value={shadow} onChange={(e) => setShadow(e.target.value)} rows={6} />
+            <h4>{t.light}</h4>
+            <p className="lede">{t.lightHint}</p>
+            {state.samost.light.length === 0 ? <div className="muted">{t.emptyLight}</div> : (
+              <ul className="psyche-list">
+                {state.samost.light.map((line) => <li key={line}>{line}</li>)}
+              </ul>
+            )}
+            <h4>{t.shadow}</h4>
+            <p className="lede">{t.shadowHint}</p>
+            {state.samost.shadow.length === 0 ? <div className="muted">{t.emptyShadow}</div> : (
+              <ul className="psyche-list shadow">
+                {state.samost.shadow.map((line) => <li key={line}>{line}</li>)}
+              </ul>
+            )}
           </div>
         </div>
         {error ? <div className="error" role="alert">{error}</div> : null}
 
-        <h3>{t.currentSession}</h3>
-        {props.runId ? (
-          <div className="grid-2">
-            <div className="stack">
-              <h4>{t.existence}</h4>
-              {state.existence.length === 0 ? <div className="muted">{t.emptyExistence}</div> : state.existence.map((block, index) => (
-                <div key={`${block.at}-${index}`} className="card quiet">
-                  <div className="meta"><span className="pill">{block.kind}</span><span>{block.at}</span></div>
-                  <div>{block.text}</div>
-                </div>
-              ))}
-            </div>
-            <div className="stack">
-              <h4>{t.board}</h4>
-              {state.board.length === 0 ? <div className="muted">{t.emptyBoard}</div> : state.board.map((entry, index) => (
-                <div key={`${entry.kind}-${index}`} className="card quiet">
-                  <div className="meta"><span className={`pill kind-${entry.kind}`}>{entry.kind}</span></div>
-                  <div>{entry.text}</div>
-                </div>
-              ))}
-            </div>
-          </div>
-        ) : (
-          <div className="muted">{t.openSessionPsyche}</div>
-        )}
-
         <h3>{t.episodes}</h3>
+        <p className="lede">{t.episodesHint}</p>
         <div className="stack">
           {state.episodes.length === 0 ? <div className="muted">{t.noEpisodes}</div> : state.episodes.map((episode) => (
             <div key={episode.id} className="card quiet">

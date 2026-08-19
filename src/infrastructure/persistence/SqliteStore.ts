@@ -48,6 +48,13 @@ export function openStore(path: string): Database {
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS experience_edges (
+      src TEXT NOT NULL,
+      dst TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (src, dst, kind)
+    );
   `);
   ensureColumn(db, "providers", "dialect", "TEXT");
   return db;

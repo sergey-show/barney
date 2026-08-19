@@ -35,13 +35,16 @@ export function pickRules(
   notes: Array<{ key: string; title: string; body: string; tags: string[] }>,
   taskClass: string,
   limit = 5,
+  relatedKeys: string[] = [],
 ): string[] {
   const rules = notes.filter((note) => note.tags.includes("rule") || note.key.startsWith("rule/"));
+  const related = new Set(relatedKeys);
   const ranked = [
     ...rules.filter((note) =>
       (note.tags.includes("fail") || note.tags.includes("experience"))
       && (note.tags.includes(taskClass) || note.key.includes(`/${taskClass}/`)),
     ),
+    ...rules.filter((note) => related.has(note.key)),
     ...rules.filter((note) => note.tags.includes(taskClass) && !note.tags.includes("fail")),
   ];
   const seen = new Set<string>();
