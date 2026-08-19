@@ -40,7 +40,11 @@ export function cycleStrategy(used: StrategyName[], attempts: number): StrategyN
 
 export function needsUser(review: { missing?: string; summary: string }): boolean {
   const text = `${review.missing ?? ""} ${review.summary}`;
-  return /password|api[_-]?key|\btoken\b|which (one|host|file)|secret (not|missing)|need (a |the )?(choice|secret|password)/i.test(text);
+  if (/need (?:a |the |your )?(?:\w+[-\s]+){0,3}(password|api[_-]?key|\btoken\b)/i.test(text)) return true;
+  if (/need (?:a |the |your )?secret\b/i.test(text)) return true;
+  if (/which (one|host|file|password)/i.test(text)) return true;
+  if (/password (not|missing)|ask (the )?user/i.test(text)) return true;
+  return false;
 }
 
 export function stopAfterFail(

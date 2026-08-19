@@ -23,6 +23,7 @@ const RULES: Array<{ re: RegExp; reason: string }> = [
 
 function rmLeavesWorktree(text: string): boolean {
   if (!/\brm\b/i.test(text)) return false;
+  const recursive = /\brm\b[^\n;|&]*?-[^\s]*r/i.test(text);
   const tokens = text.split(/[\s;|&]+/).filter(Boolean);
   let seenRm = false;
   for (const token of tokens) {
@@ -31,9 +32,8 @@ function rmLeavesWorktree(text: string): boolean {
       continue;
     }
     if (!seenRm || token.startsWith("-")) continue;
-    if (token === "/" || token.startsWith("/") || token.startsWith("~") || /^\$\{?HOME/.test(token) || token.includes("..")) {
-      return true;
-    }
+    const outside = token === "/" || token.startsWith("~") || /^\$\{?HOME/.test(token) || token.includes("..");
+    if (outside || (recursive && token.startsWith("/"))) return true;
     seenRm = false;
   }
   return false;

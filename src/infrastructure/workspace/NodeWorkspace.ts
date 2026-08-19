@@ -8,7 +8,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { denyShell } from "../../domain/guard/ShellPolicy.ts";
 import type { WorkspacePort } from "../../application/ports.ts";
 import { wrapSandboxed } from "../sandbox/OsSandbox.ts";
@@ -25,6 +25,7 @@ export class NodeWorkspace implements WorkspacePort {
   constructor(
     private readonly root: string,
     private readonly mask: (text: string, path?: string) => string,
+    private readonly unmask: (text: string) => string = (text) => text,
   ) {}
 
   async list(rel = "."): Promise<string> {
@@ -73,10 +74,11 @@ export class NodeWorkspace implements WorkspacePort {
     const buf = readFileSync(abs);
     if (buf.includes(0)) throw new Error("binary file");
     const current = buf.toString("utf8");
-    const count = current.split(old).length - 1;
+    const needle = this.unmask(old);
+    const count = current.split(needle).length - 1;
     if (count === 0) throw new Error(`old text not found in ${rel}`);
     if (count > 1) throw new Error(`old text appears ${count} times in ${rel}; make it unique`);
-    writeFileSync(abs, current.replace(old, next), "utf8");
+    writeFileSync(abs, current.replace(needle, next), "utf8");
     return `edited ${rel} (${old.length} → ${next.length} chars)`;
   }
 
@@ -111,7 +113,8 @@ export class NodeWorkspace implements WorkspacePort {
         const buf = readFileSync(file);
         if (buf.includes(0) || buf.length > MAX_READ) return;
         const text = buf.toString("utf8");
-        const idx = text.toLowerCase().indexOf(query.toLowerCase());
+        const needle = this.unmask(query);
+        const idx = text.toLowerCase().indexOf(needle.toLowerCase());
         if (idx < 0) return;
         const line = text.slice(0, idx).split(/\r?\n/).length;
         const relPath = relative(this.root, file).split(sep).join("/");
@@ -136,7 +139,7 @@ export class NodeWorkspace implements WorkspacePort {
     if (trimmed.length > 4000) throw new Error("command too long");
     const denied = denyShell(trimmed);
     if (denied) throw new Error(`blocked: ${denied}. Use fs_* inside the worktree.`);
-    const invocation = shellInvocation(trimmed);
+    const invocation = shellInvocation(this.unmask(trimmed));
     const launched = wrapSandboxed({ cwd: this.root, command: invocation.command, args: invocation.args });
     const proc = Bun.spawn([launched.command, ...launched.args], {
       cwd: this.root,
@@ -170,10 +173,12 @@ export class NodeWorkspace implements WorkspacePort {
   }
 
   resolveSafe(rel = "."): string {
-    const cleaned = String(rel || ".").replaceAll("\\", "/").replace(/^\/+/, "");
-    if (cleaned.includes("\0")) throw new Error("invalid path");
+    const raw = String(rel || ".").replaceAll("\\", "/");
+    if (raw.includes("\0")) throw new Error("invalid path");
     const root = resolve(this.root);
-    const abs = resolve(root, cleaned);
+    const abs = isAbsolute(raw) || raw.startsWith("/")
+      ? resolve(raw)
+      : resolve(root, stripWorktreePrefix(root, raw.replace(/^\/+/, "")));
     const relToRoot = relative(root, abs);
     if (relToRoot.startsWith("..") || isAbsolute(relToRoot)) {
       throw new Error("path escapes worktree");
@@ -199,6 +204,13 @@ export class NodeWorkspace implements WorkspacePort {
       }
     }
   }
+}
+
+function stripWorktreePrefix(root: string, rel: string): string {
+  const parts = rel.split("/").filter(Boolean);
+  const base = basename(root);
+  if (parts[0] === base && parts.length > 1) return parts.slice(1).join("/");
+  return rel;
 }
 
 function shellInvocation(command: string): { command: string; args: string[] } {

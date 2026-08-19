@@ -8,3 +8,5 @@ dist/
 .DS_Store
 apps/web/dist/
 apps/web/public/vendor/
+evals
+jobs

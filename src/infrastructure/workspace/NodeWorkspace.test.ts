@@ -1,6 +1,6 @@
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { NodeWorkspace } from "./NodeWorkspace.ts";
 
 const root = mkdtempSync(join(tmpdir(), "barney-ws-"));
@@ -56,6 +56,19 @@ try {
 }
 if (!escaped) throw new Error("jail failed for nested ..");
 
+const insideAbs = join(root, "src", "app.ts");
+if (ws.resolveSafe(insideAbs) !== resolve(insideAbs)) throw new Error(`abs inside: ${ws.resolveSafe(insideAbs)}`);
+await ws.write(`${root.replaceAll("\\", "/")}/from-abs.txt`, "tb");
+if ((await ws.read("from-abs.txt")) !== "tb") throw new Error("absolute worktree path should map into the jail");
+
+escaped = false;
+try {
+  ws.resolveSafe("/tmp/barney-outside-jail.txt");
+} catch {
+  escaped = true;
+}
+if (!escaped) throw new Error("jail failed for absolute path outside the worktree");
+
 const sh = await ws.shell("echo hello-barney");
 if (!sh.includes("hello-barney")) throw new Error(`shell: ${sh}`);
 
@@ -66,5 +79,33 @@ try {
   blocked = err instanceof Error && err.message.includes("blocked");
 }
 if (!blocked) throw new Error("shell should block sudo");
+
+const secretRoot = mkdtempSync(join(tmpdir(), "barney-secret-"));
+writeFileSync(join(secretRoot, "keys.env"), "AWS_ACCESS_KEY_ID=AKIA1234567890123456\n");
+const secretWs = new NodeWorkspace(
+  secretRoot,
+  (text) => text.replace("AKIA1234567890123456", "DETECTED_SECRET_AWS_ACCESS_KEY_1"),
+  (text) => text.replace("DETECTED_SECRET_AWS_ACCESS_KEY_1", "AKIA1234567890123456"),
+);
+const found = await secretWs.search("DETECTED_SECRET_AWS_ACCESS_KEY_1");
+if (!found.includes("keys.env")) throw new Error(`search unmask: ${found}`);
+await secretWs.edit("keys.env", "AWS_ACCESS_KEY_ID=DETECTED_SECRET_AWS_ACCESS_KEY_1", "AWS_ACCESS_KEY_ID=<your-aws-access-key-id>");
+const editedKeys = await secretWs.read("keys.env");
+if (editedKeys.includes("AKIA") || !editedKeys.includes("<your-aws-access-key-id>")) {
+  throw new Error(`edit unmask: ${editedKeys}`);
+}
+writeFileSync(join(secretRoot, "keys.env"), "AWS_ACCESS_KEY_ID=AKIA1234567890123456\n");
+const sed = await secretWs.shell("sed 's/DETECTED_SECRET_AWS_ACCESS_KEY_1/<your-aws-access-key-id>/' keys.env");
+if (!sed.includes("<your-aws-access-key-id>") || sed.includes("AKIA1234567890123456")) {
+  throw new Error(`shell unmask: ${sed}`);
+}
+
+const appRoot = join(mkdtempSync(join(tmpdir(), "barney-app-")), "app");
+mkdirSync(appRoot, { recursive: true });
+const appWs = new NodeWorkspace(appRoot, (text) => text);
+await appWs.write("app/ssl/verification.txt", "from-prefix");
+if ((await appWs.read("ssl/verification.txt")) !== "from-prefix") {
+  throw new Error("worktree-named prefix should map to a path inside the jail");
+}
 
 console.log("workspace jail ok");

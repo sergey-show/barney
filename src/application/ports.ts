@@ -155,6 +155,7 @@ export interface EventBus {
 export interface SecretVault {
   store(placeholder: string, value: string): void;
   resolve(placeholder: string): string | undefined;
+  reveal(text: string): string;
 }
 
 export interface Clock {

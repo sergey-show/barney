@@ -204,7 +204,8 @@ export class DriveSolve {
           `Worktree: ${run.worktreePath}`,
           depth > 0 ? "Delegated specialist, not a character. Do the subtask. Write notes with memory_write. Do not spawn agents." : "",
           "Prefer fs_* tools for files (paths relative to the worktree). Change an existing file with fs_edit or fs_append — do not fs_write over it unless the user asked to replace the whole file.",
-          "Use shell for OS commands such as date, git, short builds. cwd is the worktree. On Windows the shell is cmd.exe; elsewhere /bin/sh. Shell waits up to 120s. For longer jobs: process_spawn, then process_logs. Shell blocks sudo, wipes outside the worktree, and piping a download into a shell.",
+          "Guard masks secrets in tool output as DETECTED_SECRET_<KIND>_<HASH> (the kind is in the name; the value is hidden). Use that token in shell, fs_edit, or fs_search — the kernel substitutes the real bytes on disk. Do not ask the user for the masked value.",
+          "Use shell for OS commands such as date, git, short builds. cwd is the worktree. On Windows the shell is cmd.exe; elsewhere /bin/sh. Shell waits up to 120s. For longer jobs: process_spawn, then process_logs. Shell blocks sudo, recursive wipes, and piping a download into a shell.",
           depth > 0
             ? "Tools: fs_*, shell, process_*, web_search, plugin_*, browser_*, memory_*, board_read/write, mcp_list/start/call/stop/write, agent_list, self_status/log/commit."
             : "Tools: fs_*, shell, process_spawn/list/logs/kill, web_search, plugin_list/read/write/open, browser_*, memory_search/write/read, board_read/write, plan_set, agent_list/spawn/delegate, mcp_list/write/start/call/stop, self_status/log/commit/rollback.",
@@ -249,7 +250,7 @@ export class DriveSolve {
     ];
     throwIfAborted();
     const reviewRaw = await this.completeRole(run, "reviewer", reviewPrompt, { signal: input.signal });
-    let review = judgeReview(reviewRaw.text, input.message, recentEvidence(run), act.text);
+    let review = judgeReview(reviewRaw.text, input.message, artifactEvidence(run), act.text);
     const reviewEvents = run.submitReview(review);
     this.events.publish(reviewEvents);
 
@@ -273,7 +274,7 @@ export class DriveSolve {
             { role: "system", content: reviewPrompt[0].content },
             { role: "user", content: reviewPacket(run.goal, input.message, second.text, recentEvidence(run)) },
           ], { signal: input.signal });
-          const review2 = judgeReview(review2Raw.text, input.message, recentEvidence(run), second.text);
+          const review2 = judgeReview(review2Raw.text, input.message, artifactEvidence(run), second.text);
           this.events.publish(run.submitReview(review2));
           act = second;
           review = review2;
@@ -300,7 +301,7 @@ export class DriveSolve {
           { role: "system", content: reviewPrompt[0].content },
           { role: "user", content: reviewPacket(run.goal, input.message, retry.text, recentEvidence(run)) },
         ], { signal: input.signal });
-        const retryReview = judgeReview(retryReviewRaw.text, input.message, recentEvidence(run), retry.text);
+        const retryReview = judgeReview(retryReviewRaw.text, input.message, artifactEvidence(run), retry.text);
         this.events.publish(run.submitReview(retryReview));
         act = retry;
         review = retryReview;
@@ -690,7 +691,7 @@ export class DriveSolve {
       { role: "system", content: REVIEWER_SYSTEM },
       { role: "user", content: reviewPacket(run.goal, latest, actText, recentEvidence(run)) },
     ], { signal });
-    const review = judgeReview(raw.text, latest, recentEvidence(run), actText);
+    const review = judgeReview(raw.text, latest, artifactEvidence(run), actText);
     this.events.publish(run.submitReview(review));
     return review;
   }
@@ -1129,6 +1130,7 @@ Fail when:
 - the agent truncated, guessed, or altered a fact that was already in the session
 
 Fail when a concrete fact is not in the tool or research evidence.
+DETECTED_SECRET_<KIND>_<HASH> in tool output is a guard mask of a live secret still on disk — not a replacement the agent made. If the user asked for placeholders such as <your-aws-access-key-id>, those exact strings must appear as writes; the mask tokens are evidence the secret is still present.
 Fail when opened docs show a specific API and the reply uses a different one.
 Fail when the latest user message says the previous answer was wrong. In that case summary must include "operator rejected".
 Fail when the user asked to open or preview something and evidence has no successful open.
@@ -1154,6 +1156,13 @@ function clipToolOut(out: string, query: string): string {
   const limit = html ? 2200 : 4000;
   const sliced = clipPage(out, query, limit);
   return html ? `${sliced}\n[raw HTML — extract facts only, do not dump markup to the user]` : sliced;
+}
+
+function artifactEvidence(run: { transcript: Array<{ kind: string; text: string }> }): string {
+  return run.transcript
+    .filter((item) => item.kind === "console")
+    .map((item) => item.text)
+    .join("\n");
 }
 
 function recentEvidence(run: { goal?: string; transcript: Array<{ kind: string; text: string }> }): string {

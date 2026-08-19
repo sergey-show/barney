@@ -17,5 +17,5 @@
       "@infrastructure/*": ["src/infrastructure/*"]
     }
   },
-  "include": ["src", "apps/web/src", "scripts"]
+  "include": ["src", "apps/web/src", "scripts", "evals/harbor"]
 }

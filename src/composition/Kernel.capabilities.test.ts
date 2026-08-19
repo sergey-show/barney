@@ -59,6 +59,8 @@ test("capability exam: name, body, design, write, board, plugin", async () => {
   const secret = "sk-live-abcdefghijklmnopqrstuvwxyz123456";
   const masked = kernel.mask(`token=${secret}`);
   pass("секреты маскируются", !masked.includes(secret));
+  pass("секрет помечен как DETECTED_SECRET", /DETECTED_SECRET_/.test(masked));
+  pass("плейсхолдер раскрывается обратно", kernel.reveal(masked).includes(secret));
 
   const body = await kernel.homeRepo.status();
   pass("git тела жив", /HEAD|clean|self/i.test(body));

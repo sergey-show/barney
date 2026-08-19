@@ -21,6 +21,14 @@ test("cycles unused strategies then rotates instead of parking", () => {
 test("needsUser only for a real secret or choice", () => {
   expect(needsUser({ summary: "no VM list yet", missing: "open the host" })).toBe(false);
   expect(needsUser({ summary: "blocked", missing: "need the vcenter password" })).toBe(true);
+  expect(needsUser({
+    summary: "replace secrets with <your-github-token>",
+    missing: "Actual file modifications replacing secrets with placeholders",
+  })).toBe(false);
+  expect(needsUser({
+    summary: "still missing replacements",
+    missing: "need to replace secrets in ray_cluster.yaml",
+  })).toBe(false);
 });
 
 test("keeps going until pass, budget, or a user blocker", () => {

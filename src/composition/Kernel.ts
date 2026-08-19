@@ -57,6 +57,7 @@ export class Kernel {
   readonly home: string;
   readonly events: InMemoryEventBus;
   readonly scanner: RegexSecretScanner;
+  private readonly vault: MemoryVault;
   readonly processes: ProcessTable;
   readonly agents: SqliteAgentRepository;
   readonly runs: SqliteRunRepository;
@@ -90,8 +91,8 @@ export class Kernel {
     this.memories = new SqliteMemoryRepository(db);
     this.providers = new SqliteProviderCatalog(db);
     this.processes = new ProcessTable();
-    const vault = new MemoryVault();
-    this.scanner = new RegexSecretScanner(new GuardPolicy(), vault);
+    this.vault = new MemoryVault();
+    this.scanner = new RegexSecretScanner(new GuardPolicy(), this.vault);
     this.plugins = new FsPluginStore(join(home, "plugins"), {
       skills: join(home, "skills"),
       mcp: join(home, "mcp"),
@@ -111,7 +112,7 @@ export class Kernel {
       new RoleRouter(this.providers),
       this.research,
       this.events,
-      (root) => new NodeWorkspace(root, (text, path) => this.mask(text, path)),
+      (root) => new NodeWorkspace(root, (text, path) => this.mask(text, path), (text) => this.reveal(text)),
       this.skills,
       this.browser,
       this.memories,
@@ -300,6 +301,10 @@ export class Kernel {
 
   mask(text: string, path?: string): string {
     return this.scanner.scan(text, path).text;
+  }
+
+  reveal(text: string): string {
+    return this.vault.reveal(text);
   }
 
   async createRun(goal: string, agentId?: string): Promise<Run> {

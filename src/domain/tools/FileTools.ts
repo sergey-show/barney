@@ -34,7 +34,7 @@ export const FILE_TOOLS: ToolSpec[] = [
   },
   {
     name: "fs_read",
-    description: "Read a text file from the worktree. Secrets are masked. Do not pass absolute OS paths.",
+    description: "Read a text file from the worktree. Secrets are replaced with DETECTED_SECRET_<KIND>_<HASH> tokens. Do not pass absolute OS paths.",
     parameters: {
       type: "object",
       properties: { path: { type: "string", description: "Relative file path" } },
@@ -55,7 +55,7 @@ export const FILE_TOOLS: ToolSpec[] = [
   },
   {
     name: "fs_edit",
-    description: "Replace exactly one occurrence of old with new in an existing worktree file. Fails if the snippet is missing or appears more than once. Prefer this over fs_write when changing a file.",
+    description: "Replace exactly one occurrence of old with new in an existing worktree file. Fails if the snippet is missing or appears more than once. Prefer this over fs_write when changing a file. DETECTED_SECRET_* in old is matched against the real secret on disk.",
     parameters: {
       type: "object",
       properties: {
@@ -89,7 +89,7 @@ export const FILE_TOOLS: ToolSpec[] = [
   },
   {
     name: "fs_search",
-    description: "Search file contents in the worktree. Skips .git, node_modules, dist.",
+    description: "Search file contents in the worktree. Skips .git, node_modules, dist. A DETECTED_SECRET_* query matches the real secret on disk.",
     parameters: {
       type: "object",
       properties: {
@@ -113,7 +113,7 @@ export const FILE_TOOLS: ToolSpec[] = [
 export const SHELL_TOOL: ToolSpec = {
   name: "shell",
   description:
-    "Run a command in the session worktree and wait (up to 120s). Cross-platform: cmd.exe on Windows, /bin/sh elsewhere. cwd is the worktree. For builds/servers that take longer, process_spawn then process_logs. Prefer fs_* for files. Privileged, wipe, and remote|sh commands are blocked.",
+    "Run a command in the session worktree and wait (up to 120s). Cross-platform: cmd.exe on Windows, /bin/sh elsewhere. cwd is the worktree. For builds/servers that take longer, process_spawn then process_logs. Prefer fs_* for files. Privileged, recursive wipe, and remote|sh commands are blocked. DETECTED_SECRET_* in the command is substituted with the real secret before exec; stdout is remasked.",
   parameters: {
     type: "object",
     properties: {

@@ -1,19 +1,23 @@
 import { DomainError } from "../../domain/shared/DomainError.ts";
 import { GuardPolicy } from "../../domain/guard/GuardPolicy.ts";
 import { MaskedText, type SecretHit } from "../../domain/guard/MaskedText.ts";
+import {
+  detectedSecretToken,
+  isDetectedSecretToken,
+  looksLikeUserPlaceholder,
+} from "../../domain/guard/secretPlaceholder.ts";
 import type { SecretVault } from "../../application/ports.ts";
 
-const PATTERNS: Array<{ kind: string; re: RegExp }> = [
-  { kind: "aws_access_key", re: /AKIA[0-9A-Z]{16}/g },
-  { kind: "github_pat", re: /ghp_[A-Za-z0-9_]{20,}/g },
-  { kind: "github_fine", re: /github_pat_[A-Za-z0-9_]{20,}/g },
-  { kind: "slack", re: /xox[baprs]-[A-Za-z0-9-]{10,}/g },
-  { kind: "openai", re: /sk-(?:live|proj|svcacct)?[-_A-Za-z0-9]{20,}/g },
-  { kind: "jwt", re: /eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g },
-  { kind: "pem", re: /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----[\s\S]+?-----END (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/g },
-  { kind: "connection", re: /(?:postgres|mysql|mongodb|redis):\/\/[^\s]+:[^\s]+@[^\s]+/gi },
-  { kind: "assignment", re: /(?:password|passwd|secret|api[_-]?key|token|authorization)\s*[:=]\s*['\"]?([^\s'\"]{8,})/gi },
-];
+/** Identifier names a secret binding (env, header, field) — not a vendor prefix. */
+const CREDENTIAL_NAME =
+  /password|passwd|secret|token|authorization|credential|api[_-]?key|(?:access|private|secret)[_-]?key/i;
+
+/** JSON object header (`{"`) in base64url — the JWT shape, not a vendor. */
+const JWT = /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g;
+const PEM = /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]+?-----END [A-Z0-9 ]*PRIVATE KEY-----/g;
+const URI_USERINFO = /([a-z][a-z0-9+.-]*:\/\/)([^/\s@]+):([^/\s@]+)@/gi;
+const ASSIGNMENT = /([A-Za-z_][A-Za-z0-9_.-]*)[^A-Za-z0-9_.-=:]{0,8}[:=][ \t]*['"]?([^\s'"]{8,})/g;
+const OPAQUE = /\b[A-Za-z0-9_\-+]{24,}\b/g;
 
 export class RegexSecretScanner {
   constructor(
@@ -26,35 +30,60 @@ export class RegexSecretScanner {
       if (this.policy.onDetect === "block") {
         throw new DomainError("guard_block", `refusing to load denied path ${path}`);
       }
-      return new MaskedText(`{{SECRET:denied_path:file}}`, [{ kind: "denied_path", placeholder: "{{SECRET:denied_path:file}}" }]);
+      const placeholder = detectedSecretToken("denied_path", "file");
+      return new MaskedText(placeholder, [{ kind: "denied_path", placeholder }]);
     }
 
-    let masked = text;
     const hits: SecretHit[] = [];
-
-    for (const { kind, re } of PATTERNS) {
-      masked = masked.replace(re, (raw, group: string | number) => {
-        const value = typeof group === "string" && raw.includes(group) ? group : raw;
-        if (this.policy.isAllowed(value)) return raw;
-        if (this.policy.onDetect === "block") {
-          throw new DomainError("guard_block", `blocked ${kind}`);
-        }
-        const placeholder = `{{SECRET:${kind}:${shortHash(value)}}}`;
-        this.vault.store(placeholder, value);
-        hits.push({ kind, placeholder });
-        return raw.includes(value) && value !== raw ? raw.replace(value, placeholder) : placeholder;
-      });
-    }
-
-    masked = maskHighEntropy(masked, this.policy.entropyThreshold, this.vault, hits, this.policy);
+    let masked = text;
+    masked = masked.replace(PEM, (raw) => this.replaceValue(raw, raw, "pem", hits));
+    masked = masked.replace(URI_USERINFO, (raw, scheme: string, user: string, pass: string) => {
+      const userinfo = `${user}:${pass}`;
+      return `${scheme}${this.replaceValue(raw, userinfo, "uri_secret", hits)}@`;
+    });
+    masked = masked.replace(JWT, (raw) => this.replaceValue(raw, raw, "jwt", hits));
+    masked = masked.replace(ASSIGNMENT, (raw, name: string, value: string) => {
+      if (!CREDENTIAL_NAME.test(name) || looksLikePublicValue(value)) return raw;
+      const token = this.replaceValue(raw, value, "credential", hits);
+      return token === raw ? raw : raw.replace(value, token);
+    });
+    masked = masked.replace(OPAQUE, (raw) => {
+      if (shannon(raw) < this.policy.entropyThreshold) return raw;
+      return this.replaceValue(raw, raw, "high_entropy", hits);
+    });
     return new MaskedText(masked, hits);
   }
+
+  private replaceValue(raw: string, value: string, kind: string, hits: SecretHit[]): string {
+    if (shouldLeave(value, this.policy)) return raw.includes(value) && value !== raw ? value : raw;
+    if (this.policy.onDetect === "block") {
+      throw new DomainError("guard_block", `blocked ${kind}`);
+    }
+    const placeholder = detectedSecretToken(kind, shortHash(value));
+    this.vault.store(placeholder, value);
+    hits.push({ kind, placeholder });
+    return placeholder;
+  }
+}
+
+function looksLikePublicValue(value: string): boolean {
+  if (/^https?:\/\//i.test(value) && !value.includes("@")) return true;
+  if (/^[0-9.]+$/.test(value)) return true;
+  if (/^(true|false|null|none|yes|no)$/i.test(value)) return true;
+  return false;
+}
+
+function shouldLeave(value: string, policy: GuardPolicy): boolean {
+  if (policy.isAllowed(value)) return true;
+  if (isDetectedSecretToken(value) || value.includes("DETECTED_SECRET_")) return true;
+  if (looksLikeUserPlaceholder(value)) return true;
+  return false;
 }
 
 function shortHash(value: string): string {
   let h = 0;
   for (let i = 0; i < value.length; i++) h = (h * 31 + value.charCodeAt(i)) >>> 0;
-  return h.toString(16).slice(0, 3);
+  return h.toString(16).padStart(8, "0");
 }
 
 function shannon(value: string): number {
@@ -66,22 +95,4 @@ function shannon(value: string): number {
     e -= p * Math.log2(p);
   }
   return e;
-}
-
-function maskHighEntropy(
-  text: string,
-  threshold: number,
-  vault: SecretVault,
-  hits: SecretHit[],
-  policy: GuardPolicy,
-): string {
-  return text.replace(/\b[A-Za-z0-9_\-+/=]{24,}\b/g, (token) => {
-    if (policy.isAllowed(token)) return token;
-    if (token.startsWith("{{SECRET:")) return token;
-    if (shannon(token) < threshold) return token;
-    const placeholder = `{{SECRET:entropy:${shortHash(token)}}}`;
-    vault.store(placeholder, token);
-    hits.push({ kind: "entropy", placeholder });
-    return placeholder;
-  });
 }
