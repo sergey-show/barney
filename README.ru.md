@@ -86,7 +86,7 @@ flowchart TB
 
 ## Установка
 
-Нужен [Bun](https://bun.sh) ≥ 1.2.
+Нужен [Bun](https://bun.sh) ≥ 1.4.
 
 ```bash
 git clone https://github.com/sergey-show/barney.git

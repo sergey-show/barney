@@ -86,7 +86,7 @@ These names describe the runtime. They are not a hard role pasted into a system 
 
 ## Install
 
-Needs [Bun](https://bun.sh) ≥ 1.2.
+Needs [Bun](https://bun.sh) ≥ 1.4.
 
 ```bash
 git clone https://github.com/sergey-show/barney.git

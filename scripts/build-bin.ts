@@ -39,11 +39,12 @@ for (const name of names) {
     "bun",
     "build",
     "--compile",
+    "--external=playwright",
+    "--external=playwright-core",
+    "--external=chromium-bidi",
+    "--asset=./apps/web/dist",
     join(root, "src/presentation/cli/main.ts"),
-    "--asset",
-    "apps/web/dist",
-    "--outfile",
-    spec.file,
+    `--outfile=${spec.file}`,
   ];
   if (spec.bun) args.splice(3, 0, `--target=${spec.bun}`);
   const compiled = Bun.spawnSync(args, { cwd: root, stdout: "inherit", stderr: "inherit" });

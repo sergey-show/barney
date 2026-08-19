@@ -1,15 +1,15 @@
 {
   "name": "@encsch/barney",
   "version": "0.1.0",
-  "private": true,
   "description": "An AI agent with developing capabilities. The kernel is immutable; the body lives in ~/.barney.",
   "license": "MIT",
   "type": "module",
   "engines": {
-    "bun": ">=1.2.0"
+    "bun": ">=1.4.0"
   },
   "bin": {
-    "barney": "./bin/barney"
+    "barney": "./bin/barney",
+    "barney-agent": "./bin/barney-agent"
   },
   "files": [
     "bin",
