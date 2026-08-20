@@ -35,33 +35,36 @@ Review looks at whether the **requested result** happened, not how confident the
 ## Kernel and body
 
 ```mermaid
+---
+config:
+  layout: elk
+  theme: mc
+---
 flowchart TB
-    Human[Human: task]
-    Human -->|motive cannot change| Loop
-
-    subgraph Kernel["Kernel — this turn does not touch this shape"]
-        Loop[plan → tool → observe → review]
-        Fast[fast lane: plan and review]
-        Slow[slow lane: the act]
-        Loop --- Fast
-        Loop --- Slow
-    end
-
-    subgraph Around["Around the kernel — this can grow"]
-        Plugins[existing plugins and skills]
-        Own[write a tool if none fits]
-        FailMem[failures]
-        WinMem[paths that worked]
-    end
-
-    Loop -->|reuse what exists| Plugins
-    Loop -->|missing — write and keep| Own
+ subgraph Kernel["Kernel — this turn does not touch this shape"]
+        Loop["plan → tool → observe → review"]
+        Fast["fast lane: plan and review"]
+        Slow["slow lane: the act"]
+  end
+ subgraph Around["Around the kernel — this can grow"]
+        Plugins["existing plugins and skills"]
+        Own["write a tool if none fits"]
+        FailMem["failures"]
+        WinMem["paths that worked"]
+  end
+    Human["Human: task"] -- motive cannot change --> Loop
+    Loop --- Fast & Slow
+    Loop -- reuse what exists --> Plugins
+    Loop -- missing — write and keep --> Own
     Own --> Plugins
-    Loop -->|failed: change path, record| FailMem
-    FailMem -->|next time, do not step here| Loop
-    Loop -->|worked: record how| WinMem
-    WinMem -->|next time, take this path| Loop
-    Loop -->|reply| Human
+    Loop -- failed: change path, record --> FailMem
+    FailMem -- next time, do not step here --> Loop
+    Loop -- worked: record how --> WinMem
+    WinMem L_WinMem_Loop_0@-- next time, take this path --> Loop
+    Loop -- reply --> Human
+
+
+    L_WinMem_Loop_0@{ animation: none }
 ```
 
 | Stays in `src/` | Lives in `~/.barney` |

@@ -35,33 +35,36 @@ Barney собран иначе. Существование предшеству�
 ## Ядро и тело
 
 ```mermaid
+---
+config:
+  layout: elk
+  theme: mc
+---
 flowchart TB
-    Human[Человек: задача]
-    Human -->|мотив нельзя сменить| Loop
-
-    subgraph Kernel["Ядро — эту схему ход не трогает"]
-        Loop[план → инструмент → сверка → ревью]
-        Fast[быстрый контур: план и ревью]
-        Slow[медленный контур: исполнение]
-        Loop --- Fast
-        Loop --- Slow
-    end
-
-    subgraph Around["Вокруг ядра — можно дописывать"]
-        Plugins[готовые плагины и навыки]
-        Own[свой инструмент, если готового нет]
-        FailMem[неудачи]
-        WinMem[удачный опыт]
-    end
-
-    Loop -->|сначала взять готовое| Plugins
-    Loop -->|нет подходящего — написать и оставить себе| Own
+ subgraph Kernel["Kernel — this turn does not touch this shape"]
+        Loop["plan → tool → observe → review"]
+        Fast["fast lane: plan and review"]
+        Slow["slow lane: the act"]
+  end
+ subgraph Around["Around the kernel — this can grow"]
+        Plugins["existing plugins and skills"]
+        Own["write a tool if none fits"]
+        FailMem["failures"]
+        WinMem["paths that worked"]
+  end
+    Human["Human: task"] -- motive cannot change --> Loop
+    Loop --- Fast & Slow
+    Loop -- reuse what exists --> Plugins
+    Loop -- missing — write and keep --> Own
     Own --> Plugins
-    Loop -->|не получилось: сменить путь, записать| FailMem
-    FailMem -->|в следующий раз не наступать сюда| Loop
-    Loop -->|получилось: записать как решать| WinMem
-    WinMem -->|в следующий раз сразу этот путь| Loop
-    Loop -->|ответ человеку| Human
+    Loop -- failed: change path, record --> FailMem
+    FailMem -- next time, do not step here --> Loop
+    Loop -- worked: record how --> WinMem
+    WinMem L_WinMem_Loop_0@-- next time, take this path --> Loop
+    Loop -- reply --> Human
+
+
+    L_WinMem_Loop_0@{ animation: none }
 ```
 
 | Остаётся в `src/` | Живёт в `~/.barney` |
