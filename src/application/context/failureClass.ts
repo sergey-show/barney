@@ -19,9 +19,19 @@ export function failureClass(input: {
   return "general";
 }
 
-export function learnedSkillDraft(klass: string, lesson: string): { name: string; body: string } | null {
+export function learnedSkillDraft(klass: string, path: {
+  failedFamily?: string;
+  recoveredBy?: string;
+  line?: string;
+}): { name: string; body: string } | null {
   if (klass === "general" || klass === "aborted-unfinished") return null;
-  const line = lesson.replace(/\s+/g, " ").trim().slice(0, 180);
+  const failed = (path.failedFamily ?? "").trim().toLowerCase().slice(0, 40);
+  const recovered = (path.recoveredBy ?? "").trim().toLowerCase().slice(0, 40);
+  const line = [
+    failed && recovered && recovered !== failed ? `after ${failed} failed, ${recovered} delivered` : "",
+    recovered && !failed ? `${recovered} delivered` : "",
+    path.line?.replace(/\s+/g, " ").trim().slice(0, 180) ?? "",
+  ].find((item) => item) ?? "";
   if (!line) return null;
   const name = `learned-${klass}`;
   return {
@@ -29,12 +39,12 @@ export function learnedSkillDraft(klass: string, lesson: string): { name: string
     body: [
       "---",
       `name: ${name}`,
-      `description: Scheme learned from a repeated ${klass} miss.`,
+      `description: Scheme that recovered a ${klass} miss.`,
       "origin: learned",
       "---",
       "",
       line,
-      "Change path; do not repeat the failed call. Do not edit the kernel.",
+      "Do not repeat the failed family. Do not edit the kernel.",
       "",
     ].join("\n"),
   };

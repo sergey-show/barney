@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { familyKey } from "./controlLoop.ts";
 import { applyToolObserve, classifyToolResult, toolSignature } from "./observeTool.ts";
 
 test("classifies TLS and blocks the exact same call", () => {
@@ -122,6 +123,18 @@ test("saturates a shell verb after two fails, not the whole shell family", () =>
     familyFails,
   );
   expect(other.skip).toBe(false);
+});
+
+test("cd is a prefix, not a shell family", () => {
+  const familyFails = new Map<string, number>([["shell:cd", 2]]);
+  const run = applyToolObserve(
+    { name: "shell", arguments: { command: "cd /app && python3 /app/filter.py test.html" } },
+    "exit 0\nok",
+    new Set(),
+    familyFails,
+  );
+  expect(familyKey({ name: "shell", arguments: { command: "cd /app && python3 /app/filter.py test.html" } })).toBe("shell:python3");
+  expect(run.skip).toBe(false);
 });
 
 test("path outside the worktree tells the model to use shell and does not saturate fs", () => {

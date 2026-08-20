@@ -1,12 +1,12 @@
 import { buildActSystem, turnLawFromConstitution } from "../context/actPrompt.ts";
-import { cycleStrategy, stopAfterFail, wantingWithoutLiking, type HaltReason } from "../context/controlLoop.ts";
+import { cycleStrategy, familyKey, stopAfterFail, wantingWithoutLiking, type HaltReason } from "../context/controlLoop.ts";
 import { draftPlan, formatPlan } from "../context/draftPlan.ts";
 import { bindToolArgs, goalAnchors } from "../context/bindAnchor.ts";
-import { bumpBacklog, failureClass, formatBacklog, learnedSkillDraft, parseBacklog, shouldCloseClass } from "../context/failureClass.ts";
-import { lessonRule, pickRules, isRecapLesson } from "../context/lessonRule.ts";
+import { bumpBacklog, failureClass, formatBacklog, learnedSkillDraft, parseBacklog } from "../context/failureClass.ts";
+import { emptyTrail, lessonRule, noteTrail, pickRules, isRecapLesson, type LessonTrail } from "../context/lessonRule.ts";
 import { sealReply } from "../context/sealReply.ts";
 import { judgeReview, artifactPins, missingIsLocalArtifact, requestedArtifacts, stillMissingArtifacts, unrunArtifacts, unwrittenArtifacts } from "../context/reviewJudge.ts";
-import { applyToolObserve } from "../context/observeTool.ts";
+import { applyToolObserve, classifyToolResult } from "../context/observeTool.ts";
 import { clipText, packSession, redactSecrets } from "../context/packSession.ts";
 import { visibleAssistantText } from "../../infrastructure/llm/visibleReply.ts";
 import { formatResearchBrief, runDeepResearch } from "../research/DeepResearch.ts";
@@ -111,9 +111,9 @@ export class DriveSolve {
       return this.sealDesign(run, agent, input.message);
     }
     let routed: TurnRoute | undefined;
-    if (depth === 0 && !input.forceFull) {
+    if (depth === 0) {
       routed = await this.routeTurn(run, throwIfAborted, input.signal);
-      if (!routed.needLarge) {
+      if (!input.forceFull && routed.short) {
         const short = await this.executeShort(run, agent, input.message, throwIfAborted, input.signal);
         if (short !== "full") return short;
       }
@@ -154,26 +154,27 @@ export class DriveSolve {
     }
     await this.flushPsyche(run, agent.id.value, psyche);
     const planKey = `plan/${run.id.value}`;
-    const existingPlan = await this.memory.get(planKey);
     const failMarkers = past
       .filter((episode) => episode.outcome === "fail")
       .slice(0, 4)
       .map((episode) => episode.nextHint || episode.failureMode || "")
       .filter(Boolean);
-    const planText = existingPlan?.body.trim() || formatPlan(draftPlan({
-      goal: run.goal,
-      latest: input.message,
-      anchors: packed.anchors,
-      markers: failMarkers,
-    }));
-    if (!existingPlan) {
-      await this.remember(run, agent.id.value, {
-        key: planKey,
-        title: `Plan for session ${run.id.value}`,
-        body: planText,
-        tags: ["plan", run.taskClass],
-      });
-    }
+    const analyzedSteps = (routed?.plan ?? []).map((step) => step.trim()).filter(Boolean);
+    const planText = [
+      routed?.analysis ? `Analysis: ${routed.analysis}` : "",
+      formatPlan(analyzedSteps.length ? analyzedSteps : draftPlan({
+        goal: run.goal,
+        latest: input.message,
+        anchors: packed.anchors,
+        markers: failMarkers,
+      })),
+    ].filter(Boolean).join("\n");
+    await this.remember(run, agent.id.value, {
+      key: planKey,
+      title: `Plan for session ${run.id.value}`,
+      body: planText,
+      tags: ["plan", run.taskClass],
+    });
     const memoryNote = [
       rules.length ? `Rules from past runs of this task class (obey these):\n${rules.map((line) => `- ${line}`).join("\n")}` : "",
       packed.digest ? `Session so far (compressed; full chat stays in the portal):\n${packed.digest}` : "",
@@ -183,6 +184,8 @@ export class DriveSolve {
     const failedCalls = new Set<string>();
     const familyFails = new Map<string, number>();
     const extra = { n: 0 };
+    const lessonTrail = emptyTrail();
+    const failKlass = { last: "" };
 
     try {
       this.events.publish(run.beginAct("retry_with_error", `${input.message.slice(0, 80)} #${run.attempts + 1}`));
@@ -230,7 +233,7 @@ export class DriveSolve {
       };
     }
     throwIfAborted();
-    let act = await this.actWithTools(run, actMessages, input.signal, depth, failedCalls, psyche, familyFails);
+    let act = await this.actWithTools(run, actMessages, input.signal, depth, failedCalls, psyche, familyFails, lessonTrail);
     throwIfAborted();
     act = this.sealAct(run, await this.verifyAgainstEvidence(run, act, input.signal), input.message);
     throwIfAborted();
@@ -243,6 +246,7 @@ export class DriveSolve {
     throwIfAborted();
     const reviewRaw = await this.completeRole(run, "reviewer", reviewPrompt, { signal: input.signal });
     let review = judgeReview(reviewRaw.text, input.message, artifactEvidence(run), act.text);
+    rememberFailKlass(failKlass, review);
     const reviewEvents = run.submitReview(review);
     this.events.publish(reviewEvents);
 
@@ -260,7 +264,7 @@ export class DriveSolve {
             ...actMessages,
             { role: "assistant", content: act.text },
             { role: "user", content: `Research notes:\n${note}\nContinue solving. Do not repeat the previous plan.` },
-          ], input.signal, depth, failedCalls, psyche, familyFails), input.signal), input.message);
+          ], input.signal, depth, failedCalls, psyche, familyFails, lessonTrail), input.signal), input.message);
           this.commitAct(run, second);
           throwIfAborted();
           const review2Raw = await this.completeRole(run, "reviewer", [
@@ -268,6 +272,7 @@ export class DriveSolve {
             { role: "user", content: reviewPacket(run.goal, input.message, second.text, reviewEvidence(run, input.message)) },
           ], { signal: input.signal });
           const review2 = judgeReview(review2Raw.text, input.message, artifactEvidence(run), second.text);
+          rememberFailKlass(failKlass, review2);
           this.events.publish(run.submitReview(review2));
           act = second;
           review = review2;
@@ -288,7 +293,7 @@ export class DriveSolve {
           ...actMessages,
           { role: "assistant", content: act.text },
           { role: "user", content: RECOVERY_NUDGE },
-        ], input.signal, depth, failedCalls, psyche, familyFails), input.signal), input.message);
+        ], input.signal, depth, failedCalls, psyche, familyFails, lessonTrail), input.signal), input.message);
         this.commitAct(run, retry);
         throwIfAborted();
         const retryReviewRaw = await this.completeRole(run, "reviewer", [
@@ -296,6 +301,7 @@ export class DriveSolve {
           { role: "user", content: reviewPacket(run.goal, input.message, retry.text, reviewEvidence(run, input.message)) },
         ], { signal: input.signal });
         const retryReview = judgeReview(retryReviewRaw.text, input.message, artifactEvidence(run), retry.text);
+        rememberFailKlass(failKlass, retryReview);
         this.events.publish(run.submitReview(retryReview));
         act = retry;
         review = retryReview;
@@ -319,6 +325,8 @@ export class DriveSolve {
         familyFails,
         extra,
         psyche,
+        lessonTrail,
+        failKlass,
       });
       act = persisted.act;
       review = persisted.review;
@@ -326,7 +334,8 @@ export class DriveSolve {
 
     if (run.status === "ready" && review.verdict !== "pass") {
       const missing = review.missing || review.summary || "the requested result";
-      const why = haltAfterFail(review, run, extra.n);
+      const leftover = leftoverWork(input.message, artifactEvidence(run));
+      const why = haltAfterFail(review, run, extra.n, leftover);
       const note = haltNote(why, missing);
       run.append("system", note);
     }
@@ -347,6 +356,8 @@ export class DriveSolve {
       anchors: packed.anchors,
       operatorCorrected: corrected,
       failClass: klass,
+      failedFamily: lessonTrail.failedFamily,
+      recoveredBy: lessonTrail.recoveredBy,
     });
     if (!isRecapLesson(learned.body)) {
       psyche.samost = absorbIntoSamost(psyche.samost, learned.body, review.verdict === "pass" && !corrected ? "light" : "shadow");
@@ -364,6 +375,7 @@ export class DriveSolve {
         tags: ["rule", "lesson", run.taskClass],
       });
       await this.graph.link(classKey(run.taskClass), learned.key, "learned");
+      await this.growBodyFromRecovery(run, agent, failKlass.last, lessonTrail);
       await this.episodes.save(
         new Episode({
           agentId: agent.id.value,
@@ -455,6 +467,7 @@ export class DriveSolve {
     failedCalls = new Set<string>(),
     psyche?: PsycheState,
     familyFails = new Map<string, number>(),
+    lessonTrail = emptyTrail(),
   ): Promise<ChatResult> {
     const started = Date.now();
     const ws = this.workspaceFor(run.worktreePath);
@@ -499,6 +512,8 @@ export class DriveSolve {
         const raw = preview.skip ? preview.out : clipToolOut(await this.dispatchTool(run, ws, call, signal, depth), `${run.goal}\n${userText}`);
         const observed = preview.skip ? preview : applyToolObserve(call, raw, failedCalls, familyFails);
         const out = observed.out;
+        const failed = observed.skip || /BLOCKED:/.test(out) || classifyToolResult(out, call.name).error;
+        noteTrail(lessonTrail, familyKey(call), failed);
         if (psyche) {
           psyche.board = addBoard(psyche.board, { kind: "operation", text: call.name });
           if (regulationOf(call, run.goal) === "wander") {
@@ -615,22 +630,26 @@ export class DriveSolve {
       tags: ["backlog", klass, "fail"],
     });
     await this.graph.link(classKey(klass), key, "failed-as");
-    if (!shouldCloseClass(row)) return;
-    await this.growBodyFromFailure(run, agent, review);
   }
 
-  private async growBodyFromFailure(
+  private async growBodyFromRecovery(
     run: Run,
     agent: Agent,
-    review: { summary: string; missing?: string; aborted?: boolean },
+    klass: string,
+    lessonTrail: LessonTrail,
   ): Promise<string> {
-    const klass = failureClass({
-      goal: run.goal,
-      missing: review.missing,
-      summary: review.summary,
-      aborted: review.aborted,
+    const recovered = Boolean(
+      lessonTrail.failedFamily
+      && lessonTrail.recoveredBy
+      && lessonTrail.recoveredBy !== lessonTrail.failedFamily,
+    );
+    if (!klass || klass === "general" || klass === "aborted-unfinished") return "";
+    const prev = parseBacklog((await this.memory.get(slugKey(`backlog/${klass}`)))?.body ?? "");
+    if (!recovered && !prev) return "";
+    const draft = learnedSkillDraft(klass, {
+      failedFamily: lessonTrail.failedFamily,
+      recoveredBy: lessonTrail.recoveredBy,
     });
-    const draft = learnedSkillDraft(klass, review.missing || review.summary);
     if (!draft || this.skills.get(draft.name)) return draft?.name ?? "";
     this.skills.writeFile(draft.name, "SKILL.md", draft.body);
     agent.evolve({ skills: [{ kind: "skill", name: draft.name, version: "1" }] });
@@ -663,11 +682,15 @@ export class DriveSolve {
     familyFails: Map<string, number>;
     extra: { n: number };
     psyche: PsycheState;
+    lessonTrail: LessonTrail;
+    failKlass: { last: string };
   }): Promise<{ act: ChatResult; review: Review }> {
     let { act, review } = input;
+    rememberFailKlass(input.failKlass, review);
     const trail: ChatMessage[] = [{ role: "assistant", content: act.text }];
     while (true) {
-      const halt = haltAfterFail(review, input.run, input.extra.n, input.signal?.aborted);
+      const leftover = leftoverWork(input.latest, artifactEvidence(input.run));
+      const halt = haltAfterFail(review, input.run, input.extra.n, leftover, input.signal?.aborted);
       if (halt === "pass") return { act, review };
       if (halt === "abort") throw new DomainError("aborted", "step interrupted");
       if (halt !== "continue") {
@@ -675,13 +698,6 @@ export class DriveSolve {
           const why = "wanting without liking: stop after extra path this message";
           input.psyche.board = addBoard(input.psyche.board, { kind: "decision", text: why });
           input.psyche.existence = appendExistence(input.psyche.existence, { kind: "act", text: why });
-          const agent = await this.agents.get(input.run.agentId);
-          if (agent) {
-            await this.growBodyFromFailure(input.run, agent, {
-              summary: review.summary,
-              missing: review.missing,
-            });
-          }
           await this.flushPsyche(input.run, input.run.agentId, input.psyche);
         }
         break;
@@ -704,22 +720,9 @@ export class DriveSolve {
       const strategy = cycleStrategy(input.run.usedStrategies, input.run.attempts, localFiles);
       let learnedSkill = "";
       if (strategy === "write_capability") {
-        const agent = await this.agents.get(input.run.agentId);
-        if (agent) {
-          learnedSkill = await this.growBodyFromFailure(input.run, agent, {
-            summary: review.summary,
-            missing: review.missing,
-          });
-          const klass = failureClass({ missing: review.missing, summary: review.summary });
-          const scheme = learnedSkillDraft(klass, review.missing || review.summary);
-          if (scheme) {
-            input.psyche.samost = absorbIntoSamost(
-              input.psyche.samost,
-              `[${klass}] ${clipText(review.missing || review.summary, 140)}`,
-              "shadow",
-            );
-          }
-        }
+        const klass = failureClass({ missing: review.missing, summary: review.summary });
+        const name = klass !== "general" && klass !== "aborted-unfinished" ? `learned-${klass}` : "";
+        if (name && this.skills.get(name)) learnedSkill = name;
       }
       const why = `${strategy}: ${clipText(review.missing || review.summary || "unsolved", 100)} #${input.run.attempts + 1}`;
       input.psyche.board = addBoard(input.psyche.board, { kind: "decision", text: why });
@@ -745,7 +748,7 @@ export class DriveSolve {
       trail.push({ role: "user", content: persistNudge(strategy, review, researchNote, input.run.goal, input.latest, artifactEvidence(input.run), learnedSkill) });
       const next = this.sealAct(input.run, await this.verifyAgainstEvidence(
         input.run,
-        await this.actWithTools(input.run, [...input.actMessages, ...trail], input.signal, input.depth, input.failedCalls, input.psyche, input.familyFails),
+        await this.actWithTools(input.run, [...input.actMessages, ...trail], input.signal, input.depth, input.failedCalls, input.psyche, input.familyFails, input.lessonTrail),
         input.signal,
       ), input.latest);
       this.commitAct(input.run, next);
@@ -753,6 +756,7 @@ export class DriveSolve {
       if (trail.length > 8) trail.splice(0, trail.length - 8);
       act = next;
       review = await this.reviewLatest(input.run, input.latest, next.text, input.signal);
+      rememberFailKlass(input.failKlass, review);
     }
     return { act, review };
   }
@@ -988,9 +992,10 @@ export class DriveSolve {
     ], { signal });
     throwIfAborted();
     const route = parseTurnRoute(raw.text || raw.thinking || "");
-    const lane = route.needLarge ? "large model" : "small model";
+    const steps = route.plan.length ? `${route.plan.length} steps` : "heuristic plan";
     const research = route.needResearch ? ", research" : "";
-    run.append("thinking", `topic: ${route.topic || "—"} → ${lane}${research}`);
+    const analysis = route.analysis ? ` — ${clipText(route.analysis, 160)}` : "";
+    run.append("thinking", `topic: ${route.topic || "—"} → ${route.short ? "short chat" : steps}${research}${analysis}`);
     await this.runs.save(run);
     return route;
   }
@@ -1123,10 +1128,21 @@ function skillCatalog(skills: SkillPort, query = ""): string {
   return renderSkillCatalog(skills.list(), query);
 }
 
+function rememberFailKlass(bag: { last: string }, review: { verdict?: string; missing?: string; summary: string; aborted?: boolean }): void {
+  if (review.verdict === "pass") return;
+  const klass = failureClass({
+    missing: review.missing,
+    summary: review.summary,
+    aborted: review.aborted,
+  });
+  if (klass !== "general" && klass !== "aborted-unfinished") bag.last = klass;
+}
+
 function haltAfterFail(
   review: Review,
   run: Run,
   extraApproaches: number,
+  leftover?: { unwritten: string[]; unrun: string[] },
   aborted?: boolean,
 ): HaltReason {
   return stopAfterFail(review, {
@@ -1136,7 +1152,7 @@ function haltAfterFail(
     maxAttempts: run.maxAttempts,
     minStrategies: run.minStrategies,
     used: run.usedStrategies.length,
-    wanting: wantingWithoutLiking({ extraApproaches }),
+    wanting: wantingWithoutLiking({ extraApproaches, leftover }),
   });
 }
 
@@ -1199,13 +1215,14 @@ Fail when:
 Fail when a concrete fact is not in the tool or research evidence.
 DETECTED_SECRET_<KIND>_<HASH> in tool output is a guard mask of a live secret still on disk — not a replacement the agent made. If the user asked for placeholders such as <your-aws-access-key-id>, those exact strings must appear as writes; the mask tokens are evidence the secret is still present.
 Fail when a newly written deliverable contains DETECTED_SECRET_* and the user asked for a live computed value. The mask is not that value.
+Fail when tool evidence already contains a live value matching a format the user named (token[...]), and the written file contains a different invented match. Copy the live value from tools.
 Fail when opened docs show a specific API and the reply uses a different one.
 Fail when a requested file was written by a redirect that captured a tool error (traceback, unable to load, could not read). Existence of that file is not a pass — overwrite it from successful output.
 If evidence lists files already on disk, do not claim they are missing. Fail only for what is still absent or wrong.
 Fail when the latest user message says the previous answer was wrong. In that case summary must include "operator rejected".
 Fail when the user asked to open or preview something and evidence has no successful open.
 Fail when the user asked to start a service or listen on a port and evidence has no successful start (passing config test plus start/reload, or a successful request to that port). A write of a listen directive is not a start.
-Fail when the user asked for a program that prints, verifies, checks, or otherwise produces a result, and evidence has no successful run of that program (interpreter invoking the file, exit 0). A write of the file is not a run.
+Fail when the user asked for a program that prints, verifies, checks, or otherwise produces a result, and evidence has no successful run of that program (interpreter invoking the file, exit 0, no traceback). A write of the file is not a run. A traceback in the same block is not a run even if the compound command exits 0.
 Do not pass a guess as a checked fact, a write as an open, or a write as a run.
 Use uncertain / gap / unknown_api when the task needs vendor docs, the web, or an API the agent has not looked up yet. Set needsResearch true in that case.
 JSON only. No chain-of-thought.
@@ -1286,7 +1303,7 @@ function persistNudge(strategy: StrategyName, review: Review, researchNote: stri
   if (strategy === "write_capability") {
     const body = learnedSkill
       ? `\nA scheme for this miss is in plugin ${learnedSkill}. plugin_read it, then deliver the result this turn.`
-      : `\nIf a reusable plugin or script helps, write it into ~/.barney, then use it. Still deliver the result this turn. Do not edit the kernel.`;
+      : `\nChange tool family. Do not invent a plugin from this miss. Still deliver the result this turn.`;
     return `${common}${body}`;
   }
   if (strategy === "switch_model") {

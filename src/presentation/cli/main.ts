@@ -201,8 +201,7 @@ const providersCmd = defineCommand({
             return `${mark} ${p.name}  ${p.dialect}  ${p.defaultModel ?? "-"}  key=${p.hasKey ? "yes" : "no"}`;
           }),
         );
-        if (state.lanes.large) printMeta("large", `${state.lanes.large.model}`);
-        if (state.lanes.small) printMeta("small", `${state.lanes.small.model}`);
+        if (state.lanes.large) printMeta("model", `${state.lanes.large.model}`);
       },
     }),
     add: defineCommand({
@@ -237,29 +236,15 @@ const providersCmd = defineCommand({
       },
     }),
     use: defineCommand({
-      meta: { name: "use", description: "Bind large (coder) and optional small (reviewer) models" },
+      meta: { name: "use", description: "Bind the model for plan, act, and review" },
       args: {
         id: { type: "positional", required: true },
-        model: { type: "string", description: "Large model — coder, researcher" },
-        fast: { type: "string", description: "Small model — planner, reviewer, embedder" },
-        fastProvider: { type: "string", description: "Provider for the small model, if different" },
+        model: { type: "string", description: "Model id from /v1/models" },
       },
       async run({ args }) {
         const kernel = getKernel();
-        if (args.fast) {
-          const state = await kernel.useLanes({
-            large: { providerId: String(args.id), model: args.model ? String(args.model) : undefined },
-            small: {
-              providerId: args.fastProvider ? String(args.fastProvider) : String(args.id),
-              model: String(args.fast),
-            },
-          });
-          printMeta("large", `${state.lanes.large?.model ?? "-"}`);
-          printMeta("small", `${state.lanes.small?.model ?? "-"}`);
-          return;
-        }
         const used = await kernel.useProvider(String(args.id), args.model ? String(args.model) : undefined);
-        printMeta("coder", `${used.provider.name} / ${used.model}`);
+        printMeta("model", `${used.provider.name} / ${used.model}`);
       },
     }),
     rm: defineCommand({

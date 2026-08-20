@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { clipText } from "./packSession.ts";
-import { artifactPins, judgeReview, missingIsLocalArtifact, parseReview, stillMissingArtifacts } from "./reviewJudge.ts";
+import { artifactPins, judgeReview, missingIsLocalArtifact, parseReview, requestedArtifacts, stillMissingArtifacts } from "./reviewJudge.ts";
 
 test("parseReview stringifies array missing so clipText does not crash", () => {
   const review = parseReview(
@@ -181,6 +181,26 @@ test("judgeReview fails a pass when a requested program was never successfully r
   expect(catIsNotARun.verdict).toBe("fail");
 });
 
+test("judgeReview fails a pass when the program tracebacked even if the compound command exits 0", () => {
+  const latest = "Create a python script `/app/filter.py` that removes JavaScript from HTML files";
+  const evidence = [
+    'fs_write {"path":"/app/filter.py","content":"print(1)"}',
+    "wrote /app/filter.py (20 chars)",
+    'shell {"command":"python3 /app/filter.py /app/test.html && cat /app/out.html || echo none"}',
+    "exit 0",
+    "none",
+    "Traceback (most recent call last):",
+    "NameError: name 'full_mask' is not defined",
+  ].join("\n");
+  const review = judgeReview(
+    '{"verdict":"pass","achieved":true,"summary":"filter.py written and executed","needsResearch":false}',
+    latest,
+    evidence,
+  );
+  expect(review.verdict).toBe("fail");
+  expect(review.missing).toMatch(/no successful run of \/app\/filter\.py/);
+});
+
 test("judgeReview treats a program by the ask, not by extension or interpreter name", () => {
   const latest = "Create a program at `/app/hello.js` that prints hello";
   const written = [
@@ -301,3 +321,61 @@ test("judgeReview fails a pass when a redirect captured a tool error into the de
   );
   expect(rewritten.verdict).toBe("pass");
 });
+
+test("requestedArtifacts sees a write-path without backticks, not a given input", () => {
+  const latest = [
+    "You are given a program located at /work/src/legacy.cbl.",
+    "Create a script at /work/program.py that reads /work/src/INPUT.DAT.",
+    "Write me a program extract.js that runs against the binary.",
+    "Save the pattern in /work/regex.txt",
+    "Write a single file in /work/polyglot/main.py.c which prints n.",
+  ].join("\n");
+  const found = requestedArtifacts(latest);
+  expect(found).toContain("/work/program.py");
+  expect(found).toContain("extract.js");
+  expect(found).toContain("/work/regex.txt");
+  expect(found).toContain("/work/polyglot/main.py.c");
+  expect(found).not.toContain("/work/src/legacy.cbl");
+  expect(found).not.toContain("/work/src/INPUT.DAT");
+});
+
+test("wanting leftover stays open for a bare write-path until the file exists", () => {
+  const latest = "Save the pattern in /work/regex.txt";
+  expect(stillMissingArtifacts(latest, "")).toBe("/work/regex.txt");
+  expect(stillMissingArtifacts(latest, 'fs_write {"path":"/work/regex.txt","content":"x"}\nwrote /work/regex.txt (1 chars)')).toBe("the requested result");
+});
+
+test("parseReview recovers a fenced or truncated reviewer object", () => {
+  const fenced = parseReview('```json\n{"verdict":"pass","achieved":true,"summary":"ok","needsResearch":false}\n```');
+  expect(fenced.verdict).toBe("pass");
+  const truncated = parseReview('```json {"verdict":"pass","achieved":true,"requested":"Create a package called "vectorops", then host it."');
+  expect(truncated.verdict).toBe("pass");
+});
+
+test("judgeReview fails a pass that invented a token already present in tools", () => {
+  const latest = "Recover the token in the format token[...] and write it to /work/flag.txt";
+  const invented = judgeReview(
+    '{"verdict":"pass","achieved":true,"summary":"flag written","needsResearch":false}',
+    latest,
+    [
+      'shell {"command":"cat recovered"}',
+      "exit 0",
+      "token[live_from_history]",
+      'fs_write {"path":"/work/flag.txt","content":"token[ab12cd]"}\nwrote /work/flag.txt (14 chars)',
+    ].join("\n"),
+  );
+  expect(invented.verdict).toBe("fail");
+  expect(invented.missing).toMatch(/invented|live value/i);
+  const copied = judgeReview(
+    '{"verdict":"pass","achieved":true,"summary":"flag written","needsResearch":false}',
+    latest,
+    [
+      'shell {"command":"cat recovered"}',
+      "exit 0",
+      "token[live_from_history]",
+      'fs_write {"path":"/work/flag.txt","content":"token[live_from_history]"}\nwrote /work/flag.txt (24 chars)',
+    ].join("\n"),
+  );
+  expect(copied.verdict).toBe("pass");
+});
+

@@ -1,6 +1,6 @@
 {
   "name": "@encsch/barney",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "An AI agent with developing capabilities. The kernel is immutable; the body lives in ~/.barney.",
   "license": "MIT",
   "type": "module",
@@ -26,6 +26,7 @@
     "build:web": "vite build --config apps/web/vite.config.ts",
     "build:bin": "bun run scripts/build-bin.ts",
     "pack:npm": "bun run build:web && npm pack --dry-run",
+    "release": "bun run scripts/release.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

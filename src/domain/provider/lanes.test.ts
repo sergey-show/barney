@@ -1,19 +1,20 @@
 import { expect, test } from "bun:test";
 import { lanesFromBindings, rolesForLane } from "./lanes.ts";
+import { ROLES } from "./Role.ts";
 
-test("large lane is coder and researcher", () => {
-  expect(rolesForLane("large")).toEqual(["coder", "researcher"]);
-  expect(rolesForLane("small")).toEqual(["planner", "reviewer", "embedder"]);
+test("both former lanes use the same role set", () => {
+  expect(rolesForLane("large")).toEqual(ROLES);
+  expect(rolesForLane("small")).toEqual(ROLES);
 });
 
-test("lanes read coder as large and reviewer as small", () => {
+test("lanes expose one bound model; no small lane", () => {
   const lanes = lanesFromBindings([
     { role: "coder", providerId: "p-big", model: "qwen-35b" },
     { role: "researcher", providerId: "p-big", model: "qwen-35b" },
-    { role: "planner", providerId: "p-small", model: "qwen-8b" },
-    { role: "reviewer", providerId: "p-small", model: "qwen-8b" },
-    { role: "embedder", providerId: "p-small", model: "qwen-8b" },
+    { role: "planner", providerId: "p-big", model: "qwen-35b" },
+    { role: "reviewer", providerId: "p-big", model: "qwen-35b" },
+    { role: "embedder", providerId: "p-big", model: "qwen-35b" },
   ]);
   expect(lanes.large).toEqual({ providerId: "p-big", model: "qwen-35b" });
-  expect(lanes.small).toEqual({ providerId: "p-small", model: "qwen-8b" });
+  expect(lanes.small).toBeNull();
 });

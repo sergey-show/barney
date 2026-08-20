@@ -1,6 +1,6 @@
 import type { LlmPort, ProviderCatalog } from "../../application/ports.ts";
 import { LlmProvider } from "../../domain/provider/LlmProvider.ts";
-import { FAST_ROLES, type ChatMessage, type ChatResult, type CompleteOptions, type Role } from "../../domain/provider/Role.ts";
+import { ROLES, type ChatMessage, type ChatResult, type CompleteOptions, type Role } from "../../domain/provider/Role.ts";
 import { clientFor } from "./clients/clientFor.ts";
 import { requestBodyExtras, schemaFor } from "./clients/schema.ts";
 
@@ -33,19 +33,6 @@ export class RoleRouter implements LlmPort {
 
 export async function listRemoteModels(provider: LlmProvider): Promise<string[]> {
   return clientFor(provider).listModels();
-}
-
-export function preferFastModel(provider: LlmProvider, current: string): string {
-  const dialect = schemaFor(provider).id;
-  if (dialect === "anthropic") return "claude-haiku-4-5";
-  if (dialect === "stub") return current || "stub";
-  if (dialect === "openai" && !/mini|nano/i.test(current)) return "gpt-4.1-mini";
-  if (dialect === "groq" && !/8b|instant|mini/i.test(current)) return "llama-3.1-8b-instant";
-  return current;
-}
-
-export function isFastRole(role: Role): boolean {
-  return (FAST_ROLES as readonly string[]).includes(role);
 }
 
 async function resolveBinding(catalog: ProviderCatalog, role: Role): Promise<{ provider: LlmProvider; model: string }> {
@@ -110,20 +97,20 @@ export async function seedBuiltinProviders(catalog: ProviderCatalog): Promise<vo
       (await catalog.findByName("stub"));
     if (preferred) await catalog.setDefault(preferred.id, preferred.defaultModel ?? "default");
   }
-  await seedFastRoleBindings(catalog);
+  await seedUnifiedRoleBindings(catalog);
 }
 
-export async function seedFastRoleBindings(catalog: ProviderCatalog): Promise<void> {
+/** Planner, reviewer, and coder share the bound model. A lighter second model degrades review. */
+export async function seedUnifiedRoleBindings(catalog: ProviderCatalog): Promise<void> {
   const bindings = await catalog.bindings();
-  const coder = bindings.find((item) => item.role === "coder");
+  const coder = bindings.find((item) => item.role === "coder") ?? bindings[0];
   if (!coder) return;
   const provider = await catalog.get(coder.providerId);
   if (!provider) return;
-  const fast = preferFastModel(provider, coder.model || provider.defaultModel || "default");
-  if (fast === coder.model) return;
-  for (const role of FAST_ROLES) {
+  const model = coder.model || provider.defaultModel || "default";
+  for (const role of ROLES) {
     const current = bindings.find((item) => item.role === role);
-    if (current && current.model !== coder.model) continue;
-    await catalog.setBinding(role, coder.providerId, fast);
+    if (current?.providerId === coder.providerId && current.model === model) continue;
+    await catalog.setBinding(role, coder.providerId, model);
   }
 }

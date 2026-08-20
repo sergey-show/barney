@@ -1,40 +1,46 @@
 import { expect, test } from "bun:test";
 import { parseTurnRoute } from "./turnMode.ts";
 
-test("small model JSON decides large vs small and research, not a keyword catalog", () => {
-  expect(parseTurnRoute('{"topic":"кто ты","need_large":false,"need_research":false}')).toEqual({
+test("analysis JSON decides short chat vs a work plan, not a model lane", () => {
+  expect(parseTurnRoute('{"topic":"кто ты","short":true,"need_research":false,"analysis":"","plan":[]}')).toEqual({
     topic: "кто ты",
-    needLarge: false,
+    short: true,
     needResearch: false,
+    analysis: "",
+    plan: [],
   });
-  expect(parseTurnRoute('{"topic":"время","need_large":true,"need_research":false}').needResearch).toBe(false);
-  expect(parseTurnRoute('{"topic":"docs","need_large":true,"need_research":true}')).toEqual({
+  expect(parseTurnRoute('{"topic":"время","short":false,"need_research":false}').needResearch).toBe(false);
+  expect(parseTurnRoute('{"topic":"docs","short":false,"need_research":true,"analysis":"Need the current API.","plan":["open docs"]}')).toEqual({
     topic: "docs",
-    needLarge: true,
+    short: false,
     needResearch: true,
+    analysis: "Need the current API.",
+    plan: ["open docs"],
   });
 });
 
-test("need_research implies the large model", () => {
-  const route = parseTurnRoute('{"topic":"api","need_research":true}');
-  expect(route.needLarge).toBe(true);
+test("need_research forbids a short chat", () => {
+  const route = parseTurnRoute('{"topic":"api","short":true,"need_research":true}');
+  expect(route.short).toBe(false);
   expect(route.needResearch).toBe(true);
 });
 
-test("reads route JSON even when the small model wraps it", () => {
-  const fenced = parseTurnRoute('```json\n{"topic":"docs","need_large":true,"need_research":true}\n```');
-  expect(fenced).toEqual({ topic: "docs", needLarge: true, needResearch: true });
-  const think = parseTurnRoute('<think>route it</think>\n{"topic":"город","need_large":true,"need_research":false}');
-  expect(think.needLarge).toBe(true);
-  expect(think.needResearch).toBe(false);
-  expect(parseTurnRoute("need_large: false").needLarge).toBe(false);
+test("reads analysis JSON even when wrapped, and maps legacy need_large", () => {
+  const fenced = parseTurnRoute('```json\n{"topic":"docs","short":false,"need_research":true}\n```');
+  expect(fenced).toEqual({ topic: "docs", short: false, needResearch: true, analysis: "", plan: [] });
+  const think = parseTurnRoute('<think>route it</think>\n{"topic":"город","short":false,"need_research":false}');
+  expect(think.short).toBe(false);
+  expect(parseTurnRoute("need_large: false").short).toBe(true);
+  expect(parseTurnRoute('{"topic":"file","need_large":true,"plan":["write report.txt"]}').plan).toEqual(["write report.txt"]);
 });
 
-test("unparseable route fails open to the large model without auto-research", () => {
+test("unparseable analysis fails open to a full turn without auto-research", () => {
   expect(parseTurnRoute("просто болтовня без json")).toEqual({
     topic: "",
-    needLarge: true,
+    short: false,
     needResearch: false,
+    analysis: "",
+    plan: [],
   });
   expect(parseTurnRoute("").needResearch).toBe(false);
 });

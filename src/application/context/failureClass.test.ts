@@ -15,16 +15,22 @@ test("names turn-law misses, not benchmark files", () => {
   expect(failureClass({ missing: "no write of /work/report.txt" })).toBe("missing-artifact");
 });
 
-test("closes a class on the second recurrence; learned skill is a scheme, not a task recipe", () => {
+test("closes a class on the second recurrence; learned skill is a recovery path, not a miss mantra", () => {
   const first = bumpBacklog(null, "general");
   expect(shouldCloseClass(first)).toBe(false);
   const second = bumpBacklog(first, "general");
   expect(shouldCloseClass(second)).toBe(true);
   expect(skillDraft("general")).toBeNull();
   expect(skillDraft("url-truncation")).toBeNull();
-  expect(learnedSkillDraft("general", "anything")).toBeNull();
-  const learned = learnedSkillDraft("unrun-program", "if no successful run of /work/check.py, change path");
+  expect(learnedSkillDraft("general", { line: "anything" })).toBeNull();
+  expect(learnedSkillDraft("unrun-program", {})).toBeNull();
+  const learned = learnedSkillDraft("unrun-program", {
+    failedFamily: "shell:openssl",
+    recoveredBy: "shell:python3",
+  });
   expect(learned?.name).toBe("learned-unrun-program");
   expect(learned?.body).toContain("origin: learned");
+  expect(learned?.body).toContain("after shell:openssl failed, shell:python3 delivered");
   expect(learned?.body).toContain("Do not edit the kernel");
+  expect(learned?.body).not.toMatch(/change path/i);
 });

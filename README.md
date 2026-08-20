@@ -42,9 +42,9 @@ config:
 ---
 flowchart TB
  subgraph Kernel["Kernel — this turn does not touch this shape"]
-        Loop["plan → tool → observe → review"]
-        Fast["fast lane: plan and review"]
-        Slow["slow lane: the act"]
+        Loop["analyze → plan → act → review"]
+        Think["analysis names what must be true"]
+        Act["one model does the work and the check"]
   end
  subgraph Around["Around the kernel — this can grow"]
         Plugins["existing plugins and skills"]
@@ -53,7 +53,7 @@ flowchart TB
         WinMem["paths that worked"]
   end
     Human["Human: task"] -- motive cannot change --> Loop
-    Loop --- Fast & Slow
+    Loop --- Think & Act
     Loop -- reuse what exists --> Plugins
     Loop -- missing — write and keep --> Own
     Own --> Plugins
@@ -85,7 +85,7 @@ These names describe the runtime. They are not a hard role pasted into a system 
 | **Shadow** | Recorded failures. They are not overwritten until they are worked through. |
 | **Motive / action / operation** | Why this session exists / what this step is / which tool runs. |
 | **Wanting ≠ liking** | Keep going by changing path, not by hammering the same call. |
-| **Two lanes** | Fast: plan and review. Slow: the act and, at idle, digesting experience. |
+| **Analyze then plan** | Same model: what must be true, then the steps, then the act and review. |
 
 ## Install
 
@@ -143,8 +143,7 @@ bun run web
 | `barney run "<goal>"` | One shot |
 | `barney providers ls` | LLM providers |
 | `barney providers add --name … --host …` | add an OpenAI-compatible endpoint |
-| `barney providers use <id> --model …` | Large model (coder) |
-| `barney providers use <id> --model … --fast …` | Large + small (reviewer) |
+| `barney providers use <id> --model …` | Bind the model (plan, act, review) |
 | `barney agents ls` | Instances |
 
 In `cli`: `/memory`, `/sessions`, `/work`, `/debug`, `/continue`, `/retry`, `/form`, `/quit`.

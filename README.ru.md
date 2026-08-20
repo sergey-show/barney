@@ -42,9 +42,9 @@ config:
 ---
 flowchart TB
  subgraph Kernel["Kernel — this turn does not touch this shape"]
-        Loop["plan → tool → observe → review"]
-        Fast["fast lane: plan and review"]
-        Slow["slow lane: the act"]
+        Loop["analyze → plan → act → review"]
+        Think["analysis names what must be true"]
+        Act["one model does the work and the check"]
   end
  subgraph Around["Around the kernel — this can grow"]
         Plugins["existing plugins and skills"]
@@ -53,7 +53,7 @@ flowchart TB
         WinMem["paths that worked"]
   end
     Human["Human: task"] -- motive cannot change --> Loop
-    Loop --- Fast & Slow
+    Loop --- Think & Act
     Loop -- reuse what exists --> Plugins
     Loop -- missing — write and keep --> Own
     Own --> Plugins
@@ -85,7 +85,7 @@ flowchart TB
 | **Тень** | Зафиксированные ошибки. Их не затирают, пока не переработают. |
 | **Мотив / действие / операция** | Зачем сессия / что делаем сейчас / какой инструмент. |
 | **Wanting ≠ liking** | Продолжать — сменив путь, а не долбя тот же вызов. |
-| **Два контура** | Быстрый: план и ревью. Медленный: акт и в простое — разбор опыта. |
+| **Сначала анализ, потом план** | Одна модель: что должно стать истиной, затем шаги, затем акт и ревью. |
 
 ## Установка
 
@@ -143,8 +143,7 @@ bun run web
 | `barney run "<цель>"` | Один прогон |
 | `barney providers ls` | Список провайдеров LLM |
 | `barney providers add --name … --host …` | добавить OpenAI-совместимый endpoint |
-| `barney providers use <id> --model …` | Большая модель (coder) |
-| `barney providers use <id> --model … --fast …` | Большая + малая (reviewer) |
+| `barney providers use <id> --model …` | Привязать модель (план, акт, ревью) |
 | `barney agents ls` | Экземпляры |
 
 В `cli`: `/memory`, `/sessions`, `/work`, `/debug`, `/continue`, `/retry`, `/form`, `/quit`.

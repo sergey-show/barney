@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { lessonRule, pickRules } from "./lessonRule.ts";
+import { clipFamily, emptyTrail, lessonRule, noteTrail, pickRules } from "./lessonRule.ts";
 
 test("fail lessons are generic and keyed by host when an anchor exists", () => {
   const rule = lessonRule({
@@ -91,4 +91,75 @@ test("graph neighbors of a fail class reuse a lesson from another task class", (
     { key: "rule/general/hold", title: "hold", body: "Change tool after a fail.", tags: ["rule", "fail", "general"] },
   ], "login", 3, ["rule/certs/host"]);
   expect(lines[0]).toContain("unrun-program");
+});
+
+test("clipFamily keeps a tool family and drops URLs or goal text", () => {
+  expect(clipFamily("shell:openssl")).toBe("shell:openssl");
+  expect(clipFamily("https://10.0.0.120/ui/")).toBe("");
+  expect(clipFamily("openssl genrsa -out /work/key.pem")).toBe("");
+});
+
+test("noteTrail records a fail then a different family as recovery", () => {
+  const trail = emptyTrail();
+  noteTrail(trail, "shell:openssl", true);
+  noteTrail(trail, "shell:openssl", true);
+  noteTrail(trail, "shell:python3", false);
+  expect(trail.failedFamily).toBe("shell:openssl");
+  expect(trail.recoveredBy).toBe("shell:python3");
+});
+
+test("BLOCKED repeats do not count as recovery", () => {
+  const trail = emptyTrail();
+  noteTrail(trail, "shell:openssl", true);
+  noteTrail(trail, "shell:openssl", true);
+  expect(trail.recoveredBy).toBe("");
+});
+
+test("fail lessons with a trail name the failed family, not the goal", () => {
+  const rule = lessonRule({
+    taskClass: "general",
+    goal: "write a checker with openssl then python3 /work/check.py",
+    verdict: "fail",
+    summary: "file exists",
+    missing: "no successful run of /work/check.py",
+    failClass: "unrun-program",
+    failedFamily: "shell:openssl",
+  });
+  expect(rule.body).toContain("[unrun-program]");
+  expect(rule.body).toContain("shell:openssl");
+  expect(rule.body).toMatch(/do not repeat shell:openssl/);
+  expect(rule.body).not.toMatch(/change path/);
+  expect(rule.body).not.toMatch(/check\.py/);
+});
+
+test("recovered trail becomes the lesson on pass and fail", () => {
+  const fail = lessonRule({
+    taskClass: "general",
+    goal: "run the checker",
+    verdict: "fail",
+    summary: "still missing a run",
+    missing: "no successful run of /work/check.py",
+    failClass: "unrun-program",
+    failedFamily: "shell:openssl",
+    recoveredBy: "shell:python3",
+  });
+  expect(fail.body).toMatch(/if shell:openssl fails, do not repeat shell:openssl; next was shell:python3/);
+
+  const pass = lessonRule({
+    taskClass: "general",
+    goal: "run the checker",
+    verdict: "pass",
+    summary: "checker ran",
+    failedFamily: "shell:openssl",
+    recoveredBy: "shell:python3",
+  });
+  expect(pass.body).toBe("For general: after shell:openssl failed, shell:python3 delivered.");
+});
+
+test("pickRules surfaces a trail lesson", () => {
+  const lines = pickRules([
+    { key: "rule/general/openssl", title: "x", body: "[unrun-program] if shell:openssl fails, do not repeat shell:openssl.", tags: ["rule", "fail", "general"] },
+    { key: "rule/general/hold", title: "hold", body: "Change tool after a fail.", tags: ["rule", "fail", "general"] },
+  ], "general", 5);
+  expect(lines[0]).toContain("shell:openssl");
 });

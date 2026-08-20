@@ -503,13 +503,11 @@ function fallbackHtml(): string {
           <div class="row-actions">
             <button id="setSave">Save</button>
             <button id="setModels">Load models</button>
-            <button id="setUse">Apply lanes</button>
+            <button id="setUse">Use model</button>
             <button id="setDel">Delete</button>
           </div>
-          <label>Large model</label>
+          <label>Model</label>
           <select id="setModel"></select>
-          <label>Small model</label>
-          <select id="setFast"></select>
         </div>
       </div>
     </main>
@@ -542,7 +540,6 @@ function fallbackHtml(): string {
       $('setMeta').textContent = p ? (p.kind + ' · ' + p.baseUrl) : 'OpenAI-compatible. API key is optional.';
       $('setErr').textContent = '';
       $('setModel').innerHTML = p && p.defaultModel ? '<option>'+p.defaultModel+'</option>' : '';
-      $('setFast').innerHTML = p && p.defaultModel ? '<option>'+p.defaultModel+'</option>' : '';
       $('setHost').disabled = p && p.kind === 'stub';
       showSettings(true);
     }
@@ -621,7 +618,6 @@ function fallbackHtml(): string {
         const r = await j('/api/providers/'+providerId+'/models');
         const opts = (r.models || []).map(m => '<option>'+m+'</option>').join('');
         $('setModel').innerHTML = opts;
-        $('setFast').innerHTML = opts;
       } catch (err) { $('setErr').textContent = String(err); }
     };
     $('setUse').onclick = async () => {
@@ -629,7 +625,6 @@ function fallbackHtml(): string {
       try {
         await j('/api/lanes', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({
           large: { providerId, model: $('setModel').value || undefined },
-          small: $('setFast').value ? { providerId, model: $('setFast').value } : undefined,
         }) });
         await refresh();
       } catch (err) { $('setErr').textContent = String(err); }

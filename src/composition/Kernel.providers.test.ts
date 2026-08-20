@@ -15,17 +15,17 @@ test("saving a provider with an existing name updates host instead of failing", 
   expect(second.dialect).toBe("llamacpp");
 });
 
-test("useLanes binds large to coder and small to reviewer", async () => {
+test("useLanes binds the same model to coder, planner, and reviewer", async () => {
   const kernel = new Kernel(mkdtempSync(join(tmpdir(), "barney-lanes-")));
   const large = await kernel.addOpenAiProvider({ name: "big", host: "http://192.168.68.122:11434/v1" });
-  const small = await kernel.addOpenAiProvider({ name: "fast", host: "http://127.0.0.1:11434/v1" });
+  const extra = await kernel.addOpenAiProvider({ name: "fast", host: "http://127.0.0.1:11434/v1" });
   const state = await kernel.useLanes({
     large: { providerId: large.id, model: "Qwen3.6-35B-A3B-Hermes-V6" },
-    small: { providerId: small.id, model: "qwen2.5-7b" },
+    small: { providerId: extra.id, model: "qwen2.5-7b" },
   });
   expect(state.lanes.large).toEqual({ providerId: large.id, model: "Qwen3.6-35B-A3B-Hermes-V6" });
-  expect(state.lanes.small).toEqual({ providerId: small.id, model: "qwen2.5-7b" });
+  expect(state.lanes.small).toBeNull();
   expect(state.bindings.find((item) => item.role === "coder")?.model).toBe("Qwen3.6-35B-A3B-Hermes-V6");
-  expect(state.bindings.find((item) => item.role === "reviewer")?.model).toBe("qwen2.5-7b");
-  expect(state.bindings.find((item) => item.role === "planner")?.providerId).toBe(small.id);
+  expect(state.bindings.find((item) => item.role === "reviewer")?.model).toBe("Qwen3.6-35B-A3B-Hermes-V6");
+  expect(state.bindings.find((item) => item.role === "planner")?.providerId).toBe(large.id);
 });

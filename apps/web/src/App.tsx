@@ -364,7 +364,7 @@ export function App() {
                 <p>{t.emptyChat}</p>
                 <div className="muted">
                   {lanes.large
-                    ? t.emptyChatModels(shortModel(lanes.large.model), lanes.small ? shortModel(lanes.small.model) : undefined)
+                    ? t.emptyChatModels(shortModel(lanes.large.model))
                     : t.pickModels}
                 </div>
               </div>
@@ -804,9 +804,7 @@ function ModelsEditor(props: {
   const live = props.providers.filter((item) => item.kind !== "stub");
   const fallback = live[0] ?? props.providers[0];
   const [largeProvider, setLargeProvider] = useState(props.lanes.large?.providerId ?? fallback?.id ?? "");
-  const [smallProvider, setSmallProvider] = useState(props.lanes.small?.providerId ?? props.lanes.large?.providerId ?? fallback?.id ?? "");
   const [largeModel, setLargeModel] = useState(props.lanes.large?.model ?? "");
-  const [smallModel, setSmallModel] = useState(props.lanes.small?.model ?? "");
   const [catalog, setCatalog] = useState<Record<string, string[]>>({});
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -814,10 +812,8 @@ function ModelsEditor(props: {
 
   useEffect(() => {
     setLargeProvider(props.lanes.large?.providerId ?? fallback?.id ?? "");
-    setSmallProvider(props.lanes.small?.providerId ?? props.lanes.large?.providerId ?? fallback?.id ?? "");
     setLargeModel(props.lanes.large?.model ?? "");
-    setSmallModel(props.lanes.small?.model ?? "");
-  }, [props.lanes.large?.providerId, props.lanes.large?.model, props.lanes.small?.providerId, props.lanes.small?.model, fallback?.id]);
+  }, [props.lanes.large?.providerId, props.lanes.large?.model, fallback?.id]);
 
   async function load(providerId: string) {
     if (!providerId) return;
@@ -846,9 +842,6 @@ function ModelsEditor(props: {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           large: { providerId: largeProvider, model: largeModel.trim() },
-          small: smallProvider && smallModel.trim()
-            ? { providerId: smallProvider, model: smallModel.trim() }
-            : undefined,
         }),
       });
       await props.onChanged();
@@ -884,18 +877,6 @@ function ModelsEditor(props: {
           onProvider={(id) => setLargeProvider(id)}
           onModel={setLargeModel}
           onLoad={() => void load(largeProvider)}
-          busy={busy}
-        />
-        <LaneFields
-          title={t.smallModel}
-          hint={t.smallHint}
-          providers={props.providers}
-          providerId={smallProvider}
-          model={smallModel}
-          models={catalog[smallProvider] ?? []}
-          onProvider={(id) => setSmallProvider(id)}
-          onModel={setSmallModel}
-          onLoad={() => void load(smallProvider)}
           busy={busy}
         />
         {error ? <div className="error" role="alert">{error}</div> : null}
@@ -994,9 +975,6 @@ function ProviderEditor(props: {
   const [largeModel, setLargeModel] = useState(
     existing && props.lanes.large?.providerId === existing.id ? props.lanes.large.model : existing?.defaultModel ?? props.activeModel ?? "",
   );
-  const [smallModel, setSmallModel] = useState(
-    existing && props.lanes.small?.providerId === existing.id ? props.lanes.small.model : "",
-  );
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const { t } = useLocale();
@@ -1008,9 +986,8 @@ function ProviderEditor(props: {
     setApiKey("");
     setModels([]);
     setLargeModel(existing && props.lanes.large?.providerId === existing.id ? props.lanes.large.model : existing?.defaultModel ?? "");
-    setSmallModel(existing && props.lanes.small?.providerId === existing.id ? props.lanes.small.model : "");
     setError("");
-  }, [existing?.id, props.pane.kind, props.lanes.large?.providerId, props.lanes.large?.model, props.lanes.small?.providerId, props.lanes.small?.model]);
+  }, [existing?.id, props.pane.kind, props.lanes.large?.providerId, props.lanes.large?.model]);
 
   async function save() {
     setBusy(true);
@@ -1049,7 +1026,6 @@ function ProviderEditor(props: {
       const result = await api<{ models: string[] }>(`/api/providers/${existing!.id}/models`);
       setModels(result.models);
       if (result.models[0] && !largeModel) setLargeModel(result.models[0]);
-      if (result.models[0] && !smallModel) setSmallModel(result.models[0]);
     } catch (err) {
       setError(String(err));
     } finally {
@@ -1070,9 +1046,6 @@ function ProviderEditor(props: {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           large: { providerId: existing!.id, model: largeModel || undefined },
-          small: smallModel.trim()
-            ? { providerId: existing!.id, model: smallModel.trim() }
-            : undefined,
         }),
       });
       await props.onChanged(existing!.id);
@@ -1133,17 +1106,11 @@ function ProviderEditor(props: {
             <select value={largeModel} onChange={(e) => setLargeModel(e.target.value)}>
               {(largeModel && !models.includes(largeModel) ? [largeModel, ...models] : models).map((item) => <option key={item} value={item}>{item}</option>)}
             </select>
-            <label>{t.smallModel}</label>
-            <select value={smallModel} onChange={(e) => setSmallModel(e.target.value)}>
-              {(smallModel && !models.includes(smallModel) ? [smallModel, ...models] : models).map((item) => <option key={item} value={item}>{item}</option>)}
-            </select>
           </>
         ) : (
           <>
             <label>{t.largeModel}</label>
             <input value={largeModel} onChange={(e) => setLargeModel(e.target.value)} placeholder={t.loadModels} />
-            <label>{t.smallModel}</label>
-            <input value={smallModel} onChange={(e) => setSmallModel(e.target.value)} placeholder="Same host, lighter model — or leave empty" />
           </>
         )}
       </div>

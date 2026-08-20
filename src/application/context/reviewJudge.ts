@@ -1,31 +1,96 @@
-import type { Review } from "../../domain/run/Review.ts";
+import type { Review, ReviewVerdict } from "../../domain/run/Review.ts";
 import { replyOmitsPageCode } from "../research/verifyReply.ts";
 import { asText } from "./packSession.ts";
 
 export function parseReview(text: string): Review {
-  const match = text.match(/\{[\s\S]*\}/);
-  if (match) {
+  const stripped = stripReviewFence(text);
+  for (const candidate of reviewJsonCandidates(stripped)) {
     try {
-      const parsed = JSON.parse(match[0]) as Review;
-      if (parsed.achieved === false && parsed.verdict === "pass") parsed.verdict = "fail";
-      if (parsed.verdict) {
-        parsed.summary = asText(parsed.summary);
-        parsed.missing = parsed.missing == null ? undefined : asText(parsed.missing) || undefined;
-        parsed.requested = parsed.requested == null ? undefined : asText(parsed.requested) || undefined;
-        parsed.knowledgeQuery = parsed.knowledgeQuery == null ? undefined : asText(parsed.knowledgeQuery) || undefined;
-        if (parsed.missing && parsed.verdict !== "pass") {
-          parsed.summary = `${parsed.summary}${parsed.summary ? " " : ""}Missing: ${parsed.missing}`;
-        }
-        return parsed;
-      }
+      const parsed = JSON.parse(candidate) as Review;
+      const review = normalizeReview(parsed);
+      if (review) return review;
     } catch {
-      /* fallthrough */
+      /* next candidate */
     }
   }
+  const recovered = recoverReviewVerdict(stripped);
+  if (recovered) return recovered;
   if (/unknown_api|needs?\s*docs|vendor api/i.test(text)) {
     return { verdict: "unknown_api", summary: text.slice(0, 400), needsResearch: true, knowledgeQuery: text.slice(0, 120) };
   }
   return { verdict: "fail", summary: text.slice(0, 400), needsResearch: false };
+}
+
+function stripReviewFence(text: string): string {
+  return text.replace(/```(?:json)?/gi, "").trim();
+}
+
+function reviewJsonCandidates(text: string): string[] {
+  const found: string[] = [];
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] !== "{") continue;
+    const window = text.slice(i, i + 480);
+    if (!/"verdict"\s*:/.test(window)) continue;
+    const obj = balancedJsonObject(text.slice(i));
+    if (obj) found.push(obj);
+  }
+  return found;
+}
+
+function balancedJsonObject(text: string): string | undefined {
+  let depth = 0;
+  let inStr = false;
+  let esc = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inStr) {
+      if (esc) {
+        esc = false;
+        continue;
+      }
+      if (ch === "\\") {
+        esc = true;
+        continue;
+      }
+      if (ch === "\"") inStr = false;
+      continue;
+    }
+    if (ch === "\"") {
+      inStr = true;
+      continue;
+    }
+    if (ch === "{") depth += 1;
+    else if (ch === "}") {
+      depth -= 1;
+      if (depth === 0) return text.slice(0, i + 1);
+    }
+  }
+}
+
+function recoverReviewVerdict(text: string): Review | undefined {
+  const match = text.match(/"verdict"\s*:\s*"(pass|fail|uncertain|unknown_api|gap)"/);
+  if (!match?.[1]) return;
+  const achievedFalse = /"achieved"\s*:\s*false/.test(text);
+  const verdict: ReviewVerdict = match[1] === "pass" && achievedFalse ? "fail" : match[1] as ReviewVerdict;
+  return {
+    verdict,
+    achieved: verdict === "pass",
+    summary: "reviewer JSON was wrapped or truncated; recovered verdict",
+    needsResearch: /"needsResearch"\s*:\s*true/.test(text),
+  };
+}
+
+function normalizeReview(parsed: Review): Review | undefined {
+  if (parsed.achieved === false && parsed.verdict === "pass") parsed.verdict = "fail";
+  if (!parsed.verdict) return;
+  parsed.summary = asText(parsed.summary);
+  parsed.missing = parsed.missing == null ? undefined : asText(parsed.missing) || undefined;
+  parsed.requested = parsed.requested == null ? undefined : asText(parsed.requested) || undefined;
+  parsed.knowledgeQuery = parsed.knowledgeQuery == null ? undefined : asText(parsed.knowledgeQuery) || undefined;
+  if (parsed.missing && parsed.verdict !== "pass") {
+    parsed.summary = `${parsed.summary}${parsed.summary ? " " : ""}Missing: ${parsed.missing}`;
+  }
+  return parsed;
 }
 
 export function judgeReview(text: string, latest: string, evidence = "", reply = ""): Review {
@@ -33,10 +98,11 @@ export function judgeReview(text: string, latest: string, evidence = "", reply =
   if (review.verdict !== "pass") return review;
   const fileMiss = missingArtifactWrites(latest, evidence);
   const maskMiss = maskedArtifactWrite(latest, evidence);
+  const liveMiss = inventedLiveValue(latest, evidence);
   const startMiss = missingServiceStart(latest, evidence);
   const runMiss = missingRunnableRun(latest, evidence);
   const miss = reply && evidence ? replyOmitsPageCode(reply, evidence, latest) : undefined;
-  const why = fileMiss || maskMiss || startMiss || runMiss || miss;
+  const why = fileMiss || maskMiss || liveMiss || startMiss || runMiss || miss;
   if (!why) return review;
   return {
     ...review,
@@ -47,13 +113,32 @@ export function judgeReview(text: string, latest: string, evidence = "", reply =
   };
 }
 
+const WRITE_VERB = /\b(?:write|create|save|put|place|output|produce|store|generate)\b/i;
+
 export function requestedArtifacts(message: string): string[] {
   const found: string[] = [];
-  for (const match of message.matchAll(/`(\/?[\w./-]+\.[A-Za-z0-9]+)`/g)) {
-    const path = (match[1] ?? "").replaceAll("\\", "/");
-    if (path && !isRuntimeSink(path)) found.push(path);
+  const add = (raw: string) => {
+    const path = raw.replaceAll("\\", "/").replace(/[.,;:]+$/, "");
+    if (path && isDeliverablePath(path)) found.push(path);
+  };
+  for (const match of message.matchAll(/`(\/?[\w./-]+\.[A-Za-z0-9.]+)`/g)) add(match[1] ?? "");
+  for (const match of message.matchAll(/\b(?:write|create|save|put|place)\b[^.\n`]{0,120}?(\/?[\w./-]+\.[A-Za-z][A-Za-z0-9.]*)/gi)) {
+    add(match[1] ?? "");
+  }
+  for (const match of message.matchAll(/\b(?:in|to|into|at)\s+(\/[\w./-]+\.[A-Za-z][A-Za-z0-9.]*)/gi)) {
+    const idx = match.index ?? 0;
+    const clause = (message.slice(Math.max(0, idx - 160), idx).split(/[.\n]/).pop() ?? "");
+    if (WRITE_VERB.test(clause)) add(match[1] ?? "");
   }
   return [...new Set(found)];
+}
+
+function isDeliverablePath(path: string): boolean {
+  if (isRuntimeSink(path)) return false;
+  const base = path.split("/").filter(Boolean).at(-1) ?? "";
+  if (!base.includes(".")) return false;
+  if (/^\d+(\.\d+)+$/.test(base)) return false;
+  return /\.[A-Za-z]/.test(base);
 }
 
 export function missingArtifactWrites(latest: string, evidence: string): string | undefined {
@@ -145,6 +230,41 @@ function askedToReplaceSecrets(latest: string): boolean {
   return /<your-[a-z0-9-]+>/i.test(latest) || /\breplace secrets\b/i.test(latest);
 }
 
+function inventedLiveValue(latest: string, evidence: string): string | undefined {
+  const formats = [...latest.matchAll(/\b([A-Za-z][\w-]*)\[\.\.\.\]/g)];
+  if (!formats.length) return;
+  const writes = writeContents(evidence);
+  if (!writes.length) return;
+  const toolText = evidence.replace(/^fs_write .*$/gm, "").replace(/^fs_edit .*$/gm, "");
+  for (const fmt of formats) {
+    const name = fmt[1] ?? "";
+    if (!name) continue;
+    const re = new RegExp(`\\b${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\[[^\\]]+\\]`, "g");
+    const live = new Set(
+      [...toolText.matchAll(re)].map((match) => match[0]).filter((tok) => !/\.\.\./.test(tok) && !/DETECTED_SECRET/i.test(tok)),
+    );
+    if (!live.size) continue;
+    const invented = writes.flatMap((content) => [...content.matchAll(re)].map((match) => match[0]))
+      .filter((tok) => !/\.\.\./.test(tok) && !live.has(tok));
+    if (invented.length) return `wrote invented ${name}[...] instead of the live value from tools`;
+  }
+}
+
+function writeContents(evidence: string): string[] {
+  const contents: string[] = [];
+  for (const line of evidence.split("\n")) {
+    if (!line.startsWith("fs_write ") && !line.startsWith("fs_edit ")) continue;
+    const raw = line.replace(/^fs_(?:write|edit) /, "");
+    try {
+      const parsed = JSON.parse(raw) as { content?: string };
+      if (parsed.content) contents.push(parsed.content);
+    } catch {
+      /* skip */
+    }
+  }
+  return contents;
+}
+
 function isRuntimeSink(path: string): boolean {
   const n = path.replaceAll("\\", "/");
   return /\.(log|pid)$/i.test(n) || /(^|\/)var\/log\//i.test(n);
@@ -196,12 +316,14 @@ function blockWrites(block: string, requested: string): boolean {
 }
 
 function blockLooksFailed(block: string): boolean {
-  return /Traceback\b|Unable to load|Could not (?:get|read|open|load)\b|SyntaxError\b|\bException\b|command failed|N\/A to N\/A/i.test(block);
+  return /Traceback\b|Unable to load|Could not (?:get|read|open|load)\b|SyntaxError\b|NameError\b|\bException\b|command failed|N\/A to N\/A/i.test(block);
 }
 
 function writeAliases(requested: string): string[] {
   const n = requested.replaceAll("\\", "/").replace(/\/+$/, "");
   const aliases = [n];
+  const base = n.split("/").filter(Boolean).at(-1);
+  if (base) aliases.push(base);
   if (n.startsWith("/")) {
     const parts = n.split("/").filter(Boolean);
     if (parts.length >= 2) aliases.push(parts.slice(1).join("/"));
@@ -306,7 +428,8 @@ function shellCommand(block: string): string {
 
 function blockSucceeded(block: string): boolean {
   if (!/\nexit 0(?:\n|$)/.test(block)) return false;
-  return !/\nexit [1-9]\d*(?:\n|$)/.test(block);
+  if (/\nexit [1-9]\d*(?:\n|$)/.test(block)) return false;
+  return !blockLooksFailed(block);
 }
 
 function serviceStarted(evidence: string, port?: string): boolean {

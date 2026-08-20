@@ -57,7 +57,7 @@ Old compass must not load.
   expect(russian.compass).not.toContain("Old compass");
 });
 
-test("long idle studies a failure, short idle does not wander", () => {
+test("long idle absorbs a fresh rule before study; study still runs when there is nothing to absorb", () => {
   const samost = seedSamost();
   expect(nextIdleWork({
     samostPresent: true,
@@ -68,6 +68,20 @@ test("long idle studies a failure, short idle does not wander", () => {
     idleMs: 1_000,
     failHints: ["TLS on browser login"],
   }).item).not.toBe("study");
+  expect(nextIdleWork({
+    samostPresent: true,
+    samost,
+    existence: [],
+    board: [],
+    rules: ["[unrun-program] if shell:openssl fails, do not repeat shell:openssl."],
+    idleMs: LONG_IDLE_MS,
+    failHints: ["TLS on browser login"],
+    studied: [],
+    studyCooldownMs: STUDY_COOLDOWN_MS,
+  })).toEqual({
+    item: "absorb_shadow",
+    rule: "[unrun-program] if shell:openssl fails, do not repeat shell:openssl.",
+  });
   expect(nextIdleWork({
     samostPresent: true,
     samost,

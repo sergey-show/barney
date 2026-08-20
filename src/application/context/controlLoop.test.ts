@@ -7,11 +7,28 @@ test("wanting without liking is one extra path this message, not session age or 
   expect(wantingWithoutLiking({ extraApproaches: 4, passed: true })).toBe(false);
 });
 
+test("wanting does not stop while requested artifacts are still unwritten or unrun", () => {
+  expect(wantingWithoutLiking({
+    extraApproaches: 3,
+    leftover: { unwritten: ["/app/program.py"], unrun: [] },
+  })).toBe(false);
+  expect(wantingWithoutLiking({
+    extraApproaches: 3,
+    leftover: { unwritten: [], unrun: ["/app/filter.py"] },
+  })).toBe(false);
+  expect(wantingWithoutLiking({
+    extraApproaches: 1,
+    leftover: { unwritten: [], unrun: [] },
+  })).toBe(true);
+});
+
 test("tool family and shell verb stay on the observe layer", () => {
   expect(toolFamily("browser_open")).toBe("browser");
   expect(toolFamily("shell")).toBe("shell");
   expect(familyKey({ name: "shell", arguments: { command: "openssl genrsa -out /work/key.pem 2048" } })).toBe("shell:openssl");
   expect(familyKey({ name: "shell", arguments: { command: "PATH=/usr/bin python3 /work/check.py" } })).toBe("shell:python3");
+  expect(familyKey({ name: "shell", arguments: { command: "cd /app && python3 /app/filter.py" } })).toBe("shell:python3");
+  expect(familyKey({ name: "shell", arguments: { command: "cd /work; python3 check.py" } })).toBe("shell:python3");
   expect(familyKey({ name: "browser_click", arguments: { text: "Login" } })).toBe("browser");
 });
 

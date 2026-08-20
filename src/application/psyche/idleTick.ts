@@ -31,6 +31,13 @@ export function nextIdleWork(input: {
     return { item: "board_to_existence", text: openBlocker.text };
   }
 
+  const freshRule = input.rules.find((rule) => {
+    const needle = rule.toLowerCase();
+    return !input.samost.shadow.some((line) => line.toLowerCase() === needle)
+      && !input.samost.light.some((line) => line.toLowerCase() === needle);
+  });
+  if (freshRule) return { item: "absorb_shadow", rule: freshRule };
+
   if ((input.idleMs ?? 0) >= LONG_IDLE_MS && (input.studyCooldownMs ?? STUDY_COOLDOWN_MS) >= STUDY_COOLDOWN_MS) {
     const topic = pickStudyTopic({
       shadow: input.samost.shadow,
@@ -39,13 +46,6 @@ export function nextIdleWork(input: {
     });
     if (topic) return { item: "study", topic };
   }
-
-  const freshRule = input.rules.find((rule) => {
-    const needle = rule.toLowerCase();
-    return !input.samost.shadow.some((line) => line.toLowerCase() === needle)
-      && !input.samost.light.some((line) => line.toLowerCase() === needle);
-  });
-  if (freshRule) return { item: "absorb_shadow", rule: freshRule };
 
   return { item: "none" };
 }

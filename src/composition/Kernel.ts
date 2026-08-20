@@ -36,8 +36,8 @@ import { MemoryVault } from "../infrastructure/guard/MemoryVault.ts";
 import { RegexSecretScanner } from "../infrastructure/guard/RegexSecretScanner.ts";
 import { LlmProvider } from "../domain/provider/LlmProvider.ts";
 import { lanesFromBindings } from "../domain/provider/lanes.ts";
-import { FAST_ROLES, SLOW_ROLES } from "../domain/provider/Role.ts";
-import { listRemoteModels, preferFastModel, RoleRouter, seedBuiltinProviders, seedFastRoleBindings } from "../infrastructure/llm/RoleRouter.ts";
+import { ROLES } from "../domain/provider/Role.ts";
+import { listRemoteModels, RoleRouter, seedBuiltinProviders, seedUnifiedRoleBindings } from "../infrastructure/llm/RoleRouter.ts";
 import type { McpPort } from "../application/ports.ts";
 import { SqliteAgentRepository } from "../infrastructure/persistence/SqliteAgentRepository.ts";
 import { SqliteEpisodeRepository } from "../infrastructure/persistence/SqliteEpisodeRepository.ts";
@@ -241,7 +241,6 @@ export class Kernel {
       this.lastStudyAt = Date.now();
       const raw = await this.research.search(studyQuery(work.topic));
       const body = raw.replace(/\s+/g, " ").trim().slice(0, 1600);
-      const finding = body.split(/(?<=[.!?])\s/).find((line) => line.length > 40) ?? body.slice(0, 180);
       await this.memories.save(new MemoryNote({
         key: slugKey(`study/${work.topic}`),
         title: `Study: ${work.topic.slice(0, 80)}`,
@@ -249,13 +248,6 @@ export class Kernel {
         tags: ["study", "experience", agent.taskClass],
         sourceAgentId: agent.id.value,
         sourceRunId: open?.id.value ?? "",
-      }));
-      await this.memories.save(new MemoryNote({
-        key: samostKey(agent.id.value),
-        title: "Self",
-        body: formatSamost(absorbIntoSamost(samost, finding.slice(0, 180), "light")),
-        tags: ["samost", "psyche"],
-        sourceAgentId: agent.id.value,
       }));
       if (open) {
         await this.memories.save(new MemoryNote({
@@ -661,7 +653,7 @@ export class Kernel {
     const chosen = model || provider.defaultModel || (await listRemoteModels(provider))[0];
     if (!chosen) throw new Error("no model — pass --model or refresh /v1/models");
     await this.providers.setDefault(provider.id, chosen);
-    await seedFastRoleBindings(this.providers);
+    await seedUnifiedRoleBindings(this.providers);
     return { provider: provider.view(), model: chosen };
   }
 
@@ -672,19 +664,11 @@ export class Kernel {
     await this.boot();
     const largeProv = await this.resolveProvider(input.large.providerId);
     const largeModel = input.large.model?.trim() || largeProv.defaultModel || (await listRemoteModels(largeProv))[0];
-    if (!largeModel) throw new Error("no large model — pick one or refresh /v1/models");
-    for (const role of SLOW_ROLES) await this.providers.setBinding(role, largeProv.id, largeModel);
+    if (!largeModel) throw new Error("no model — pick one or refresh /v1/models");
+    void input.small;
+    for (const role of ROLES) await this.providers.setBinding(role, largeProv.id, largeModel);
     largeProv.defaultModel = largeModel;
     await this.providers.save(largeProv);
-
-    if (input.small?.providerId) {
-      const smallProv = await this.resolveProvider(input.small.providerId);
-      const smallModel = input.small.model?.trim() || preferFastModel(smallProv, largeModel);
-      for (const role of FAST_ROLES) await this.providers.setBinding(role, smallProv.id, smallModel);
-    } else {
-      for (const role of FAST_ROLES) await this.providers.setBinding(role, largeProv.id, largeModel);
-      await seedFastRoleBindings(this.providers);
-    }
     return this.providerState();
   }
 

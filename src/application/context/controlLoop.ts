@@ -26,14 +26,23 @@ export function familyKey(call: { name: string; arguments?: Record<string, unkno
 }
 
 export function shellHead(command: string): string {
-  const rest = command.trim().replace(/^(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)+/, "");
+  let rest = command.trim().replace(/^(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)+/, "");
+  while (/^cd\s+\S+\s*(?:&&|;)\s*/.test(rest)) {
+    rest = rest.replace(/^cd\s+\S+\s*(?:&&|;)\s*/, "");
+  }
   const first = rest.split(/\s+/)[0] ?? "";
   return first.replace(/^.*\//, "").replace(/\.exe$/i, "").toLowerCase();
 }
 
 /** Extra approaches this operator message (research, recovery, persist). Not run.attempts. Family fails stay in observe. */
-export function wantingWithoutLiking(input: { extraApproaches: number; passed?: boolean }): boolean {
+export function wantingWithoutLiking(input: {
+  extraApproaches: number;
+  passed?: boolean;
+  leftover?: { unwritten: string[]; unrun: string[] };
+}): boolean {
   if (input.passed) return false;
+  const leftover = input.leftover;
+  if (leftover && (leftover.unwritten.length > 0 || leftover.unrun.length > 0)) return false;
   return input.extraApproaches >= 1;
 }
 

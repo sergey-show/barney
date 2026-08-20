@@ -43,12 +43,11 @@ export type PsycheState = {
 };
 
 export function lanesOf(state: ProviderState): Lanes {
-  if (state.lanes) return state.lanes;
+  if (state.lanes) return { large: state.lanes.large, small: null };
   const large = state.bindings.find((item) => item.role === "coder");
-  const small = state.bindings.find((item) => item.role === "reviewer");
   return {
     large: large ? { providerId: large.providerId, model: large.model } : null,
-    small: small ? { providerId: small.providerId, model: small.model } : null,
+    small: null,
   };
 }
 
