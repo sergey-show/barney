@@ -31,41 +31,18 @@ Barney is built the other way around. Existence precedes essence: an act first, 
 
 Review looks at whether the **requested result** happened, not how confident the prose sounded. Persistence (wanting) is not the same as satisfaction (liking).
 
+The agent also follows four layers of harness around the model.
+
+| | |
+|---|---|
+| **Constrain** | Sandbox, budget, the same call blocked. Physically impossible, not “strictly forbidden”. |
+| **Inform** | Turn law, session facts, lessons, Self. Code assembles what the model sees this step. |
+| **Verify** | Review looks at the result (file, run, secret, URL), not at confident prose. |
+| **Correct** | Change tool family, record a lesson. Do not hammer the same call. |
 
 ## Kernel and body
 
-```mermaid
----
-config:
-  layout: elk
-  theme: mc
----
-flowchart TB
- subgraph Kernel["Kernel — this turn does not touch this shape"]
-        Loop["analyze → plan → act → review"]
-        Think["analysis names what must be true"]
-        Act["one model does the work and the check"]
-  end
- subgraph Around["Around the kernel — this can grow"]
-        Plugins["existing plugins and skills"]
-        Own["write a tool if none fits"]
-        FailMem["failures"]
-        WinMem["paths that worked"]
-  end
-    Human["Human: task"] -- motive cannot change --> Loop
-    Loop --- Think & Act
-    Loop -- reuse what exists --> Plugins
-    Loop -- missing — write and keep --> Own
-    Own --> Plugins
-    Loop -- failed: change path, record --> FailMem
-    FailMem -- next time, do not step here --> Loop
-    Loop -- worked: record how --> WinMem
-    WinMem L_WinMem_Loop_0@-- next time, take this path --> Loop
-    Loop -- reply --> Human
-
-
-    L_WinMem_Loop_0@{ animation: none }
-```
+![Sheme](assets/images/sheme.png)
 
 | Stays in `src/` | Lives in `~/.barney` |
 |---|---|
