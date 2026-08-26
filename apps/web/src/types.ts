@@ -8,6 +8,7 @@ export type Run = {
   agentId: string;
   transcript: Item[];
   worktreePath: string;
+  sessionPath?: string;
   running?: boolean;
   attempts?: number;
 };

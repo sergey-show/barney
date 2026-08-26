@@ -66,8 +66,8 @@ test("splits orphan </think> so the tag never reaches the user", () => {
 });
 
 test("strips a leaked meta sentence from an otherwise visible paragraph", () => {
-  const leaked = "Команда open не открыла Finder: нет окна Quartz. I should state this clearly and concisely. Домашняя папка: /Users/sergey/.";
-  expect(visibleAssistantText(leaked)).toContain("/Users/sergey/");
+  const leaked = "Команда open не открыла Finder: нет окна Quartz. I should state this clearly and concisely. Домашняя папка: /dir/.";
+  expect(visibleAssistantText(leaked)).toContain("/dir/");
   expect(visibleAssistantText(leaked)).not.toContain("I should state this");
 });
 
@@ -77,4 +77,15 @@ test("hides a tool-loop scratchpad that was dumped as the whole reply", () => {
   expect(split.text).toBe("");
   expect(split.thinking).toContain("web_search");
   expect(visibleAssistantText(leaked)).toBe("");
+});
+
+test("peels a short English pwd scratchpad from the Russian answer", () => {
+  const leaked = [
+    "The user is asking \"where are we now?\" (в какой директории мы сейчас?). I have just executed the pwd command twice, and it returned /dir/AI/barney_bot.",
+    "Мы находимся в директории: /dir/AI/barney_bot",
+  ].join("\n\n");
+  const split = peelUntaggedThinking(leaked);
+  expect(split.text).toContain("Мы находимся в директории");
+  expect(split.text).not.toContain("The user is asking");
+  expect(split.thinking).toContain("The user is asking");
 });

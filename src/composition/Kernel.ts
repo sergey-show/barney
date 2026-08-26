@@ -304,9 +304,9 @@ export class Kernel {
     return this.vault.reveal(text);
   }
 
-  async createRun(goal: string, agentId?: string): Promise<Run> {
+  async createRun(goal: string, agentId?: string, repoDir?: string): Promise<Run> {
     await this.boot();
-    return this.startRun.execute({ goal: this.mask(goal), agentId });
+    return this.startRun.execute({ goal: this.mask(goal), agentId, repoDir });
   }
 
   async send(runId: string, message: string): Promise<Run> {

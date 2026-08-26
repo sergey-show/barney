@@ -19,3 +19,9 @@ test("appends page API when the reply used a local memo instead", () => {
   });
   expect(sealed).toContain("AbortSignal.timeout");
 });
+
+test("sealReply pins exact tool stdout when the model paraphrased it", () => {
+  const pwd = "/dir/AI/barney_bot";
+  const sealed = sealReply("сейчас где-то в проекте", { toolEvidence: [pwd] });
+  expect(sealed).toContain(pwd);
+});

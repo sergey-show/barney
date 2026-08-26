@@ -26,12 +26,15 @@ test("act system does not reread constitution or tool essays", () => {
     anchors: ["https://example.com/docs"],
     plan: "1. Open the docs",
     worktree: "/tmp/work",
+    sessionDir: "/tmp/session",
     depth: 0,
     skills: "Plugins: none.",
     memory: "",
   });
   expect(system).toContain("Language with the operator: ru");
   expect(system).toContain("Session goal");
+  expect(system).toContain("Project worktree: /tmp/work");
+  expect(system).toContain("Session directory: /tmp/session");
   expect(system).toContain("Tools this turn:");
   expect(system).not.toContain("Instance Barney is designed");
   expect(system).not.toContain("Work until the requested result");

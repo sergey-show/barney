@@ -297,16 +297,7 @@ export function App() {
     <div className="shell">
       <aside className="side">
         <div className="brand">
-          <div className="brand-row">
-            <span className="brand-mark" aria-hidden="true">
-              <span className="brand-mark-ring" />
-              <span className="brand-mark-core" />
-            </span>
-            <div>
-              <h1>Barney</h1>
-              <p className="brand-sub">{t.brandSub}</p>
-            </div>
-          </div>
+          <img className="brand-logo" src="/logo-barney.svg" alt="Barney" />
         </div>
         <div className="lang-switch" role="group" aria-label={t.language}>
           <button type="button" className={locale === "ru" ? "item active" : "item"} onClick={() => setLocale("ru")}>RU</button>
@@ -861,7 +852,6 @@ function ModelsEditor(props: {
         </div>
       </header>
       <div className="page-body wide">
-        <div className="muted">{t.settingsHelp}</div>
         <label htmlFor="ui-lang">{t.language}</label>
         <div className="lang-switch" id="ui-lang">
           <button type="button" className={locale === "ru" ? "item active" : "item"} onClick={() => setLocale("ru")}>RU</button>
@@ -869,7 +859,6 @@ function ModelsEditor(props: {
         </div>
         <LaneFields
           title={t.largeModel}
-          hint={t.largeHint}
           providers={props.providers}
           providerId={largeProvider}
           model={largeModel}
@@ -884,22 +873,32 @@ function ModelsEditor(props: {
           <button className="primary" disabled={busy || !largeProvider} onClick={() => void apply()}>{t.applyLanes}</button>
         </div>
         <h3>{t.providers}</h3>
-        <div className="stack">
-          {props.providers.map((item) => (
-            <button key={item.id} type="button" className="card-main list-item" onClick={() => props.onOpenProvider(item.id)}>
-              <div className="card-title">{item.name}</div>
-              <div className="meta"><span className="mono">{item.dialect ? `${item.dialect} · ` : ""}{item.baseUrl}</span></div>
-            </button>
-          ))}
+        {props.providers.length === 0 ? (
+          <div className="muted">{t.noProviders}</div>
+        ) : (
+          <div className="plain-list">
+            {props.providers.map((item) => (
+              <button key={item.id} type="button" className="plain-row" onClick={() => props.onOpenProvider(item.id)}>
+                <span className="plain-main">
+                  <span className="plain-title">{item.name}</span>
+                  <span className="plain-meta mono">{item.dialect ? `${item.dialect} · ` : ""}{item.baseUrl}</span>
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
+        <div className="settings-actions">
           <button type="button" className="item" onClick={() => props.onOpenProvider()}>{t.addProvider}</button>
         </div>
         <h3>{t.plugins}</h3>
         {props.plugins.length === 0 ? <div className="muted">{t.noPlugins}</div> : (
-          <div className="stack">
+          <div className="plain-list">
             {props.plugins.map((plugin) => (
-              <div key={plugin.name} className="card quiet">
-                <div className="card-title">{plugin.name}</div>
-                <div className="preview">{plugin.description}</div>
+              <div key={plugin.name} className="plain-row">
+                <div className="plain-main">
+                  <div className="plain-title">{plugin.name}</div>
+                  {plugin.description ? <div className="plain-meta">{plugin.description}</div> : null}
+                </div>
               </div>
             ))}
           </div>
@@ -919,7 +918,6 @@ function ModelsEditor(props: {
 
 function LaneFields(props: {
   title: string;
-  hint: string;
   providers: Provider[];
   providerId: string;
   model: string;
@@ -934,7 +932,6 @@ function LaneFields(props: {
   return (
     <div className="lane">
       <h3>{props.title}</h3>
-      <div className="muted">{props.hint}</div>
       <label>{t.provider}</label>
       <select value={props.providerId} onChange={(e) => props.onProvider(e.target.value)}>
         {props.providers.length === 0 ? <option value="">{t.noProviders}</option> : null}
@@ -948,7 +945,7 @@ function LaneFields(props: {
           {options.map((item) => <option key={item} value={item}>{item}</option>)}
         </select>
       ) : (
-        <input value={props.model} onChange={(e) => props.onModel(e.target.value)} placeholder="Load models or type a name" />
+        <input value={props.model} onChange={(e) => props.onModel(e.target.value)} placeholder={t.modelPlaceholder} />
       )}
       <div className="settings-actions">
         <button className="item" type="button" disabled={props.busy || !props.providerId} onClick={props.onLoad}>{t.loadModels}</button>

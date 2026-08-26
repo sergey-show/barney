@@ -1,5 +1,6 @@
 import type { ChatMessage } from "../../domain/provider/Role.ts";
 import { peelUntaggedThinking } from "../../infrastructure/llm/visibleReply.ts";
+import { extractToolEvidence } from "./toolEvidence.ts";
 
 export type TranscriptLike = { kind: string; text: string };
 
@@ -20,7 +21,10 @@ export function packSession(transcript: TranscriptLike[], goal: string): PackedS
   const durable = transcript.filter((item) => item.kind === "user" || item.kind === "assistant" || item.kind === "console");
   const recentItems = durable.slice(-RECENT_COUNT);
   const older = durable.slice(0, Math.max(0, durable.length - recentItems.length));
-  const anchors = extractAnchors(goal, ...transcript.map((item) => item.text));
+  const anchors = [
+    ...extractAnchors(goal, ...transcript.map((item) => item.text)),
+    ...extractToolEvidence(...transcript.filter((item) => item.kind === "console").map((item) => item.text)),
+  ];
   const head = [
     `Goal: ${clipText(goal, 400)}`,
     anchors.length ? `Pinned facts (copy exactly, never truncate or guess):\n${anchors.map((a) => `- ${a}`).join("\n")}` : "",

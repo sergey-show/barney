@@ -186,7 +186,7 @@ function shouldPeel(thinking: string, visible: string, prefixFlags: boolean[]): 
   if (HANDOVER_LINE.test(thinking) || /I will (?:now )?(?:reply|answer|respond)\b/i.test(thinking)) return true;
   if (isMostlyLatin(thinking) && isMostlyCyrillic(visible)) return true;
   if (thinkCount >= 2 && thinking.length >= 120) return true;
-  if (thinkCount >= 1 && thinking.length >= 280 && THINK_OPEN.test(thinking)) return true;
+  if (thinkCount >= 1 && thinking.length >= 80 && THINK_OPEN.test(thinking)) return true;
   return false;
 }
 

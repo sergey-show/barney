@@ -1,4 +1,4 @@
-import { buildActSystem, turnLawFromConstitution } from "../context/actPrompt.ts";
+import { buildActSystem, turnLawFromConstitution, workspaceLines } from "../context/actPrompt.ts";
 import { cycleStrategy, familyKey, stopAfterFail, wantingWithoutLiking, type HaltReason } from "../context/controlLoop.ts";
 import { draftPlan, formatPlan } from "../context/draftPlan.ts";
 import { bindToolArgs, goalAnchors } from "../context/bindAnchor.ts";
@@ -8,6 +8,7 @@ import { sealReply } from "../context/sealReply.ts";
 import { judgeReview, artifactPins, missingIsLocalArtifact, requestedArtifacts, stillMissingArtifacts, unrunArtifacts, unwrittenArtifacts } from "../context/reviewJudge.ts";
 import { applyToolObserve, classifyToolResult } from "../context/observeTool.ts";
 import { clipText, packSession, redactSecrets } from "../context/packSession.ts";
+import { extractToolEvidence } from "../context/toolEvidence.ts";
 import { visibleAssistantText } from "../../infrastructure/llm/visibleReply.ts";
 import { formatResearchBrief, runDeepResearch } from "../research/DeepResearch.ts";
 import { parseTurnRoute, ROUTE_RULES, shouldEscalateFromShort, type TurnRoute } from "../context/turnMode.ts";
@@ -213,6 +214,7 @@ export class DriveSolve {
           anchors: packed.anchors,
           plan: planText,
           worktree: run.worktreePath,
+          sessionDir: run.sessionPath,
           depth,
           skills: skillCatalog(this.skills, `${run.goal}\n${input.message}`),
           memory: memoryNote,
@@ -603,6 +605,9 @@ export class DriveSolve {
       ...act,
       text: sealReply(visibleAssistantText(act.text), {
         goalAnchors: goalAnchors(run.goal, latest),
+        toolEvidence: extractToolEvidence(
+          ...run.transcript.filter((item) => item.kind === "console").map((item) => item.text),
+        ),
         pageEvidence: pageEvidence(run.transcript, run.goal),
         goal: run.goal,
       }),
@@ -1018,6 +1023,7 @@ export class DriveSolve {
           turnLawFromConstitution(agent.constitution),
           renderSamostPrompt(psyche.samost, message),
           `Session goal: ${run.goal}`,
+          workspaceLines(run.worktreePath, run.sessionPath),
         ].filter(Boolean).join("\n\n"),
       },
       ...packed.recent,

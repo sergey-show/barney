@@ -1,8 +1,10 @@
 import { memoryShelf } from "@domain/memory/experienceGraph.ts";
 import { useEffect, useMemo, useState } from "react";
 import { api, jsonBody } from "./api.ts";
+import { MarkdownEditor } from "./MarkdownEditor.tsx";
 import { ExperienceGraphView } from "./ExperienceGraph.tsx";
 import { useLocale } from "./LocaleContext.tsx";
+import { plainPreview } from "./mdPreview.ts";
 import type { ExperienceGraph, MemoryNote } from "./types.ts";
 
 type Shelf = "yours" | "learned" | "graph";
@@ -144,7 +146,7 @@ export function MemoryPage() {
         </div>
         <button className="primary" type="button" onClick={beginNew}>{t.newNote}</button>
       </header>
-      <div className="split-body">
+      <div className={`split-body ${shelf === "graph" ? "graph-full" : ""}`}>
         <aside className="list-pane">
           <div className="chip-row">
             <button type="button" className={`chip ${shelf === "yours" ? "active" : ""}`} onClick={() => pickShelf("yours")}>
@@ -183,7 +185,7 @@ export function MemoryPage() {
                     onClick={() => open(note)}
                   >
                     <div className="card-title">{note.title}</div>
-                    <div className="preview">{note.body.replace(/\s+/g, " ").slice(0, 120)}</div>
+                    <div className="preview">{plainPreview(note.body)}</div>
                   </button>
                 ))}
               </div>
@@ -192,7 +194,7 @@ export function MemoryPage() {
             <p className="lede">{t.notesGraphHint}</p>
           )}
         </aside>
-        <div className="detail-pane">
+        <div className={`detail-pane ${shelf === "graph" ? "graph-stage" : ""}`}>
           {shelf === "graph" ? (
             <ExperienceGraphView
               graph={graph}
@@ -208,7 +210,14 @@ export function MemoryPage() {
               <label htmlFor="memory-title">{t.noteTitle}</label>
               <input id="memory-title" value={title} onChange={(e) => setTitle(e.target.value)} readOnly={!editing} />
               <label htmlFor="memory-body">{t.noteBody}</label>
-              <textarea id="memory-body" value={body} onChange={(e) => setBody(e.target.value)} rows={16} readOnly={!editing} />
+              <MarkdownEditor
+                key={selected?.id ?? "new"}
+                id="memory-body"
+                value={body}
+                readOnly={!editing}
+                placeholder={t.noteBodyPh}
+                onChange={setBody}
+              />
               {error ? <div className="error" role="alert">{error}</div> : null}
               {editing ? (
                 <div className="settings-actions">

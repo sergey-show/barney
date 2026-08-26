@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, jsonBody } from "./api.ts";
 import { useLocale } from "./LocaleContext.tsx";
+import { Pager, usePager } from "./Pager.tsx";
 import type { PsycheState } from "./types.ts";
 
 function linesOf(value: string): string[] {
@@ -14,6 +15,7 @@ export function PsychePage(props: { runId?: string }) {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const { t } = useLocale();
+  const episodePage = usePager(state?.episodes ?? []);
 
   async function load() {
     const next = await api<PsycheState>(`/api/psyche${props.runId ? `?runId=${encodeURIComponent(props.runId)}` : ""}`);
@@ -95,18 +97,26 @@ export function PsychePage(props: { runId?: string }) {
 
         <h3>{t.episodes}</h3>
         <p className="lede">{t.episodesHint}</p>
-        <div className="stack">
-          {state.episodes.length === 0 ? <div className="muted">{t.noEpisodes}</div> : state.episodes.map((episode) => (
-            <div key={episode.id} className="card quiet">
-              <div className="card-title">{episode.goal}</div>
-              <div className="meta">
-                <span className={`pill status-${episode.outcome}`}>{episode.outcome}</span>
-                {episode.failureMode ? <span>{episode.failureMode}</span> : null}
-              </div>
-              {episode.nextHint ? <div className="preview">{episode.nextHint}</div> : null}
+        {state.episodes.length === 0 ? (
+          <div className="muted">{t.noEpisodes}</div>
+        ) : (
+          <>
+            <div className="plain-list">
+              {episodePage.slice.map((episode) => (
+                <div key={episode.id} className="plain-row">
+                  <div className="plain-main">
+                    <div className="plain-title">{episode.goal}</div>
+                    <div className="plain-meta">
+                      {episode.outcome}
+                      {episode.failureMode ? ` · ${episode.failureMode}` : ""}
+                    </div>
+                  </div>
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
+            <Pager page={episodePage.current} pages={episodePage.pages} onPage={episodePage.setPage} prev={t.prevPage} next={t.nextPage} />
+          </>
+        )}
       </div>
     </section>
   );

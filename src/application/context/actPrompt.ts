@@ -7,6 +7,7 @@ export type ActPromptInput = {
   anchors: string[];
   plan: string;
   worktree: string;
+  sessionDir?: string;
   depth: number;
   skills: string;
   memory: string;
@@ -39,7 +40,7 @@ export function buildActSystem(input: ActPromptInput): string {
       ? `Session facts (copy exactly, never truncate or guess):\n${input.anchors.map((a) => `- ${a}`).join("\n")}`
       : "",
     input.plan ? `Working plan (execute in order; do not skip to guessing):\n${input.plan}` : "",
-    `Worktree: ${input.worktree}. File paths are relative to it.`,
+    workspaceLines(input.worktree, input.sessionDir),
     input.depth > 0
       ? "Delegated specialist, not a character. Do the subtask. Write notes with memory_write. Do not spawn agents."
       : "",
@@ -51,6 +52,16 @@ export function buildActSystem(input: ActPromptInput): string {
   ]
     .filter(Boolean)
     .join("\n\n");
+}
+
+export function workspaceLines(worktree: string, sessionDir?: string): string {
+  if (!sessionDir || sessionDir === worktree) {
+    return `Worktree: ${worktree}. File paths are relative to it.`;
+  }
+  return [
+    `Project worktree: ${worktree}. Shell cwd and fs_* are here — the operator's project.`,
+    `Session directory: ${sessionDir}. Per-run folder in the body; not the project. Do not report it as the working directory.`,
+  ].join("\n");
 }
 
 function neverLines(constitution: string): string[] {

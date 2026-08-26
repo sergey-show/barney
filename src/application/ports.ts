@@ -71,8 +71,15 @@ export interface TeamPort {
   delegate(input: { parentRunId: string; agent: string; task: string; signal?: AbortSignal }): Promise<string>;
 }
 
+export type WorkspaceLayout = {
+  /** Operator project (CLI cwd) or the session folder when there is no project. Tools cwd. */
+  worktree: string;
+  /** Per-run folder under ~/.barney/worktrees. */
+  sessionDir: string;
+};
+
 export interface WorktreePort {
-  create(runId: string, repoDir?: string): Promise<string>;
+  create(runId: string, repoDir?: string): Promise<WorkspaceLayout>;
 }
 
 export interface HomeRepoPort {

@@ -4,6 +4,7 @@ import { getKernel } from "../../composition/Kernel.ts";
 import type { Run } from "../../domain/run/Run.ts";
 import { startWeb } from "../http/server.ts";
 import { createLivePrinter, printBanner, printError, printMeta, printPrompt, printSection, printStatus, printTranscript, printWork } from "./render.ts";
+import { openTui } from "./tui.ts";
 
 const web = defineCommand({
   meta: { name: "web", description: "Start the two-pane web portal" },
@@ -29,86 +30,118 @@ const cli = defineCommand({
     const coder = state.bindings.find((b) => b.role === "coder");
     const model = coder ? `${state.providers.find((p) => p.id === coder.providerId)?.name ?? "provider"} / ${coder.model}` : undefined;
     let agent = agents.find((a) => a.id.value === args.agent || a.name === args.agent) ?? agents[0];
-    printBanner(`${agent.name} v${agent.version}`, model);
+    const headline = `${agent.name} v${agent.version}`;
+    const tui = openTui({ agent: headline, model });
+    if (!tui) printBanner(headline, model);
 
     let runId: string | undefined;
     let current: Run | undefined;
     let seen = 0;
     let debug = false;
-    printPrompt();
+    const again = () => {
+      if (tui) tui.prompt();
+      else printPrompt();
+    };
+    const note = (kind: string, text: string) => {
+      if (tui) tui.log(kind, text);
+      else if (kind === "error") printError(text);
+      else printMeta(kind, text);
+    };
+    again();
+    try {
     for await (const raw of console) {
       const line = String(raw).trim();
       if (line === "/quit") break;
-      if (!line) { printPrompt(); continue; }
+      if (!line) { again(); continue; }
       if (line === "/debug") {
         debug = !debug;
-        printMeta("debug", debug ? "on" : "off");
-        printPrompt();
+        note("debug", debug ? "on" : "off");
+        again();
         continue;
       }
       if (line === "/work") {
         const work = current?.transcript.filter((item) => item.kind !== "user" && item.kind !== "assistant") ?? [];
+        if (tui) {
+          again();
+          continue;
+        }
         if (!work.length) printSection("work", []);
         else printWork(work, true);
         printPrompt();
         continue;
       }
       if (line === "/agents") {
-        printSection("agents", (await kernel.listAgents()).map((a) => `${a.name}  v${a.version}`));
-        printPrompt();
+        const rows = (await kernel.listAgents()).map((a) => `${a.name}  v${a.version}`);
+        if (tui) note("meta", rows.join(" · ") || "none");
+        else printSection("agents", rows);
+        again();
         continue;
       }
       if (line === "/memory" || line.startsWith("/memory ")) {
         const query = line.slice(7).trim();
         const notes = query ? await kernel.memories.search(query, 12) : await kernel.memories.recent(12);
-        printSection("memory", notes.map((note) => `${note.key}  ${note.title}`));
-        printPrompt();
+        const rows = notes.map((item) => `${item.key}  ${item.title}`);
+        if (tui) note("meta", rows.join("\n") || "none");
+        else printSection("memory", rows);
+        again();
         continue;
       }
       if (line === "/sessions" || line === "/runs") {
-        printSection("sessions", (await kernel.listRuns()).map((r) => `${r.status.padEnd(10)}  ${r.goal.slice(0, 64)}`));
-        printPrompt();
+        const rows = (await kernel.listRuns()).map((r) => `${r.status.padEnd(10)}  ${r.goal.slice(0, 64)}`);
+        if (tui) note("meta", rows.join("\n") || "none");
+        else printSection("sessions", rows);
+        again();
         continue;
       }
       if (line.startsWith("/form")) {
-        if (!runId) { printMeta("session", "none"); printPrompt(); continue; }
+        if (!runId) { note("session", "none"); again(); continue; }
         const name = line.slice(5).trim() || undefined;
         const result = await kernel.formFromRun(runId, name);
-        printMeta("form", `${result.decision} → ${result.agent.name} v${result.agent.version}`);
-        printPrompt();
+        note("form", `${result.decision} → ${result.agent.name} v${result.agent.version}`);
+        again();
         continue;
       }
       if (line === "/continue" || line === "/retry") {
-        if (!runId) { printMeta("session", "none"); printPrompt(); continue; }
-        const live = createLivePrinter(() => runId);
+        if (!runId) { note("session", "none"); again(); continue; }
+        const live = tui ? tui.livePrinter(() => runId) : createLivePrinter(() => runId);
         const off = kernel.events.subscribe((event) => live.onEvent(event.type, event.payload));
         try {
           current = await kernel.resume(runId, line === "/retry" ? "retry" : "continue");
         } catch (err) {
-          printError(String(err));
-          printPrompt();
+          note("error", String(err));
+          again();
           continue;
         } finally {
           off();
           live.finish();
         }
-        if (!current) { printPrompt(); continue; }
-        printTranscript(current.transcript.slice(seen), { debug });
-        printStatus(current.status, current.attempts);
+        if (!current) { again(); continue; }
+        if (tui) {
+          tui.setChat(current.transcript);
+          tui.setStatus(current.status);
+        } else {
+          printTranscript(current.transcript.slice(seen), { debug });
+          printStatus(current.status, current.attempts);
+        }
         seen = current.transcript.length;
-        printPrompt();
+        again();
         continue;
       }
       try {
         if (!runId) {
-          const created = await kernel.createRun(line, agent.id.value);
+          const created = await kernel.createRun(line, agent.id.value, process.cwd());
           runId = created.id.value;
           seen = created.transcript.length;
-          printMeta("session", runId);
-          printMeta("worktree", created.worktreePath);
-          console.log();
+          if (tui) tui.setSession(runId, created.worktreePath, created.sessionPath);
+          else {
+            printMeta("session", runId);
+            printMeta("worktree", created.worktreePath);
+            if (created.sessionPath !== created.worktreePath) printMeta("dir", created.sessionPath);
+            console.log();
+          }
         }
-        const live = createLivePrinter(() => runId);
+        if (tui) tui.log("user", line);
+        const live = tui ? tui.livePrinter(() => runId) : createLivePrinter(() => runId);
         const off = kernel.events.subscribe((event) => live.onEvent(event.type, event.payload));
         try {
           current = await kernel.send(runId, line);
@@ -116,15 +149,23 @@ const cli = defineCommand({
           off();
           live.finish();
         }
-        const fresh = current.transcript.slice(seen);
-        const skip = fresh[0]?.kind === "user" && fresh[0].text === line ? 1 : 0;
-        printTranscript(fresh.slice(skip), { debug });
-        printStatus(current.status, current.attempts);
+        if (tui) {
+          tui.setChat(current.transcript);
+          tui.setStatus(`${current.status}${current.attempts ? ` · ${current.attempts}` : ""}`);
+        } else {
+          const fresh = current.transcript.slice(seen);
+          const skip = fresh[0]?.kind === "user" && fresh[0].text === line ? 1 : 0;
+          printTranscript(fresh.slice(skip), { debug });
+          printStatus(current.status, current.attempts);
+        }
         seen = current.transcript.length;
       } catch (err) {
-        printError(String(err));
+        note("error", String(err));
       }
-      printPrompt();
+      again();
+    }
+    } finally {
+      tui?.close();
     }
   },
 });
@@ -142,10 +183,11 @@ const run = defineCommand({
     const coder = state.bindings.find((b) => b.role === "coder");
     const model = coder ? `${state.providers.find((p) => p.id === coder.providerId)?.name ?? "provider"} / ${coder.model}` : undefined;
     const agent = agents.find((a) => a.id.value === args.agent || a.name === args.agent) ?? agents[0];
-    const created = await kernel.createRun(String(args.goal), agent?.id.value);
+    const created = await kernel.createRun(String(args.goal), agent?.id.value, process.cwd());
     printBanner(`${agent?.name ?? "Barney"}${agent ? ` v${agent.version}` : ""}`, model);
     printMeta("session", created.id.value);
     printMeta("worktree", created.worktreePath);
+    if (created.sessionPath !== created.worktreePath) printMeta("dir", created.sessionPath);
     console.log();
     const live = createLivePrinter(() => created.id.value);
     const off = kernel.events.subscribe((event) => live.onEvent(event.type, event.payload));

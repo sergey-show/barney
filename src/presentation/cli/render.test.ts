@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { HUD, renderMarkdown, workSummary } from "./render.ts";
+import { HUD, LOGO_ROWS, renderMarkdown, workSummary, workView } from "./render.ts";
 
 test("CLI HUD tokens match the portal amber palette", () => {
   expect(HUD.text).toBe("#f8f4ea");
@@ -7,6 +7,18 @@ test("CLI HUD tokens match the portal amber palette", () => {
   expect(HUD.accent).toBe("#e8b86d");
   expect(HUD.line).toBe("#3d3420");
   expect(HUD.error).toBe("#ef4444");
+});
+
+test("logo rows are the same width", () => {
+  const widths = LOGO_ROWS.map((row) => row.join("").length);
+  expect(new Set(widths).size).toBe(1);
+  expect(widths[0]).toBeGreaterThan(24);
+});
+
+test("workView keeps a fixed height and the tail of the buffer", () => {
+  expect(workView("a\nb\nc\nd", 80, 2)).toEqual(["c", "d"]);
+  expect(workView("", 80, 3)).toEqual(["", "", ""]);
+  expect(workView("hello", 80, 1)).toEqual(["hello"]);
 });
 
 test("workSummary matches the portal fold", () => {

@@ -11,18 +11,21 @@ export class StartRun {
     private readonly events: EventBus,
   ) {}
 
-    async execute(input: { goal: string; agentId?: string; repoDir?: string; worktreePath?: string }): Promise<Run> {
+    async execute(input: { goal: string; agentId?: string; repoDir?: string; worktreePath?: string; sessionPath?: string }): Promise<Run> {
     const agent = input.agentId
       ? await this.agents.get(input.agentId)
       : await new EnsureDefaultAgent(this.agents).execute();
     if (!agent) throw new Error(`agent not found: ${input.agentId}`);
 
     const id = RunId.create();
-    const worktreePath = input.worktreePath ?? await this.worktrees.create(id.value, input.repoDir);
+    const layout = await this.worktrees.create(id.value, input.repoDir);
+    const worktreePath = input.worktreePath ?? layout.worktree;
+    const sessionPath = input.sessionPath ?? layout.sessionDir;
     const run = Run.start(agent, {
       id,
       goal: input.goal,
       worktreePath,
+      sessionPath,
       taskClass: agent.taskClass,
     });
     await this.runs.save(run);

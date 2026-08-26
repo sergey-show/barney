@@ -40,7 +40,7 @@ function dim(text: string): string {
   return `\x1b[2m${text}\x1b[0m`;
 }
 
-const ansi = {
+export const ansi = {
   text: (s: string) => paint(HUD.text, s),
   muted: (s: string) => paint(HUD.muted, s),
   accent: (s: string) => paint(HUD.accent, s),
@@ -56,15 +56,32 @@ const ansi = {
   dim,
 };
 
-function cols(): number {
+export function cols(): number {
   return Math.max(48, Math.min(process.stdout.columns ?? 80, 88));
+}
+
+const LOGO_ORANGE = "#f06c2e";
+const LOGO_WHITE = "#e6ebfc";
+
+/** 3-line wordmark; first cell is the orange B. */
+export const LOGO_ROWS = [
+  [" █▀▀▄ ", " ▄▀▀▄ ", " ██▀▄ ", " █▄  █ ", " █▀▀▀ ", " █  █ "],
+  [" █▀▀▄ ", " █▀▀█ ", " █▄▀  ", " █ █ █ ", " █▀▀  ", " ▀▄▄▀ "],
+  [" █▄▄▀ ", " █  █ ", " █ ▀▄ ", " █  ▀█ ", " █▄▄▄ ", "  ██  "],
+] as const;
+
+export function logoLines(): string[] {
+  if ((process.stdout.columns ?? 80) < 40) return [paint(LOGO_ORANGE, "Barney")];
+  const colors = [LOGO_ORANGE, LOGO_WHITE, LOGO_WHITE, LOGO_WHITE, LOGO_WHITE, LOGO_WHITE];
+  return LOGO_ROWS.map((row) => row.map((cell, i) => paint(colors[i] ?? LOGO_WHITE, cell)).join(""));
 }
 
 export function printBanner(agent: string, model?: string): void {
   const width = Math.min(cols(), 56);
-  console.log(`${ansi.accent("◎")}  ${ansi.bold(ansi.accent("BARNEY"))}`);
+  console.log();
+  for (const row of logoLines()) console.log(row);
+  console.log();
   console.log(ansi.muted(`   ${agent}${model ? ` · ${model}` : ""}`));
-  console.log(ansi.muted("   goal, then follow-ups"));
   console.log(ansi.muted("   /work  /debug  /memory  /agents  /sessions  /form  /quit"));
   console.log(ansi.line(`╭${"─".repeat(width - 2)}╮`));
   console.log();
@@ -171,65 +188,71 @@ export function printWork(items: TranscriptItem[], expand: boolean): void {
   console.log();
 }
 
+export const WORK_PANE = 8;
+
+export function workView(text: string, width: number, height: number): string[] {
+  const rows = wrap(text, Math.max(8, width)).split("\n");
+  const view = rows.slice(-Math.max(1, height));
+  while (view.length < height) view.unshift("");
+  return view;
+}
+
 export function createLivePrinter(runId: () => string | undefined): { onEvent: (type: string, payload: Record<string, unknown>) => void; finish: () => void } {
   let started = false;
-  let midline = false;
+  let buf = "";
   const width = cols();
-  const start = () => {
-    if (started) return;
-    process.stdout.write(`${ansi.line("╭")}${ansi.muted(" work · in progress")}\n`);
-    started = true;
+  const inner = WORK_PANE;
+
+  const draw = (title: string) => {
+    const view = workView(buf, width - 4, inner);
+    const box = [
+      ansi.line("╭") + ansi.muted(` ${title} `.padEnd(width - 1)),
+      ...view.map((line) => ansi.line("│ ") + ansi.think(clip(line, width - 4))),
+      ansi.line("╰" + "─".repeat(width - 1)),
+    ];
+    if (!started) {
+      process.stdout.write(`${box.join("\n")}\n`);
+      started = true;
+      return;
+    }
+    process.stdout.write(`\x1b[${inner + 2}A`);
+    for (const row of box) process.stdout.write(`\x1b[2K${row}\n`);
   };
-  const breakLine = () => {
-    if (!midline) return;
-    process.stdout.write("\n");
-    midline = false;
-  };
+
   const onEvent = (type: string, payload: Record<string, unknown>) => {
     if (payload.runId && payload.runId !== runId()) return;
     if (type === "run.thinking_delta") {
-      start();
       const raw = String(payload.delta ?? "");
       if (!raw) return;
-      if (!midline) {
-        process.stdout.write(`${ansi.line("│")}  `);
-        midline = true;
-      }
-      process.stdout.write(ansi.think(raw.replace(/\n/g, `\n${ansi.line("│")}  `)));
+      buf += raw;
+      draw("work · in progress");
     }
     if (type === "run.console") {
-      breakLine();
-      start();
-      process.stdout.write(`${ansi.line("│")}  ${ansi.cons(`console · ${String(payload.tool ?? "tool")}`)}\n`);
+      buf += `\n[console · ${String(payload.tool ?? "tool")}]`;
+      draw("work · in progress");
     }
     if (type === "browser.shown" || type === "browser.opened") {
-      breakLine();
-      start();
-      const shot = payload.shot ? ansi.muted(`  shot ${String(payload.shot)}`) : "";
-      process.stdout.write(`${ansi.line("│")}  ${ansi.accent(`browser · ${clip(String(payload.url ?? ""), width - 16)}`)}${shot}\n`);
+      buf += `\n[browser · ${clip(String(payload.url ?? ""), 48)}]`;
+      draw("work · in progress");
     }
     if (type === "plugin.opened" || type === "skill.opened") {
-      breakLine();
-      start();
-      process.stdout.write(`${ansi.line("│")}  ${ansi.accent(`plugin · ${String(payload.name ?? "")}`)}\n`);
+      buf += `\n[plugin · ${String(payload.name ?? "")}]`;
+      draw("work · in progress");
     }
     if (type === "memory.written") {
-      breakLine();
-      start();
-      process.stdout.write(`${ansi.line("│")}  ${ansi.accent(`memory · ${String(payload.key ?? "")}`)}\n`);
+      buf += `\n[memory · ${String(payload.key ?? "")}]`;
+      draw("work · in progress");
     }
     if (type === "agent.delegated") {
-      breakLine();
-      start();
-      process.stdout.write(`${ansi.line("│")}  ${ansi.accent(`delegate · ${String(payload.agent ?? "")}`)}\n`);
+      buf += `\n[delegate · ${String(payload.agent ?? "")}]`;
+      draw("work · in progress");
     }
   };
   return {
     onEvent,
     finish: () => {
       if (!started) return;
-      breakLine();
-      process.stdout.write(`${ansi.line("╰" + "─".repeat(width - 1))}\n\n`);
+      draw("work");
     },
   };
 }
@@ -367,7 +390,7 @@ function indent(text: string, prefix: string): string {
   return text.split("\n").map((line) => (line ? `${prefix}${line}` : "")).join("\n");
 }
 
-function wrap(text: string, width = cols() - 4): string {
+export function wrap(text: string, width = cols() - 4): string {
   return text.split("\n").map((line) => wrapLine(line, width)).join("\n");
 }
 
@@ -388,11 +411,11 @@ function wrapLine(line: string, width: number): string {
   return rows.join("\n");
 }
 
-function clip(text: string, max: number): string {
+export function clip(text: string, max: number): string {
   if (text.length <= max) return text;
   return `${text.slice(0, Math.max(0, max - 1))}…`;
 }
 
-function visibleLength(text: string): number {
+export function visibleLength(text: string): number {
   return text.replace(/\x1b\[[0-9;]*m/g, "").length;
 }

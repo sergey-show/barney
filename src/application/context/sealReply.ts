@@ -1,10 +1,11 @@
 import { pageCodeIdents, replyOmitsPageCode } from "../research/verifyReply.ts";
+import { ensureToolEvidence } from "./toolEvidence.ts";
 
 export function sealReply(
   text: string,
-  input: { goalAnchors?: string[]; pageEvidence?: string; goal?: string },
+  input: { goalAnchors?: string[]; toolEvidence?: string[]; pageEvidence?: string; goal?: string },
 ): string {
-  let out = (text ?? "").trim();
+  let out = ensureToolEvidence((text ?? "").trim(), input.toolEvidence ?? []);
   for (const anchor of input.goalAnchors ?? []) {
     if (!/^https?:\/\//i.test(anchor)) continue;
     const bare = anchor.replace(/\/+$/, "");

@@ -33,6 +33,7 @@ export type RunSnapshot = {
   taskClass: string;
   status: RunStatus;
   worktreePath: string;
+  sessionPath: string;
   attempts: number;
   usedStrategies: string[];
   failedPlanHashes: string[];
@@ -51,6 +52,7 @@ export class Run {
   readonly goal: string;
   readonly taskClass: string;
   readonly worktreePath: string;
+  readonly sessionPath: string;
   readonly budget: Budget;
   readonly reviewRequired: boolean;
   readonly minStrategies: number;
@@ -73,6 +75,7 @@ export class Run {
     goal: string;
     taskClass: string;
     worktreePath: string;
+    sessionPath: string;
     budget: Budget;
     reviewRequired: boolean;
     minStrategies: number;
@@ -84,6 +87,7 @@ export class Run {
     this.goal = props.goal;
     this.taskClass = props.taskClass;
     this.worktreePath = props.worktreePath;
+    this.sessionPath = props.sessionPath;
     this.budget = props.budget;
     this.reviewRequired = props.reviewRequired;
     this.minStrategies = props.minStrategies;
@@ -91,7 +95,7 @@ export class Run {
     this.maxSameFailure = props.maxSameFailure;
   }
 
-  static start(agent: Agent, input: { goal: string; worktreePath: string; taskClass?: string; id?: RunId }): Run {
+  static start(agent: Agent, input: { goal: string; worktreePath: string; sessionPath?: string; taskClass?: string; id?: RunId }): Run {
     if (!input.goal.trim()) throw new InvariantError("run goal is required");
     const policy = agent.solvePolicy;
     const run = new Run({
@@ -100,6 +104,7 @@ export class Run {
       goal: input.goal.trim(),
       taskClass: input.taskClass ?? agent.taskClass,
       worktreePath: input.worktreePath,
+      sessionPath: input.sessionPath ?? input.worktreePath,
       budget: new Budget(policy.budgetTokens, policy.budgetUsd, policy.budgetMs),
       reviewRequired: policy.reviewRequired,
       minStrategies: policy.minStrategies,
@@ -242,6 +247,7 @@ export class Run {
       taskClass: this.taskClass,
       status: this.status,
       worktreePath: this.worktreePath,
+      sessionPath: this.sessionPath,
       attempts: this.attempts,
       usedStrategies: [...this.usedStrategies],
       failedPlanHashes: [...this.failedPlanHashes],
@@ -262,6 +268,7 @@ export class Run {
       goal: snap.goal,
       taskClass: snap.taskClass,
       worktreePath: snap.worktreePath,
+      sessionPath: snap.sessionPath ?? snap.worktreePath,
       budget: new Budget(agent.solvePolicy.budgetTokens, agent.solvePolicy.budgetUsd, agent.solvePolicy.budgetMs),
       reviewRequired: agent.solvePolicy.reviewRequired,
       minStrategies: agent.solvePolicy.minStrategies,

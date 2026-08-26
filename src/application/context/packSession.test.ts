@@ -75,6 +75,15 @@ test("clipText and stripThink coerce non-strings instead of crashing", () => {
   expect(redactSecrets(undefined)).toBe("");
 });
 
+test("pins tool stdout as a fact to copy", () => {
+  const packed = packSession([
+    { kind: "user", text: "сделай pwd" },
+    { kind: "console", text: `shell ${JSON.stringify({ command: "pwd" })}\nexit 0\n/dir/AI/barney_bot\n` },
+  ], "pwd");
+  expect(packed.anchors).toContain("/dir/AI/barney_bot");
+  expect(packed.digest).toContain("/dir/AI/barney_bot");
+});
+
 test("redactSecrets strips passwords before memory upsert", () => {
   expect(redactSecrets("user agent пароль 12qwaszx!! and more")).toContain("пароль [redacted]");
   expect(redactSecrets("user agent пароль 12qwaszx!! and more")).not.toContain("12qwaszx");

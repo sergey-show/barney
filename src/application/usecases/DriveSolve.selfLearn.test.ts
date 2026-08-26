@@ -62,7 +62,10 @@ function harness(home: string) {
   const llm = new ScriptedLearner();
   const skills = new FsPluginStore(join(home, "plugins"));
   const memory = new SqliteMemoryRepository(db);
-  const start = new StartRun(agents, runs, { create: async (id) => worktree(home, id) }, events);
+  const start = new StartRun(agents, runs, { create: async (id) => {
+    const dir = worktree(home, id);
+    return { worktree: dir, sessionDir: dir };
+  } }, events);
   const drive = new DriveSolve(
     agents,
     runs,

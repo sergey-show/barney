@@ -1,5 +1,6 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useLocale } from "./LocaleContext.tsx";
+import { Pager, usePager } from "./Pager.tsx";
 import { lastActivity, type Run } from "./types.ts";
 
 export function SessionsPage(props: {
@@ -18,8 +19,11 @@ export function SessionsPage(props: {
     return [...items].sort((a, b) => lastActivity(b).localeCompare(lastActivity(a)));
   }, [props.sessions, query]);
   const { t } = useLocale();
-  const open = filtered.filter((session) => session.status !== "done");
-  const closed = filtered.filter((session) => session.status === "done");
+  const pager = usePager(filtered);
+
+  useEffect(() => {
+    pager.setPage(0);
+  }, [query]);
 
   return (
     <section className="page">
@@ -30,7 +34,7 @@ export function SessionsPage(props: {
         </div>
         <button className="primary" type="button" onClick={props.onNew}>{t.newChat}</button>
       </header>
-      <div className="page-body">
+      <div className="page-body wide">
         <label htmlFor="session-search">{t.searchSessions}</label>
         <input
           id="session-search"
@@ -38,45 +42,33 @@ export function SessionsPage(props: {
           onChange={(e) => setQuery(e.target.value)}
           placeholder={t.searchSessionsPh}
         />
-        <Group title={t.openGroup} items={open} empty={t.noOpen} currentId={props.currentId} onOpen={props.onOpen} onCloseSession={props.onCloseSession} closeLabel={t.closeChat} untitled={t.untitled} running={t.running} />
-        <Group title={t.closedGroup} items={closed} empty={t.noClosed} currentId={props.currentId} onOpen={props.onOpen} untitled={t.untitled} running={t.running} />
+        {filtered.length === 0 ? (
+          <div className="muted">{t.noSessions}</div>
+        ) : (
+          <>
+            <div className="plain-list">
+              {pager.slice.map((session) => (
+                <div key={session.id} className={`plain-row ${session.id === props.currentId ? "current" : ""}`}>
+                  <button type="button" className="plain-main" onClick={() => props.onOpen(session.id)}>
+                    <div className="plain-title">{session.goal || t.untitled}</div>
+                    <div className="plain-meta">
+                      {session.running ? t.running : session.status}
+                      {" · "}
+                      {lastActivity(session) || session.id.slice(0, 8)}
+                    </div>
+                  </button>
+                  {session.status !== "done" ? (
+                    <button type="button" className="plain-action" onClick={() => props.onCloseSession(session.id)}>
+                      {t.closeChat}
+                    </button>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+            <Pager page={pager.current} pages={pager.pages} onPage={pager.setPage} prev={t.prevPage} next={t.nextPage} />
+          </>
+        )}
       </div>
     </section>
-  );
-}
-
-function Group(props: {
-  title: string;
-  items: Run[];
-  empty: string;
-  currentId?: string;
-  onOpen: (id: string) => void;
-  onCloseSession?: (id: string) => void;
-  closeLabel?: string;
-  untitled: string;
-  running: string;
-}) {
-  return (
-    <div className="stack">
-      <h3>{props.title} <span className="count">{props.items.length}</span></h3>
-      {props.items.length === 0 ? <div className="muted">{props.empty}</div> : props.items.map((session) => {
-        const last = session.transcript.filter((item) => item.kind === "user" || item.kind === "assistant").at(-1);
-        return (
-          <article key={session.id} className={`card ${session.id === props.currentId ? "current" : ""}`}>
-            <button type="button" className="card-main" onClick={() => props.onOpen(session.id)}>
-              <div className="card-title">{session.goal || props.untitled}</div>
-              <div className="meta">
-                <span className={`pill status-${session.status}`}>{session.running ? props.running : session.status}</span>
-                <span>{lastActivity(session) || session.id.slice(0, 8)}</span>
-              </div>
-              {last ? <div className="preview">{last.kind}: {last.text.replace(/\s+/g, " ").slice(0, 140)}</div> : null}
-            </button>
-            {props.onCloseSession && session.status !== "done" ? (
-              <button type="button" className="item ghost" onClick={() => props.onCloseSession?.(session.id)}>{props.closeLabel}</button>
-            ) : null}
-          </article>
-        );
-      })}
-    </div>
   );
 }
