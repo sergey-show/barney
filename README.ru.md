@@ -1,17 +1,20 @@
 
+<p align="center">
+  <img src="assets/images/barney.jpg" alt="Barney" width="100%">
+</p>
 
 ## Barney Agent
 
 **Русский** · [English](README.md)
 
-[License: MIT](LICENSE)
-[GitHub stars](https://github.com/sergey-show/barney/stargazers)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![GitHub stars](https://img.shields.io/github/stars/sergey-show/barney?style=flat&logo=github)](https://github.com/sergey-show/barney/stargazers)
 
 Саморазвивающийся агент. 
 
 Это эксперементальный проект агента, в основу агента вошла концепция Карла Юнга - [Самость](https://ru.wikipedia.org/wiki/Самость)
 
-Схема самость
+![Схема самость](assets/images/image.png)
 
 Имя **Barney** — в память о моей собаке.
 
@@ -44,7 +47,7 @@ Barney собран иначе. Существование предшеству�
 
 ## Ядро и тело
 
-Схема
+![Схема](assets/images/sheme.png)
 
 
 | Остаётся в `src/`                    | Живёт в `~/.barney`                    |
