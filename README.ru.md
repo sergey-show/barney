@@ -79,52 +79,65 @@ Barney собран иначе. Существование предшеству�
 
 ## Установка
 
+Тело агента всегда в `~/.barney`. Ядро можно поставить тремя путями.
+
+### npm
+
+Нужен [Bun](https://bun.sh) ≥ 1.4.
+
+```bash
+bun add -g @encsch/barney
+barney web
+```
+
+Либо `npm install -g @encsch/barney` — на `PATH` всё равно должен быть `bun` (скрипт запускается через него).
+
+### Релиз с GitHub
+
+Скачайте файл под свою платформу с 
+[Releases](https://github.com/sergey-show/barney/releases/latest):
+
+| Файл | Платформа |
+|---|---|
+| `barney-darwin-arm64` | macOS Apple Silicon |
+| `barney-darwin-x64` | macOS Intel |
+| `barney-linux-x64` | Linux x64 |
+| `barney-linux-arm64` | Linux ARM64 |
+| `barney-windows-x64.exe` | Windows x64 |
+
+```bash
+curl -L -o barney https://github.com/sergey-show/barney/releases/latest/download/barney-darwin-arm64
+chmod +x barney
+./barney web
+```
+
+### Из исходников
+
 Нужен [Bun](https://bun.sh) ≥ 1.4.
 
 ```bash
 git clone https://github.com/sergey-show/barney.git
 cd barney
 bun install
+bun run build:web
+bun run web            # портал → http://127.0.0.1:7331
+bun run cli
+bun bin/barney run "задача"
 ```
+
+Свой бинарник: `bun run build:bin` → `./dist/barney`.
+
+## Первый запуск
 
 Привяжите модель. Облачные ключи подхватываются при загрузке:
 
 ```bash
 export ANTHROPIC_API_KEY=...     # или OPENAI_API_KEY, GROQ_API_KEY
+barney providers add --name local --host http://127.0.0.1:11434/v1 --use
+barney providers use local --model <id-из-/v1/models>
 ```
 
-Или любой OpenAI-совместимый сервер:
-
-```bash
-bun bin/barney-agent providers add --name local --host http://127.0.0.1:11434/v1 --use
-bun bin/barney-agent providers use local --model <id-из-/v1/models>
-```
-
-
-
-## Первый запуск
-
-```bash
-bun run web          # портал → http://127.0.0.1:7331
-bun run cli          # то же ядро в терминале
-```
-
-При первом старте экземпляр ещё не спроектирован. Происходит инициализация по пунктам или коротко `канон`.
-
-После проектирования сущность пишется поступками.
-
-Еденичный запуск:
-
-```bash
-bun bin/barney-agent run "задача"
-```
-
-WEB:
-
-```bash
-bun run build:web
-bun run web
-```
+При первом старте экземпляр ещё не спроектирован. Инициализация по пунктам или коротко **`канон`**. После проектирования сущность пишется поступками.
 
 
 
