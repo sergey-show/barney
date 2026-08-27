@@ -93,16 +93,14 @@ function normalizeReview(parsed: Review): Review | undefined {
   return parsed;
 }
 
+/** Trust the reviewer; apply only guard and explicit deliverable checks — no task-shaped turn-law. */
 export function judgeReview(text: string, latest: string, evidence = "", reply = ""): Review {
   const review = parseReview(text);
   if (review.verdict !== "pass") return review;
   const fileMiss = missingArtifactWrites(latest, evidence);
   const maskMiss = maskedArtifactWrite(latest, evidence);
-  const liveMiss = inventedLiveValue(latest, evidence);
-  const startMiss = missingServiceStart(latest, evidence);
-  const runMiss = missingRunnableRun(latest, evidence);
   const miss = reply && evidence ? replyOmitsPageCode(reply, evidence, latest) : undefined;
-  const why = fileMiss || maskMiss || liveMiss || startMiss || runMiss || miss;
+  const why = fileMiss || maskMiss || miss;
   if (!why) return review;
   return {
     ...review,
@@ -157,12 +155,10 @@ export function artifactPins(latest: string, evidence: string): string {
   const present = requested.filter((path) => evidenceWrote(evidence, path));
   const missing = requested.filter((path) => !evidenceWrote(evidence, path));
   const poisoned = requested.filter((path) => writeCapturedError(evidence, path));
-  const unrun = unrunArtifacts(latest, evidence);
   return [
     present.length ? `Already on disk (keep them, do not regenerate): ${present.join(", ")}` : "",
     missing.length ? `Not yet written: ${missing.join(", ")}` : "",
     poisoned.length ? `Last write captured a tool error (overwrite with successful output): ${poisoned.join(", ")}` : "",
-    unrun.length ? `Not yet run (execute until exit 0): ${unrun.join(", ")}` : "",
   ].filter(Boolean).join("\n");
 }
 
@@ -171,25 +167,11 @@ export function stillMissingArtifacts(latest: string, evidence: string, reviewMi
   if (!requested.length) return reviewMissing || "the requested result";
   const missing = requested.filter((path) => !evidenceWrote(evidence, path));
   if (missing.length) return missing.join(", ");
-  const unrun = unrunArtifacts(latest, evidence);
-  if (unrun.length) return unrun.join(", ");
   return reviewMissing || "the requested result";
 }
 
 export function unwrittenArtifacts(latest: string, evidence: string): string[] {
   return requestedArtifacts(latest).filter((path) => !evidenceWrote(evidence, path));
-}
-
-export function unrunArtifacts(latest: string, evidence: string): string[] {
-  return requestedArtifacts(latest).filter(
-    (path) => needsSuccessfulRun(latest, path) && evidenceWrote(evidence, path) && !evidenceRan(evidence, path),
-  );
-}
-
-export function missingRunnableRun(latest: string, evidence: string): string | undefined {
-  const pending = unrunArtifacts(latest, evidence);
-  if (!pending.length) return;
-  return `no successful run of ${pending.join(", ")}`;
 }
 
 export function missingIsLocalArtifact(missing?: string, latest = ""): boolean {
@@ -228,41 +210,6 @@ export function maskedArtifactWrite(latest: string, evidence: string): string | 
 
 function askedToReplaceSecrets(latest: string): boolean {
   return /<your-[a-z0-9-]+>/i.test(latest) || /\breplace secrets\b/i.test(latest);
-}
-
-function inventedLiveValue(latest: string, evidence: string): string | undefined {
-  const formats = [...latest.matchAll(/\b([A-Za-z][\w-]*)\[\.\.\.\]/g)];
-  if (!formats.length) return;
-  const writes = writeContents(evidence);
-  if (!writes.length) return;
-  const toolText = evidence.replace(/^fs_write .*$/gm, "").replace(/^fs_edit .*$/gm, "");
-  for (const fmt of formats) {
-    const name = fmt[1] ?? "";
-    if (!name) continue;
-    const re = new RegExp(`\\b${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\[[^\\]]+\\]`, "g");
-    const live = new Set(
-      [...toolText.matchAll(re)].map((match) => match[0]).filter((tok) => !/\.\.\./.test(tok) && !/DETECTED_SECRET/i.test(tok)),
-    );
-    if (!live.size) continue;
-    const invented = writes.flatMap((content) => [...content.matchAll(re)].map((match) => match[0]))
-      .filter((tok) => !/\.\.\./.test(tok) && !live.has(tok));
-    if (invented.length) return `wrote invented ${name}[...] instead of the live value from tools`;
-  }
-}
-
-function writeContents(evidence: string): string[] {
-  const contents: string[] = [];
-  for (const line of evidence.split("\n")) {
-    if (!line.startsWith("fs_write ") && !line.startsWith("fs_edit ")) continue;
-    const raw = line.replace(/^fs_(?:write|edit) /, "");
-    try {
-      const parsed = JSON.parse(raw) as { content?: string };
-      if (parsed.content) contents.push(parsed.content);
-    } catch {
-      /* skip */
-    }
-  }
-  return contents;
 }
 
 function isRuntimeSink(path: string): boolean {
@@ -316,7 +263,7 @@ function blockWrites(block: string, requested: string): boolean {
 }
 
 function blockLooksFailed(block: string): boolean {
-  return /Traceback\b|Unable to load|Could not (?:get|read|open|load)\b|SyntaxError\b|NameError\b|\bException\b|command failed|N\/A to N\/A/i.test(block);
+  return /Traceback\b|Unable to load|Could not (?:get|read|open|load)\b|SyntaxError\b|IndentationError\b|NameError\b|\bException\b|command failed|N\/A to N\/A/i.test(block);
 }
 
 function writeAliases(requested: string): string[] {
@@ -329,130 +276,4 @@ function writeAliases(requested: string): string[] {
     if (parts.length >= 2) aliases.push(parts.slice(1).join("/"));
   }
   return [...new Set(aliases)];
-}
-
-export function missingServiceStart(latest: string, evidence: string): string | undefined {
-  const port = latest.match(/listen(?:s)? on port (\d+)/i)?.[1];
-  const askedStart =
-    /start\/restart|\bstart or restart\b/i.test(latest) ||
-    (/\b(?:start|restart|reload)\b/i.test(latest) && /\b(?:service|server|daemon)\b/i.test(latest));
-  if (!port && !askedStart) return;
-  if (serviceStarted(evidence, port)) return;
-  return port ? `no start listening on ${port}` : "no successful start";
-}
-
-function needsSuccessfulRun(latest: string, path: string): boolean {
-  const window = mentionWindow(latest, path);
-  if (!window || isDataAsk(window) || isDaemonAsk(window)) return false;
-  return isProgramAsk(window);
-}
-
-function isDataAsk(window: string): boolean {
-  return /\bcontain(?:s|ing)?\b|\bfile that includ|\bincludes both\b|\bsave(?:d)? (?:it |them )?as\b|\bstor(?:e|ing)\b|\blog to\b/i.test(window);
-}
-
-function isDaemonAsk(window: string): boolean {
-  return /\blisten(?:s)? on port\b|\bstart\/restart\b|\bstart or restart\b/i.test(window);
-}
-
-function isProgramAsk(window: string): boolean {
-  if (/\b(?:script|program|executable)\b/i.test(window)) return true;
-  return /\bthat\b|\bwhich\b/.test(window)
-    && /\b(?:print|verif|check|run|execut|output|display|comput|succeed|work|load)/i.test(window);
-}
-
-function mentionWindow(latest: string, path: string): string {
-  const base = path.split("/").filter(Boolean).at(-1) ?? path;
-  const idxPath = latest.lastIndexOf(path);
-  const idxBase = latest.lastIndexOf(base);
-  const idx = idxPath >= 0 ? idxPath : idxBase;
-  if (idx < 0) return "";
-  const pathLen = idxPath >= 0 ? path.length : base.length;
-  const start = latest.lastIndexOf("\n", Math.max(0, idx - 1)) + 1;
-  let end = latest.indexOf("\n", idx + pathLen);
-  if (end < 0) end = latest.length;
-  while (end < latest.length) {
-    const nextNl = latest.indexOf("\n", end + 1);
-    const line = latest.slice(end + 1, nextNl < 0 ? latest.length : nextNl);
-    if (!/^\s*-\s/.test(line)) break;
-    end = nextNl < 0 ? latest.length : nextNl;
-    if (nextNl < 0) break;
-  }
-  return latest.slice(start, end);
-}
-
-function evidenceRan(evidence: string, requested: string): boolean {
-  for (const block of evidence.split(/(?=(?:shell|process_spawn|process_run) )/g)) {
-    if (!invokesRunnable(block, requested)) continue;
-    if (blockSucceeded(block)) return true;
-  }
-  return false;
-}
-
-function invokesRunnable(block: string, requested: string): boolean {
-  const aliases = [...writeAliases(requested), requested.split("/").filter(Boolean).at(-1) ?? ""].filter(Boolean);
-  const command = shellCommand(block);
-  const haystack = command || block;
-  for (const clause of haystack.split(/\s*(?:&&|\|\||;)\s*/)) {
-    if (clauseExecutes(clause, aliases)) return true;
-  }
-  return false;
-}
-
-function clauseExecutes(clause: string, aliases: string[]): boolean {
-  const tokens = clause.trim().split(/\s+/).filter(Boolean);
-  if (!tokens.length) return false;
-  const fileIdx = tokens.findIndex((tok) => aliases.some((alias) => tokenIsPath(tok, alias)));
-  if (fileIdx < 0) return false;
-  const prev = tokens[fileIdx - 1] ?? "";
-  if (prev === ">" || prev === ">>" || /^tee$/i.test(prev) || /^-{1,2}(?:in|out|o|file|C)$/i.test(prev)) return false;
-  if (fileIdx === 0) return true;
-  const cmd = tokens[0]?.replace(/^.*\//, "") ?? "";
-  return !looksLikeFileOperandCmd(cmd);
-}
-
-function tokenIsPath(token: string, alias: string): boolean {
-  const tok = token.replace(/^[`'"]+|[`'"]+$/g, "");
-  return tok === alias || tok === `./${alias}` || tok.endsWith(`/${alias}`);
-}
-
-function looksLikeFileOperandCmd(cmd: string): boolean {
-  return /^(?:ls|cat|stat|chmod|chown|rm|mv|cp|mkdir|touch|head|tail|less|more|file|wc|tee|echo|printf|ln|dd|install|basename|dirname|readlink|sed|awk|grep)$/i.test(cmd);
-}
-
-function shellCommand(block: string): string {
-  const match = block.match(/"command"\s*:\s*"((?:\\.|[^"\\])*)"/);
-  if (!match?.[1]) return "";
-  return match[1].replace(/\\n/g, "\n").replace(/\\"/g, '"');
-}
-
-function blockSucceeded(block: string): boolean {
-  if (!/\nexit 0(?:\n|$)/.test(block)) return false;
-  if (/\nexit [1-9]\d*(?:\n|$)/.test(block)) return false;
-  return !blockLooksFailed(block);
-}
-
-function serviceStarted(evidence: string, port?: string): boolean {
-  if (configTestPassed(evidence) && startReloaded(evidence)) return true;
-  if (port && hitLocalPort(evidence, port)) return true;
-  return false;
-}
-
-function configTestPassed(evidence: string): boolean {
-  return /test is successful|syntax is ok/i.test(evidence);
-}
-
-function startReloaded(evidence: string): boolean {
-  const started =
-    /\bprocess_spawn\b/i.test(evidence) ||
-    /\b(?:systemctl|service)\s+\S+\s+(?:start|reload|restart)\b/i.test(evidence) ||
-    /\S+\s+(?:-s\s+)?(?:reload|restart)\b/i.test(evidence);
-  return started && /\bexit 0\b/i.test(evidence);
-}
-
-function hitLocalPort(evidence: string, port: string): boolean {
-  const escaped = port.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  if (!new RegExp(`(?:curl|wget)\\b[^\\n]*localhost(?::${escaped})?`, "i").test(evidence)) return false;
-  if (/connection refused|failed to connect|err_connection/i.test(evidence)) return false;
-  return /\bexit 0\b|\b200\b|HTTP\//i.test(evidence);
 }

@@ -8,7 +8,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { denyShell } from "../../domain/guard/ShellPolicy.ts";
 import type { WorkspacePort } from "../../application/ports.ts";
 import { wrapSandboxed } from "../sandbox/OsSandbox.ts";
@@ -178,7 +178,7 @@ export class NodeWorkspace implements WorkspacePort {
     const root = resolve(this.root);
     const abs = isAbsolute(raw) || raw.startsWith("/")
       ? resolve(raw)
-      : resolve(root, stripWorktreePrefix(root, raw.replace(/^\/+/, "")));
+      : resolve(root, raw.replace(/^\/+/, ""));
     const relToRoot = relative(root, abs);
     if (relToRoot.startsWith("..") || isAbsolute(relToRoot)) {
       throw new Error("path escapes worktree");
@@ -204,13 +204,6 @@ export class NodeWorkspace implements WorkspacePort {
       }
     }
   }
-}
-
-function stripWorktreePrefix(root: string, rel: string): string {
-  const parts = rel.split("/").filter(Boolean);
-  const base = basename(root);
-  if (parts[0] === base && parts.length > 1) return parts.slice(1).join("/");
-  return rel;
 }
 
 function shellInvocation(command: string): { command: string; args: string[] } {

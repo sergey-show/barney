@@ -7,18 +7,14 @@ test("wanting without liking is one extra path this message, not session age or 
   expect(wantingWithoutLiking({ extraApproaches: 4, passed: true })).toBe(false);
 });
 
-test("wanting does not stop while requested artifacts are still unwritten or unrun", () => {
+test("wanting does not stop while requested artifacts are still unwritten", () => {
   expect(wantingWithoutLiking({
     extraApproaches: 3,
-    leftover: { unwritten: ["/app/program.py"], unrun: [] },
-  })).toBe(false);
-  expect(wantingWithoutLiking({
-    extraApproaches: 3,
-    leftover: { unwritten: [], unrun: ["/app/filter.py"] },
+    leftover: { unwritten: ["/app/program.py"] },
   })).toBe(false);
   expect(wantingWithoutLiking({
     extraApproaches: 1,
-    leftover: { unwritten: [], unrun: [] },
+    leftover: { unwritten: [] },
   })).toBe(true);
 });
 

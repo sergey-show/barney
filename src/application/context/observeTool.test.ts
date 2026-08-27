@@ -27,6 +27,18 @@ test("saturates a tool family after two wants without liking", () => {
   expect(blocked.out).toContain("wanting without liking");
 });
 
+test("fs stays open when leftover files are still unwritten", () => {
+  const familyFails = new Map<string, number>([["fs", 2]]);
+  const write = applyToolObserve(
+    { name: "fs_write", arguments: { path: "/app/check_cert.py", content: "print(1)" } },
+    "wrote",
+    new Set(),
+    familyFails,
+    { leftoverUnwritten: ["/app/check_cert.py"] },
+  );
+  expect(write.skip).toBe(false);
+});
+
 test("does not treat a docs page about timeout as a connection error", () => {
   const page = "opened https://bun.com/docs/runtime/networking/fetch\ntitle: Fetch\nuse AbortSignal.timeout for a fetch timeout";
   expect(classifyToolResult(page).error).toBe(false);

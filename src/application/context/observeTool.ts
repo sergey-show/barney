@@ -71,6 +71,7 @@ export function applyToolObserve(
   rawOut: string,
   failed: Set<string>,
   familyFails?: Map<string, number>,
+  opts?: { leftoverUnwritten?: string[] },
 ): { out: string; skip: boolean } {
   if (call.name === "shell" && SHELL_TALK.test(String(call.arguments?.command ?? ""))) {
     const sig = toolSignature(call);
@@ -81,7 +82,8 @@ export function applyToolObserve(
     };
   }
   const family = familyKey(call);
-  if (familyFails && familySaturated(familyFails.get(family) ?? 0) && !FAMILY_EXEMPT.has(call.name)) {
+  const fsStillNeeded = isFsTool(call.name) && (opts?.leftoverUnwritten?.length ?? 0) > 0;
+  if (familyFails && familySaturated(familyFails.get(family) ?? 0) && !FAMILY_EXEMPT.has(call.name) && !fsStillNeeded) {
     return {
       skip: true,
       out: `BLOCKED: wanting without liking in ${family}. Change tool family, not another ${call.name}.`,

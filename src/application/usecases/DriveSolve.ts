@@ -5,10 +5,10 @@ import { bindToolArgs, goalAnchors } from "../context/bindAnchor.ts";
 import { bumpBacklog, failureClass, formatBacklog, learnedSkillDraft, parseBacklog } from "../context/failureClass.ts";
 import { emptyTrail, lessonRule, noteTrail, pickRules, isRecapLesson, type LessonTrail } from "../context/lessonRule.ts";
 import { sealReply } from "../context/sealReply.ts";
-import { judgeReview, artifactPins, missingIsLocalArtifact, requestedArtifacts, stillMissingArtifacts, unrunArtifacts, unwrittenArtifacts } from "../context/reviewJudge.ts";
+import { judgeReview, artifactPins, missingIsLocalArtifact, requestedArtifacts, stillMissingArtifacts, unwrittenArtifacts } from "../context/reviewJudge.ts";
 import { applyToolObserve, classifyToolResult } from "../context/observeTool.ts";
 import { clipText, packSession, redactSecrets } from "../context/packSession.ts";
-import { extractToolEvidence } from "../context/toolEvidence.ts";
+import { bindFsWriteArgs, extractToolEvidence } from "../context/toolEvidence.ts";
 import { visibleAssistantText } from "../../infrastructure/llm/visibleReply.ts";
 import { formatResearchBrief, runDeepResearch } from "../research/DeepResearch.ts";
 import { parseTurnRoute, ROUTE_RULES, shouldEscalateFromShort, type TurnRoute } from "../context/turnMode.ts";
@@ -479,7 +479,7 @@ export class DriveSolve {
     let last: ChatResult = { text: "", tokens: 0, usd: 0 };
     let tokens = 0;
     let usd = 0;
-    let keepWriting = false;
+    let keepWritingN = 0;
     for (let i = 0; i < MAX_TOOL_ROUNDS; i++) {
       if (signal?.aborted) throw new DomainError("aborted", "step interrupted");
       last = await this.completeRole(run, "coder", convo, { tools, signal });
@@ -497,22 +497,38 @@ export class DriveSolve {
       }
       if (!last.toolCalls?.length) {
         const leftover = leftoverWork(run.goal, artifactEvidence(run));
-        if (hasLeftover(leftover) && !keepWriting) {
-          keepWriting = true;
+        if (hasLeftover(leftover) && keepWritingN < 3) {
+          keepWritingN += 1;
           convo.push({ role: "assistant", content: last.text || "(no tool call)" });
-          convo.push({ role: "user", content: keepWritingNudge(leftover.unwritten, leftover.unrun) });
+          convo.push({
+            role: "user",
+            content: keepWritingNudge(
+              leftover.unwritten,
+              extractToolEvidence(...run.transcript.filter((item) => item.kind === "console").map((item) => item.text)),
+            ),
+          });
           continue;
         }
         break;
       }
       convo.push({ role: "assistant", content: last.text, toolCalls: last.toolCalls });
-      const anchors = packSession(run.transcript, run.goal).anchors;
+      const packed = packSession(run.transcript, run.goal);
+      const anchors = packed.anchors;
+      const toolEvidence = extractToolEvidence(
+        ...run.transcript.filter((item) => item.kind === "console").map((item) => item.text),
+      );
+      const leftoverNow = leftoverWork(run.goal, artifactEvidence(run));
       for (const rawCall of last.toolCalls) {
-        const call = { ...rawCall, arguments: bindToolArgs(rawCall.name, rawCall.arguments ?? {}, anchors) };
+        const bound = bindToolArgs(rawCall.name, rawCall.arguments ?? {}, anchors);
+        const call = {
+          ...rawCall,
+          arguments: bindFsWriteArgs(rawCall.name, bound, toolEvidence),
+        };
         if (signal?.aborted) throw new DomainError("aborted", "step interrupted");
-        const preview = applyToolObserve(call, "", failedCalls, familyFails);
+        const observeOpts = { leftoverUnwritten: leftoverNow.unwritten };
+        const preview = applyToolObserve(call, "", failedCalls, familyFails, observeOpts);
         const raw = preview.skip ? preview.out : clipToolOut(await this.dispatchTool(run, ws, call, signal, depth), `${run.goal}\n${userText}`);
-        const observed = preview.skip ? preview : applyToolObserve(call, raw, failedCalls, familyFails);
+        const observed = preview.skip ? preview : applyToolObserve(call, raw, failedCalls, familyFails, observeOpts);
         const out = observed.out;
         const failed = observed.skip || /BLOCKED:/.test(out) || classifyToolResult(out, call.name).error;
         noteTrail(lessonTrail, familyKey(call), failed);
@@ -550,7 +566,10 @@ export class DriveSolve {
       if (hasLeftover(leftover)) {
         last = {
           ...last,
-          text: keepWritingNudge(leftover.unwritten, leftover.unrun),
+          text: keepWritingNudge(
+            leftover.unwritten,
+            extractToolEvidence(...run.transcript.filter((item) => item.kind === "console").map((item) => item.text)),
+          ),
           tokens,
           usd,
         };
@@ -1148,7 +1167,7 @@ function haltAfterFail(
   review: Review,
   run: Run,
   extraApproaches: number,
-  leftover?: { unwritten: string[]; unrun: string[] },
+  leftover?: { unwritten: string[] },
   aborted?: boolean,
 ): HaltReason {
   return stopAfterFail(review, {
@@ -1185,21 +1204,21 @@ const RECOVERY_NUDGE = `No tool ran. Do the user's requested work now with real 
 If they asked for a file, fs_write the full markdown into the worktree.
 Do not output <action> tags. Do not only spawn. Do not describe the plan — execute it.`;
 
-function leftoverWork(goal: string, evidence: string): { unwritten: string[]; unrun: string[] } {
-  return { unwritten: unwrittenArtifacts(goal, evidence), unrun: unrunArtifacts(goal, evidence) };
+function leftoverWork(goal: string, evidence: string): { unwritten: string[] } {
+  return { unwritten: unwrittenArtifacts(goal, evidence) };
 }
 
-function hasLeftover(work: { unwritten: string[]; unrun: string[] }): boolean {
-  return work.unwritten.length > 0 || work.unrun.length > 0;
+function hasLeftover(work: { unwritten: string[] }): boolean {
+  return work.unwritten.length > 0;
 }
 
-function keepWritingNudge(unwritten: string[], unrun: string[]): string {
+function keepWritingNudge(unwritten: string[], evidence: string[] = []): string {
   const bits: string[] = [];
   if (unwritten.length) {
     bits.push(`Still missing on disk: ${unwritten.join(", ")}. Write only those files. If a prior redirect captured a tool error, overwrite with successful output. Copy live values from tool output. Do not invent DETECTED_SECRET tokens.`);
   }
-  if (unrun.length) {
-    bits.push(`Still unproven: ${unrun.join(", ")}. Run each with its interpreter, read stderr, fix the file, rerun until exit 0.`);
+  if (evidence.length) {
+    bits.push(`Pinned tool lines (copy exactly into the files):\n${evidence.map((line) => `- ${line}`).join("\n")}`);
   }
   bits.push("Tools are allowed.");
   return bits.join(" ");
@@ -1209,27 +1228,20 @@ const REVIEWER_SYSTEM = `Role: reviewer. Decide only whether the agent delivered
 
 Pass only if the latest user request is actually satisfied — the concrete outcome they wanted.
 Do not pass a workaround, approximation, plan-without-result, or "I used what was available".
-If the user asked for a specific action or fact (time, a file change, a command), that exact result must be present.
+If the user asked for a specific action or fact, that exact result must be present in the reply or on disk.
 
 Fail when:
 - the agent substituted a different result than asked
 - the answer is incomplete, evasive, or answers a different question
 - tools were available and the request required them, but they were not used
 - the agent only described what it would do
-- the agent truncated, guessed, or altered a fact that was already in the session
+- the agent truncated, guessed, or altered a fact that was already in tool or research evidence
 
-Fail when a concrete fact is not in the tool or research evidence.
 DETECTED_SECRET_<KIND>_<HASH> in tool output is a guard mask of a live secret still on disk — not a replacement the agent made. If the user asked for placeholders such as <your-aws-access-key-id>, those exact strings must appear as writes; the mask tokens are evidence the secret is still present.
 Fail when a newly written deliverable contains DETECTED_SECRET_* and the user asked for a live computed value. The mask is not that value.
-Fail when tool evidence already contains a live value matching a format the user named (token[...]), and the written file contains a different invented match. Copy the live value from tools.
-Fail when opened docs show a specific API and the reply uses a different one.
 Fail when a requested file was written by a redirect that captured a tool error (traceback, unable to load, could not read). Existence of that file is not a pass — overwrite it from successful output.
 If evidence lists files already on disk, do not claim they are missing. Fail only for what is still absent or wrong.
 Fail when the latest user message says the previous answer was wrong. In that case summary must include "operator rejected".
-Fail when the user asked to open or preview something and evidence has no successful open.
-Fail when the user asked to start a service or listen on a port and evidence has no successful start (passing config test plus start/reload, or a successful request to that port). A write of a listen directive is not a start.
-Fail when the user asked for a program that prints, verifies, checks, or otherwise produces a result, and evidence has no successful run of that program (interpreter invoking the file, exit 0, no traceback). A write of the file is not a run. A traceback in the same block is not a run even if the compound command exits 0.
-Do not pass a guess as a checked fact, a write as an open, or a write as a run.
 Use uncertain / gap / unknown_api when the task needs vendor docs, the web, or an API the agent has not looked up yet. Set needsResearch true in that case.
 JSON only. No chain-of-thought.
 

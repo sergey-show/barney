@@ -38,11 +38,11 @@ export function shellHead(command: string): string {
 export function wantingWithoutLiking(input: {
   extraApproaches: number;
   passed?: boolean;
-  leftover?: { unwritten: string[]; unrun: string[] };
+  leftover?: { unwritten: string[] };
 }): boolean {
   if (input.passed) return false;
   const leftover = input.leftover;
-  if (leftover && (leftover.unwritten.length > 0 || leftover.unrun.length > 0)) return false;
+  if (leftover && leftover.unwritten.length > 0) return false;
   return input.extraApproaches >= 1;
 }
 

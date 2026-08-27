@@ -6,9 +6,6 @@ export function draftPlan(input: { goal: string; latest: string; anchors: string
   const steps: string[] = [];
   if (url) steps.push(`Open the exact URL ${url} (copy it whole; do not guess)`);
   if (markers[0]) steps.push(`Marker from past fail (apply before guessing): ${clip(markers[0], 140)}`);
-  if (/tls|ssl|cert|self[- ]signed/i.test(markerBlob)) {
-    steps.push("On TLS error retry the same URL with shell; do not invent another host");
-  }
   if (/login|password|user(name)?/i.test(text)) {
     steps.push("Sign in with credentials already given in this session; do not store the password");
   }

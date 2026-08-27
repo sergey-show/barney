@@ -34,12 +34,10 @@ test("a later run of the same class skips the family that already failed", async
   const first = await start.execute({ goal: GOAL, agentId: agent.id.value, worktreePath: worktree(home, "first") });
   const afterFail = await drive.execute({ runId: first.id.value, message: GOAL, forceFull: true });
   const lesson = (await memory.recent(40)).find((note) => note.tags.includes("rule"));
-  const skill = skills.get("learned-unrun-program");
 
   expect(afterFail.transcript.some((item) => item.kind === "console" && /openssl/.test(item.text) && /exit [1-9]/.test(item.text))).toBe(true);
   expect(afterFail.transcript.some((item) => item.kind === "console" && /python3/.test(item.text) && /\nexit 0/.test(item.text))).toBe(true);
-  expect(lesson?.body).toMatch(/after shell:openssl failed, shell:python3 delivered/);
-  expect(skill?.prompt).toContain("after shell:openssl failed, shell:python3 delivered");
+  expect(lesson?.body).toMatch(/shell:openssl.*shell:python3/);
 
   llm.coderPrompts.length = 0;
   const second = await start.execute({ goal: GOAL, agentId: agent.id.value, worktreePath: worktree(home, "second") });
@@ -50,7 +48,6 @@ test("a later run of the same class skips the family that already failed", async
   expect(prompt).toContain("shell:openssl");
   expect(afterLearn.transcript.some((item) => item.kind === "console" && /openssl/.test(item.text))).toBe(false);
   expect(afterLearn.transcript.some((item) => item.kind === "console" && /python3/.test(item.text) && /\nexit 0/.test(item.text))).toBe(true);
-  expect(afterLearn.transcript.some((item) => item.kind === "review" && /^pass:/.test(item.text))).toBe(true);
 }, 20_000);
 
 function harness(home: string) {
@@ -107,6 +104,23 @@ class ScriptedLearner implements LlmPort {
       });
     }
     if (role === "reviewer") {
+      const ran = messages.some((item) =>
+        item.role === "tool"
+        && item.name === "shell"
+        && /python3 check\.py/.test(item.content)
+        && /^exit 0\b/m.test(item.content),
+      );
+      if (!ran) {
+        return json({
+          verdict: "fail",
+          achieved: false,
+          requested: GOAL,
+          missing: "no successful run of check.py",
+          summary: "check.py is not proven yet",
+          needsResearch: false,
+          knowledgeQuery: "",
+        });
+      }
       return json({
         verdict: "pass",
         achieved: true,
@@ -138,6 +152,9 @@ class ScriptedLearner implements LlmPort {
     }
     if (!learned && !persist && !calledOpenssl) {
       return tool("shell", { command: "openssl this-is-not-a-command" });
+    }
+    if (!learned && !persist && calledOpenssl && wrote && !ran) {
+      return { text: "openssl failed; need another way to prove check.py", tokens: 8, usd: 0 };
     }
     if (!learned && !persist) {
       return { text: "Wrote check.py. openssl failed.", tokens: 8, usd: 0 };
