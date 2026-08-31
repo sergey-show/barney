@@ -20,6 +20,8 @@ type Args = {
   skipGh: boolean;
   skipBin: boolean;
   allowDirty: boolean;
+  title: string | undefined;
+  notes: string | undefined;
 };
 
 function parseArgs(argv: string[]): Args {
@@ -31,6 +33,8 @@ function parseArgs(argv: string[]): Args {
     skipGh: false,
     skipBin: false,
     allowDirty: false,
+    title: undefined,
+    notes: undefined,
   };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i] ?? "";
@@ -51,10 +55,20 @@ function parseArgs(argv: string[]): Args {
       args.version = argv[++i];
     } else if (arg.startsWith("--version=")) {
       args.version = arg.slice(10);
+    } else if (arg === "--title") {
+      args.title = argv[++i];
+    } else if (arg.startsWith("--title=")) {
+      args.title = arg.slice(8);
+    } else if (arg === "--notes") {
+      args.notes = argv[++i];
+    } else if (arg.startsWith("--notes=")) {
+      args.notes = arg.slice(8);
     } else if (arg === "--help" || arg === "-h") {
       process.stdout.write(`Usage: bun run scripts/release.ts [options]
   --bump patch|minor|major   bump from package.json
   --version X.Y.Z            set this version
+  --title TEXT               GitHub release title (default: vX.Y.Z)
+  --notes TEXT               GitHub release notes (default: commit log)
   --dry-run                  build and pack only; no publish, tag, or gh
   --skip-npm                 skip npm publish
   --skip-bin                 skip compiled binaries
@@ -196,8 +210,11 @@ function main(): void {
     return;
   }
 
-  const notes = releaseNotes(version);
-  if (dirtyFiles().includes("package.json") || String(pkg.version) !== version) {
+  const notes = args.notes?.trim() || releaseNotes(version);
+  const title = args.title?.trim() || tag;
+  // Release script edits are local tooling; keep the version bump commit clean.
+  const releaseDirty = dirtyFiles().filter((path) => path !== "scripts/release.ts");
+  if (releaseDirty.includes("package.json") || String(pkg.version) !== version) {
     run(["git", "add", "package.json"]);
     run(["git", "commit", "-m", `Release ${tag}`]);
   }
@@ -212,7 +229,7 @@ function main(): void {
     "create",
     tag,
     "--title",
-    tag,
+    title,
     "--notes",
     notes,
     ...assets,
