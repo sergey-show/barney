@@ -7,6 +7,10 @@ export function bindUrl(url: string, anchors: string[]): string {
   if (!raw) return raw;
   const http = unique(anchors.filter((item) => /^https?:\/\//i.test(item)));
   if (http.some((anchor) => sameUrl(raw, anchor))) return raw;
+  const shortPath = expandShortPathId(raw, http);
+  if (shortPath) return shortPath;
+  // Complete `/news/8` must not be upgraded to an unrelated `/articles/1070220` on the same host.
+  if (isShortNumericPathId(raw) && isCompleteUrl(raw) && !looksBroken(raw)) return raw;
   const longer = http.find((anchor) => sharesStem(raw, anchor) && digits(anchor).length > digits(raw).length);
   if (longer) return longer;
   if (!looksBroken(raw) && isCompleteUrl(raw)) return raw;
@@ -44,6 +48,42 @@ function looksBroken(url: string): boolean {
     return false;
   } catch {
     return true;
+  }
+}
+
+/** `/news/8` → `/news/1070220` when the longer id is a session anchor on the same host+prefix. */
+function expandShortPathId(url: string, anchors: string[]): string | undefined {
+  try {
+    const parsed = new URL(url);
+    const parts = parsed.pathname.split("/").filter(Boolean);
+    const last = parts.at(-1) ?? "";
+    if (!/^\d{1,4}$/.test(last)) return;
+    const prefix = `/${parts.slice(0, -1).join("/")}/`;
+    return anchors.find((anchor) => {
+      try {
+        const other = new URL(anchor);
+        if (other.hostname !== parsed.hostname) return false;
+        const otherParts = other.pathname.split("/").filter(Boolean);
+        const otherLast = otherParts.at(-1) ?? "";
+        if (!/^\d{5,}$/.test(otherLast)) return false;
+        if (otherLast.length <= last.length) return false;
+        const otherPrefix = `/${otherParts.slice(0, -1).join("/")}/`;
+        return otherPrefix === prefix;
+      } catch {
+        return false;
+      }
+    });
+  } catch {
+    return;
+  }
+}
+
+function isShortNumericPathId(url: string): boolean {
+  try {
+    const last = new URL(url).pathname.split("/").filter(Boolean).at(-1) ?? "";
+    return /^\d{1,4}$/.test(last);
+  } catch {
+    return false;
   }
 }
 

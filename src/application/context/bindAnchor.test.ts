@@ -25,3 +25,9 @@ test("goalAnchors keep only http facts", () => {
   const found = goalAnchors("открой http://127.0.0.1:7331/ и скажи URL");
   expect(found.some((item) => item.includes("127.0.0.1:7331"))).toBe(true);
 });
+
+test("expands a truncated numeric path id from a session anchor", () => {
+  const full = "https://habr.com/ru/articles/1070220/";
+  expect(bindUrl("https://habr.com/ru/articles/8", [full])).toBe(full);
+  expect(bindUrl("https://habr.com/ru/news/8", [full])).toBe("https://habr.com/ru/news/8");
+});

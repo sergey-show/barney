@@ -1,11 +1,11 @@
 import { expect, test } from "bun:test";
 import { familyKey } from "./controlLoop.ts";
-import { applyToolObserve, classifyToolResult, toolSignature } from "./observeTool.ts";
+import { applyToolObserve, attachObserve, classifyToolResult, toolSignature } from "./observeTool.ts";
 
-test("classifies TLS and blocks the exact same call", () => {
+test("classifies harness errors and blocks the exact same call", () => {
   const call = { name: "browser_open", arguments: { url: "https://10.0.0.120/ui/" } };
   expect(toolSignature(call)).toContain("10.0.0.120");
-  expect(classifyToolResult("Error: UNABLE_TO_VERIFY_LEAF_SIGNATURE").observe).toMatch(/same URL|shell/i);
+  expect(classifyToolResult("Error: UNABLE_TO_VERIFY_LEAF_SIGNATURE").observe).toMatch(/change tool/i);
   const failed = new Set<string>();
   const first = applyToolObserve(call, "Error: UNABLE_TO_VERIFY_LEAF_SIGNATURE", failed);
   expect(first.skip).toBe(false);
@@ -27,8 +27,11 @@ test("saturates a tool family after two wants without liking", () => {
   expect(blocked.out).toContain("wanting without liking");
 });
 
-test("fs stays open when leftover files are still unwritten", () => {
-  const familyFails = new Map<string, number>([["fs", 2]]);
+test("fs and shell stay open when leftover files are still unwritten", () => {
+  const familyFails = new Map<string, number>([
+    ["fs", 2],
+    ["shell:python3", 2],
+  ]);
   const write = applyToolObserve(
     { name: "fs_write", arguments: { path: "/app/check_cert.py", content: "print(1)" } },
     "wrote",
@@ -37,6 +40,40 @@ test("fs stays open when leftover files are still unwritten", () => {
     { leftoverUnwritten: ["/app/check_cert.py"] },
   );
   expect(write.skip).toBe(false);
+  const run = applyToolObserve(
+    { name: "shell", arguments: { command: "python3 /app/check_cert.py" } },
+    "ok",
+    new Set(),
+    familyFails,
+    { leftoverUnwritten: ["/app/check_cert.py"] },
+  );
+  expect(run.skip).toBe(false);
+});
+
+test("ModuleNotFoundError is a tool fail, not host unreachable", () => {
+  const out = [
+    "exit 1",
+    "Traceback (most recent call last):",
+    '  File "/app/check.py", line 2, in <module>',
+    "    from cryptography import x509",
+    "ModuleNotFoundError: No module named 'cryptography'",
+  ].join("\n");
+  const classified = classifyToolResult(out, "shell");
+  expect(classified.error).toBe(true);
+  expect(classified.observe).toMatch(/change tool/i);
+  expect(classified.observe).not.toMatch(/unreachable|TLS/i);
+});
+
+test("stderr dup 2>&1 is not treated as a file redirect", () => {
+  const call = { name: "shell", arguments: { command: "python3 /app/check.py 2>&1" } };
+  const out = applyToolObserve(
+    call,
+    "exit 1\nModuleNotFoundError: No module named 'x'",
+    new Set(),
+  );
+  expect(out.out).toContain("Observe:");
+  expect(out.out).toMatch(/change tool/i);
+  expect(out.out).not.toMatch(/redirect in this command may have written/i);
 });
 
 test("does not treat a docs page about timeout as a connection error", () => {
@@ -68,8 +105,9 @@ test("does not treat a successful cert CLI as a network TLS failure", () => {
   expect(familyFails.get("shell") ?? 0).toBe(0);
 });
 
-test("classifies TLS from error codes, not certificate prose", () => {
-  expect(classifyToolResult("error: UNABLE_TO_VERIFY_LEAF_SIGNATURE").observe).toMatch(/same URL|shell/i);
+test("does not classify prose without exit code or error prefix", () => {
+  expect(classifyToolResult("UNABLE_TO_VERIFY_LEAF_SIGNATURE without prefix").error).toBe(false);
+  expect(classifyToolResult("error: UNABLE_TO_VERIFY_LEAF_SIGNATURE").error).toBe(true);
   expect(classifyToolResult("exit 35\ncurl: (35) OpenSSL SSL_connect: SSL_ERROR_SYSCALL").error).toBe(true);
   expect(classifyToolResult("error: net::ERR_CERT_AUTHORITY_INVALID").error).toBe(true);
   expect(classifyToolResult("exit 1\nreq: Use -help for summary.").error).toBe(true);
@@ -242,6 +280,75 @@ test("shell redirect that fails after > tells the model to ls, not retry", () =>
   expect(seen.out).toMatch(/redirect|ls the target/i);
 });
 
+test("shell failure on a restoreable script hints fs_restore", () => {
+  const call = { name: "shell", arguments: { command: "python3 /app/check_cert.py" } };
+  const out = applyToolObserve(
+    call,
+    "exit 1\nSyntaxError: expected ':'",
+    new Set(),
+    undefined,
+    { restorePaths: ["/app/check_cert.py"] },
+  );
+  expect(out.out).toMatch(/fs_restore \/app\/check_cert\.py/);
+});
+
+test("failed fs_edit hints restore or full write from ledger", () => {
+  const call = { name: "fs_edit", arguments: { path: "/app/check_cert.py", old: "bad", new: "good" } };
+  const out = applyToolObserve(
+    call,
+    "error: old text not found in /app/check_cert.py",
+    new Set(),
+    undefined,
+    { failedEditPaths: ["/app/check_cert.py"], restorePaths: ["/app/check_cert.py"] },
+  );
+  expect(out.out).toMatch(/fs_restore \/app\/check_cert\.py/);
+  expect(out.out).toMatch(/fs_write the full file/);
+});
+
+test("retry fs_edit after prior failure gets recovery hint from ledger", () => {
+  const call = { name: "fs_edit", arguments: { path: "/app/check_cert.py", old: "x", new: "y" } };
+  const out = applyToolObserve(
+    call,
+    "edited /app/check_cert.py",
+    new Set(),
+    undefined,
+    { failedEditPaths: ["/app/check_cert.py"], restorePaths: ["/app/check_cert.py"] },
+  );
+  expect(out.out).toMatch(/fs_edit failed on this path/);
+});
+
+test("shell referencing a checkFailed path gets do-not-chain hint", () => {
+  const out = applyToolObserve(
+    { name: "shell", arguments: { command: "python3 /app/broken.py" } },
+    "exit 1\nSyntaxError",
+    new Set(),
+    undefined,
+    { checkFailedPaths: ["/app/broken.py"], restorePaths: ["/app/broken.py"] },
+  );
+  expect(out.out).toMatch(/Check failed on \/app\/broken\.py/);
+  expect(out.out).toMatch(/do not chain more patches/);
+});
+
+test("shell that does not touch checkFailed paths gets no ledger dump", () => {
+  const out = applyToolObserve(
+    { name: "shell", arguments: { command: "ls /tmp" } },
+    "exit 1\nls: cannot access",
+    new Set(),
+    undefined,
+    { checkFailedPaths: ["/app/broken.py"] },
+  );
+  expect(out.out).not.toMatch(/broken\.py/);
+});
+
+test("attachObserve keeps a single Observe line", () => {
+  const once = attachObserve("wrote /app/x.py (10 chars)", "Validate this file yourself.");
+  expect(once.match(/Observe:/g)?.length).toBe(1);
+  const twice = attachObserve(once, "Validate again — look up how to run it.");
+  expect(twice.match(/Observe:/g)?.length).toBe(1);
+  expect(twice).toContain("Validate again");
+  expect(twice).not.toContain("Validate this file yourself");
+});
+
 test("shell command with leaked commentary is not executed", () => {
   const failed = new Set<string>();
   const familyFails = new Map<string, number>();
@@ -255,7 +362,7 @@ test("shell command with leaked commentary is not executed", () => {
     familyFails,
   );
   expect(leaked.skip).toBe(true);
-  expect(leaked.out).toMatch(/commentary|clean one-liner/i);
+  expect(leaked.out).toMatch(/commentary|clean one-liner|single line/i);
   expect(familyFails.get("shell") ?? 0).toBe(0);
   const clean = applyToolObserve(
     { name: "shell", arguments: { command: "python3 /work/check.py" } },

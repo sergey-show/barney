@@ -108,6 +108,16 @@ export const FILE_TOOLS: ToolSpec[] = [
       required: ["path"],
     },
   },
+  {
+    name: "fs_restore",
+    description:
+      "Restore a worktree file to the last successfully written version from this session, or to the content from immediately before the latest edit. Use after a bad fs_write/fs_edit. Not a git checkout — the agent still validates the file itself.",
+    parameters: {
+      type: "object",
+      properties: { path: { type: "string", description: "File path previously written in this session" } },
+      required: ["path"],
+    },
+  },
 ];
 
 export const SHELL_TOOL: ToolSpec = {

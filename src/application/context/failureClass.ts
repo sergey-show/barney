@@ -1,3 +1,5 @@
+import type { FailureKind } from "../../domain/run/Review.ts";
+
 export type BacklogRow = {
   klass: string;
   count: number;
@@ -5,18 +7,11 @@ export type BacklogRow = {
 };
 
 export function failureClass(input: {
-  goal?: string;
-  missing?: string;
-  summary?: string;
+  kind?: FailureKind;
   aborted?: boolean;
 }): string {
   if (input.aborted) return "aborted-unfinished";
-  const text = `${input.missing ?? ""} ${input.summary ?? ""}`;
-  if (/DETECTED_SECRET|live value/i.test(text)) return "masked-deliverable";
-  if (/no successful run|not yet run/i.test(text)) return "unrun-program";
-  if (/captured a tool error|last write captured/i.test(text)) return "captured-error";
-  if (/no write of|not yet written/i.test(text)) return "missing-artifact";
-  return "general";
+  return input.kind ?? "general";
 }
 
 export function learnedSkillDraft(klass: string, path: {

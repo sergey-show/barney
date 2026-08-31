@@ -37,6 +37,12 @@ export function peelUntaggedThinking(text: string): { text: string; thinking: st
   chunks.push(prefix.thinking);
   body = prefix.text;
 
+  const mixed = peelMixedScript(body);
+  if (mixed) {
+    chunks.push(mixed.thinking);
+    body = mixed.text;
+  }
+
   const suffix = peelSuffix(body);
   chunks.push(suffix.thinking);
   body = scrubVisible(suffix.text);
@@ -100,6 +106,19 @@ function peelPrefix(trimmed: string): { text: string; thinking: string } {
     return { text: trimmed, thinking: "" };
   }
   return { text: visible, thinking };
+}
+
+/** Single blob: Latin thinking opener, then Cyrillic user-facing answer. */
+function peelMixedScript(text: string): { text: string; thinking: string } | null {
+  const trimmed = text.trim();
+  if (!THINK_OPEN.test(trimmed.slice(0, 120))) return null;
+  const cyr = trimmed.search(/[А-ЯЁа-яё]{4,}/);
+  if (cyr < 40) return null;
+  const thinking = trimmed.slice(0, cyr).trim();
+  const visible = trimmed.slice(cyr).trim();
+  if (thinking.length < 40 || visible.length < 8) return null;
+  if (!isMostlyLatin(thinking)) return null;
+  return { thinking, text: visible };
 }
 
 function peelSuffix(text: string): { text: string; thinking: string } {

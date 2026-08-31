@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { clipText } from "./packSession.ts";
-import { artifactPins, judgeReview, missingIsLocalArtifact, parseReview, requestedArtifacts, stillMissingArtifacts } from "./reviewJudge.ts";
+import { artifactPins, inferFailureKind, judgeReview, missingIsLocalArtifact, parseReview, requestedArtifacts, stillMissingArtifacts } from "./reviewJudge.ts";
 
 test("parseReview stringifies array missing so clipText does not crash", () => {
   const review = parseReview(
@@ -14,13 +14,115 @@ test("parseReview stringifies array missing so clipText does not crash", () => {
 
 test("parseReview does not treat chain-of-thought 'pass' as a verdict", () => {
   const review = parseReview("Wait, I need to decide. A pass would be wrong because the table was cut off.");
-  expect(review.verdict).toBe("fail");
-  expect(review.needsResearch).toBe(false);
+  expect(review.verdict).toBe("uncertain");
+  expect(review.needsResearch).toBe(true);
 });
 
-test("judgeReview trusts the reviewer JSON, not user wording", () => {
-  const review = judgeReview('{"verdict":"pass","achieved":true,"summary":"ok","needsResearch":false}', "that's wrong");
+test("parseReview reads structured needsUser and failureKind", () => {
+  const review = parseReview(
+    '{"verdict":"fail","summary":"blocked","needsUser":true,"failureKind":"missing-artifact","needsResearch":false}',
+  );
+  expect(review.needsUser).toBe(true);
+  expect(review.failureKind).toBe("missing-artifact");
+});
+
+test("inferFailureKind uses evidence structure, not reviewer prose", () => {
+  const latest = "Write `/work/report.txt`";
+  const evidence = [
+    'fs_write {"path":"/work/report.txt","content":"error: exit 1"}',
+    "shell echo x > /work/report.txt",
+    "exit 1\npermission denied",
+  ].join("\n");
+  expect(inferFailureKind(latest, evidence)).toBe("captured-error");
+  expect(inferFailureKind(latest, "")).toBe("missing-artifact");
+  expect(inferFailureKind(latest, evidence, ["/work/check.py"])).toBe("captured-error");
+});
+
+test("judgeReview fails a pass when conflict markers remain in evidence", () => {
+  const latest = "Merge the recovered commit into master";
+  const evidence = [
+    'shell {"command":"git merge c499730"}',
+    "exit 1",
+    "CONFLICT (content): Merge conflict in _includes/about.md",
+    'fs_read {"path":"_includes/about.md"}',
+    "<<<<<<< HEAD",
+    "old bio",
+    "=======",
+    "new bio",
+    ">>>>>>> c499730",
+  ].join("\n");
+  const review = judgeReview(
+    '{"verdict":"pass","achieved":true,"summary":"merged","needsResearch":false}',
+    latest,
+    evidence,
+  );
+  expect(review.verdict).toBe("fail");
+  expect(review.missing).toMatch(/conflict/i);
+});
+
+test("judgeReview ignores stale conflict markers after a clean rewrite", () => {
+  const latest = "Merge the recovered commit into master";
+  const evidence = [
+    'fs_read {"path":"_includes/about.md"}',
+    "<<<<<<< HEAD",
+    "old bio",
+    "=======",
+    "new bio",
+    ">>>>>>> c499730",
+    'shell {"command":"grep <<<<<<< _includes/about.md"}',
+    "exit 0",
+    "1:<<<<<<< HEAD",
+    'fs_write {"path":"_includes/about.md","content":"I am a Postdoctoral Researcher at Stanford CS.\\n"}',
+    "wrote _includes/about.md (40 chars)",
+  ].join("\n");
+  const review = judgeReview(
+    '{"verdict":"pass","achieved":true,"summary":"merged and cleaned","needsResearch":false}',
+    latest,
+    evidence,
+  );
   expect(review.verdict).toBe("pass");
+});
+
+test("judgeReview leaves inspection-vs-act to the reviewer, not keyword masks", () => {
+  const latest = "I can't find those changes. Please help me find them and merge them into master.";
+  const evidence = [
+    'shell {"command":"cd /app/site && git status && git reflog --oneline -10"}',
+    "exit 0",
+    "c499730 HEAD@{1}: commit: Move to Stanford",
+    'shell {"command":"cd /app/site && git show --stat c499730"}',
+    "exit 0",
+    " _includes/about.md | 2 +-",
+  ].join("\n");
+  const softPass = judgeReview(
+    '{"verdict":"pass","achieved":true,"summary":"found the commit","needsResearch":false}',
+    latest,
+    evidence,
+  );
+  expect(softPass.verdict).toBe("pass");
+  const reviewerFail = judgeReview(
+    '{"verdict":"fail","achieved":false,"summary":"only inspected","missing":"merge into master","needsResearch":false}',
+    latest,
+    evidence,
+  );
+  expect(reviewerFail.verdict).toBe("fail");
+});
+
+test("judgeReview fails a deliverable write with non-zero exit, not by scraping stderr prose", () => {
+  const latest = "Create `/app/ssl/verification.txt` with the certificate subject and fingerprint";
+  const evidence = [
+    'shell {"command":"bash /app/ssl/generate.sh > /app/ssl/verification.txt 2>&1"}',
+    "exit 127",
+    "x509: Use -help for summary.",
+    "/app/ssl/generate.sh: line 9: se: command not found",
+  ].join("\n");
+  const review = judgeReview(
+    '{"verdict":"pass","achieved":true,"summary":"verification written","needsResearch":false}',
+    latest,
+    evidence,
+  );
+  expect(review.verdict).toBe("fail");
+  expect(review.missing).toMatch(/verification\.txt|tool error/i);
+  expect(stillMissingArtifacts(latest, evidence)).toContain("verification.txt");
 });
 
 test("judgeReview fails a pass that used a workaround instead of the page API", () => {
@@ -193,36 +295,42 @@ test("judgeReview does not treat a code dump as an opened docs page", () => {
   expect(review.verdict).toBe("pass");
 });
 
-test("judgeReview fails a pass when a redirect captured a tool error into the deliverable", () => {
+test("exit 0 write is structural success; bad file contents are the reviewer's call", () => {
   const latest = "Create `/work/report.txt` containing the subject and digest";
-  const poisoned = [
+  const exitOkButBadContent = [
     'shell {"command":"python3 gen.py 2>&1 | tee /work/report.txt"}',
     "exit 0",
     "Could not get subject: Could not read file from /work/key.pem",
     "Unable to load certificate",
-    "Validity dates (YYYY-MM-DD): N/A to N/A",
+  ].join("\n");
+  expect(
+    judgeReview(
+      '{"verdict":"pass","achieved":true,"summary":"file exists","needsResearch":false}',
+      latest,
+      exitOkButBadContent,
+    ).verdict,
+  ).toBe("pass");
+  expect(
+    judgeReview(
+      '{"verdict":"fail","achieved":false,"summary":"stderr dump in report","missing":"/work/report.txt","needsResearch":false}',
+      latest,
+      exitOkButBadContent,
+    ).verdict,
+  ).toBe("fail");
+
+  const failedExit = [
+    'shell {"command":"python3 gen.py 2>&1 | tee /work/report.txt"}',
+    "exit 1",
+    "Could not get subject: Could not read file from /work/key.pem",
   ].join("\n");
   const review = judgeReview(
     '{"verdict":"pass","achieved":true,"summary":"file exists","needsResearch":false}',
     latest,
-    poisoned,
+    failedExit,
   );
   expect(review.verdict).toBe("fail");
-  expect(review.missing).toMatch(/tool error|report\.txt/i);
-  expect(artifactPins(latest, poisoned)).toContain("Last write captured a tool error");
-  expect(artifactPins(latest, poisoned)).not.toContain("Already on disk");
-  expect(stillMissingArtifacts(latest, poisoned)).toBe("/work/report.txt");
-
-  const rewritten = judgeReview(
-    '{"verdict":"pass","achieved":true,"summary":"rewritten","needsResearch":false}',
-    latest,
-    [
-      poisoned,
-      'fs_write {"path":"/work/report.txt","content":"subject=Example Org, CN = example"}',
-      "wrote /work/report.txt (40 chars)",
-    ].join("\n"),
-  );
-  expect(rewritten.verdict).toBe("pass");
+  expect(artifactPins(latest, failedExit)).toContain("Last write captured a tool error");
+  expect(stillMissingArtifacts(latest, failedExit)).toBe("/work/report.txt");
 });
 
 test("requestedArtifacts sees a write-path without backticks, not a given input", () => {
@@ -253,6 +361,31 @@ test("parseReview recovers a fenced or truncated reviewer object", () => {
   expect(fenced.verdict).toBe("pass");
   const truncated = parseReview('```json {"verdict":"pass","achieved":true,"requested":"Create a package called "vectorops", then host it."');
   expect(truncated.verdict).toBe("pass");
+});
+
+test("parseReview refuses recovered pass without achieved:true", () => {
+  const soft = parseReview('```json {"verdict":"pass","summary":"looks done","needsResearch":false');
+  expect(soft.verdict).toBe("fail");
+  expect(soft.achieved).toBe(false);
+  const denied = parseReview('{"verdict":"pass","achieved":false,"summary":"not done"');
+  expect(denied.verdict).toBe("fail");
+});
+
+test("judgeReview fails pass when goal URL was never opened", () => {
+  const latest = "Прочитай статью https://habr.com/ru/articles/1070220/ и кратко перескажи";
+  const wrongPage = judgeReview(
+    '{"verdict":"pass","achieved":true,"summary":"summarized","needsResearch":false}',
+    latest,
+    "browser_open {\"url\":\"https://habr.com/ru/news/8\"}\nopened https://habr.com/ru/news/8",
+  );
+  expect(wrongPage.verdict).toBe("fail");
+  expect(wrongPage.missing).toContain("1070220");
+  const ok = judgeReview(
+    '{"verdict":"pass","achieved":true,"summary":"summarized","needsResearch":false}',
+    latest,
+    "browser_open {\"url\":\"https://habr.com/ru/articles/1070220/\"}\nopened https://habr.com/ru/articles/1070220/",
+  );
+  expect(ok.verdict).toBe("pass");
 });
 
 test("judgeReview trusts reviewer on invented vs copied token formats", () => {

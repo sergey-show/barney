@@ -6,7 +6,27 @@ import { bumpBacklog, failureClass, formatBacklog, learnedSkillDraft, parseBackl
 import { emptyTrail, lessonRule, noteTrail, pickRules, isRecapLesson, type LessonTrail } from "../context/lessonRule.ts";
 import { sealReply } from "../context/sealReply.ts";
 import { judgeReview, artifactPins, missingIsLocalArtifact, requestedArtifacts, stillMissingArtifacts, unwrittenArtifacts } from "../context/reviewJudge.ts";
-import { applyToolObserve, classifyToolResult } from "../context/observeTool.ts";
+import { applyToolObserve, attachObserve, classifyToolResult } from "../context/observeTool.ts";
+import { rememberGood, rememberPrevious, restoreBody, pathsWithRestore } from "../context/fileCheckpoint.ts";
+import {
+  absoluteFilePathsInCommand,
+  checkFailedPaths,
+  clearFailedEdit,
+  failedEditPaths,
+  markCheckFailed,
+  markFailedEdit,
+  markPassedRun,
+  markUnverified,
+  redirectTargetsInCommand,
+  runOutputLooksIncomplete,
+  shellExitCode,
+  shellStdout,
+  trackMutated,
+  trackedPathsInCommand,
+  validationPinLine,
+  wasPassedRun,
+  unverifiedPaths,
+} from "../context/validationLedger.ts";
 import { clipText, packSession, redactSecrets } from "../context/packSession.ts";
 import { bindFsWriteArgs, extractToolEvidence } from "../context/toolEvidence.ts";
 import { visibleAssistantText } from "../../infrastructure/llm/visibleReply.ts";
@@ -33,7 +53,7 @@ import { MemoryNote, slugKey } from "../../domain/memory/MemoryNote.ts";
 import type { ChatMessage, ChatResult, Role } from "../../domain/provider/Role.ts";
 import type { ToolSpec } from "../../domain/tools/FileTools.ts";
 import type { Agent } from "../../domain/agent/Agent.ts";
-import type { Review } from "../../domain/run/Review.ts";
+import type { Review, FailureKind } from "../../domain/run/Review.ts";
 import type { Run } from "../../domain/run/Run.ts";
 import { replyMetaFrom } from "../../domain/run/replyMeta.ts";
 import type { StrategyName } from "../../domain/run/Strategy.ts";
@@ -247,7 +267,7 @@ export class DriveSolve {
     ];
     throwIfAborted();
     const reviewRaw = await this.completeRole(run, "reviewer", reviewPrompt, { signal: input.signal });
-    let review = judgeReview(reviewRaw.text, input.message, artifactEvidence(run), act.text);
+    let review = judgeReview(reviewRaw.text, input.message, artifactEvidence(run), act.text, reviewOpts(run.id.value));
     rememberFailKlass(failKlass, review);
     const reviewEvents = run.submitReview(review);
     this.events.publish(reviewEvents);
@@ -273,7 +293,7 @@ export class DriveSolve {
             { role: "system", content: reviewPrompt[0].content },
             { role: "user", content: reviewPacket(run.goal, input.message, second.text, reviewEvidence(run, input.message)) },
           ], { signal: input.signal });
-          const review2 = judgeReview(review2Raw.text, input.message, artifactEvidence(run), second.text);
+          const review2 = judgeReview(review2Raw.text, input.message, artifactEvidence(run), second.text, reviewOpts(run.id.value));
           rememberFailKlass(failKlass, review2);
           this.events.publish(run.submitReview(review2));
           act = second;
@@ -302,7 +322,7 @@ export class DriveSolve {
           { role: "system", content: reviewPrompt[0].content },
           { role: "user", content: reviewPacket(run.goal, input.message, retry.text, reviewEvidence(run, input.message)) },
         ], { signal: input.signal });
-        const retryReview = judgeReview(retryReviewRaw.text, input.message, artifactEvidence(run), retry.text);
+        const retryReview = judgeReview(retryReviewRaw.text, input.message, artifactEvidence(run), retry.text, reviewOpts(run.id.value));
         rememberFailKlass(failKlass, retryReview);
         this.events.publish(run.submitReview(retryReview));
         act = retry;
@@ -342,10 +362,9 @@ export class DriveSolve {
       run.append("system", note);
     }
 
-    const corrected = /operator rejected/i.test(`${review.summary} ${review.missing ?? ""}`);
+    const corrected = review.operatorCorrected === true;
     const klass = failureClass({
-      missing: review.missing,
-      summary: review.summary,
+      kind: review.failureKind,
       aborted: false,
     });
     const learned = lessonRule({
@@ -525,9 +544,30 @@ export class DriveSolve {
           arguments: bindFsWriteArgs(rawCall.name, bound, toolEvidence),
         };
         if (signal?.aborted) throw new DomainError("aborted", "step interrupted");
-        const observeOpts = { leftoverUnwritten: leftoverNow.unwritten };
-        const preview = applyToolObserve(call, "", failedCalls, familyFails, observeOpts);
-        const raw = preview.skip ? preview.out : clipToolOut(await this.dispatchTool(run, ws, call, signal, depth), `${run.goal}\n${userText}`);
+        const observeBase = {
+          leftoverUnwritten: leftoverNow.unwritten,
+          restorePaths: pathsWithRestore(run.id.value),
+        };
+        if (isFsMutate(call.name)) {
+          await snapshotBeforeMutate(run.id.value, ws, String(call.arguments?.path ?? ""));
+        }
+        const preview = applyToolObserve(call, "", failedCalls, familyFails, observeBase);
+        let raw = preview.skip ? preview.out : clipToolOut(await this.dispatchTool(run, ws, call, signal, depth), `${run.goal}\n${userText}`);
+        if (!preview.skip && call.name === "shell") {
+          raw = noteShellRun(run.id.value, call, raw);
+        }
+        if (!preview.skip && isFsMutate(call.name) && !/^error:/i.test(raw)) {
+          raw = await withWriteCheckpoint(run.id.value, ws, call, raw);
+          noteMutateSuccess(run.id.value, call);
+        } else if (!preview.skip && call.name === "fs_edit" && classifyToolResult(raw, "fs_edit").error) {
+          const editPath = String(call.arguments?.path ?? "");
+          if (editPath) markFailedEdit(run.id.value, editPath);
+        }
+        const observeOpts = {
+          ...observeBase,
+          failedEditPaths: failedEditPaths(run.id.value),
+          checkFailedPaths: checkFailedPaths(run.id.value),
+        };
         const observed = preview.skip ? preview : applyToolObserve(call, raw, failedCalls, familyFails, observeOpts);
         const out = observed.out;
         const failed = observed.skip || /BLOCKED:/.test(out) || classifyToolResult(out, call.name).error;
@@ -636,12 +676,10 @@ export class DriveSolve {
   private async closeFailureClass(
     run: Run,
     agent: Agent,
-    review: { summary: string; missing?: string; aborted: boolean },
+    review: { summary: string; missing?: string; aborted: boolean; failureKind?: FailureKind },
   ): Promise<void> {
     const klass = failureClass({
-      goal: run.goal,
-      missing: review.missing,
-      summary: review.summary,
+      kind: review.failureKind,
       aborted: review.aborted,
     });
     const key = slugKey(`backlog/${klass}`);
@@ -744,7 +782,7 @@ export class DriveSolve {
       const strategy = cycleStrategy(input.run.usedStrategies, input.run.attempts, localFiles);
       let learnedSkill = "";
       if (strategy === "write_capability") {
-        const klass = failureClass({ missing: review.missing, summary: review.summary });
+        const klass = failureClass({ kind: review.failureKind });
         const name = klass !== "general" && klass !== "aborted-unfinished" ? `learned-${klass}` : "";
         if (name && this.skills.get(name)) learnedSkill = name;
       }
@@ -790,7 +828,7 @@ export class DriveSolve {
       { role: "system", content: REVIEWER_SYSTEM },
       { role: "user", content: reviewPacket(run.goal, latest, actText, reviewEvidence(run, latest)) },
     ], { signal });
-    const review = judgeReview(raw.text, latest, artifactEvidence(run), actText);
+    const review = judgeReview(raw.text, latest, artifactEvidence(run), actText, reviewOpts(run.id.value));
     this.events.publish(run.submitReview(review));
     return review;
   }
@@ -875,6 +913,9 @@ export class DriveSolve {
         }
       }
       return out;
+    }
+    if (call.name === "fs_restore") {
+      return restoreFile(run.id.value, ws, String(call.arguments?.path ?? ""));
     }
     return runFileTool(ws, call, signal);
   }
@@ -1153,11 +1194,10 @@ function skillCatalog(skills: SkillPort, query = ""): string {
   return renderSkillCatalog(skills.list(), query);
 }
 
-function rememberFailKlass(bag: { last: string }, review: { verdict?: string; missing?: string; summary: string; aborted?: boolean }): void {
+function rememberFailKlass(bag: { last: string }, review: { verdict?: string; failureKind?: FailureKind; aborted?: boolean }): void {
   if (review.verdict === "pass") return;
   const klass = failureClass({
-    missing: review.missing,
-    summary: review.summary,
+    kind: review.failureKind,
     aborted: review.aborted,
   });
   if (klass !== "general" && klass !== "aborted-unfinished") bag.last = klass;
@@ -1215,7 +1255,7 @@ function hasLeftover(work: { unwritten: string[] }): boolean {
 function keepWritingNudge(unwritten: string[], evidence: string[] = []): string {
   const bits: string[] = [];
   if (unwritten.length) {
-    bits.push(`Still missing on disk: ${unwritten.join(", ")}. Write only those files. If a prior redirect captured a tool error, overwrite with successful output. Copy live values from tool output. Do not invent DETECTED_SECRET tokens.`);
+    bits.push(`Still missing on disk: ${unwritten.join(", ")}. Write only those files. If a prior redirect captured a tool error, overwrite with successful output. After writing, validate yourself (syntax/run as fits the file); if broken, fix or fs_restore. Copy live values from tool output. Do not invent DETECTED_SECRET tokens.`);
   }
   if (evidence.length) {
     bits.push(`Pinned tool lines (copy exactly into the files):\n${evidence.map((line) => `- ${line}`).join("\n")}`);
@@ -1227,34 +1267,51 @@ function keepWritingNudge(unwritten: string[], evidence: string[] = []): string 
 const REVIEWER_SYSTEM = `Role: reviewer. Decide only whether the agent delivered the result the user asked for. This is a judgment of the act, not a personality.
 
 Pass only if the latest user request is actually satisfied — the concrete outcome they wanted.
-Do not pass a workaround, approximation, plan-without-result, or "I used what was available".
-If the user asked for a specific action or fact, that exact result must be present in the reply or on disk.
+Do not pass a workaround, approximation, plan-without-result, partial progress, identification-without-action, or "I used what was available".
+If the user asked for a specific action or fact, that exact result must be present in tool/console evidence — not only in the agent's prose.
+
+Trust console evidence over the agent's summary. Read exit codes and stdout/stderr yourself — do not assume a path existing means the content is correct.
+Existence of a path is not enough: judge whether the file contents match what was asked. Tool-error dumps redirected into a deliverable are not a pass.
+If the evidence includes a pin line "Not yet written:" or "Last write captured a tool error", verdict MUST be fail and missing MUST list those paths.
+Every path the user asked to create/write/save must appear in write or listing evidence with successful content. Naming a helper file instead of the requested path is not a pass.
+Fail when the user asked to apply a change and evidence only shows inspection (looked up, listed, showed) without actually applying it.
+Fail when tool evidence still shows unresolved conflict markers (<<<<<<< / ======= / >>>>>>>) in a deliverable.
+Fail when a deliverable was exercised and failed (non-zero exit) with no later successful exit 0 — the agent's claim that it works is not enough.
+Fail when a syntax/config check in evidence reported failure even if a shell wrapper exited 0 via || echo — the check itself failed.
+Fail when the user asked for specific fields or facts in a file and evidence shows those fields missing — a helper script that passed is not enough.
+Fail when evidence pins say "Check failed on:" — those paths are broken until fixed or restored.
+Fail when the user asked to read/open a concrete URL and evidence has no browser_open (or opened) of that same URL — another page on the same host is not enough.
+Fail when reviewer JSON is truncated: do not pass without an explicit achieved:true in a complete object.
+Fail when the visible reply is mostly thinking narration about what the user asked instead of the answer itself.
+Fail when the agent left the job unfinished: some requested files present, others absent.
 
 Fail when:
 - the agent substituted a different result than asked
 - the answer is incomplete, evasive, or answers a different question
 - tools were available and the request required them, but they were not used
-- the agent only described what it would do
+- the agent only described what it would do or only located the change without applying it
 - the agent truncated, guessed, or altered a fact that was already in tool or research evidence
 
 DETECTED_SECRET_<KIND>_<HASH> in tool output is a guard mask of a live secret still on disk — not a replacement the agent made. If the user asked for placeholders such as <your-aws-access-key-id>, those exact strings must appear as writes; the mask tokens are evidence the secret is still present.
 Fail when a newly written deliverable contains DETECTED_SECRET_* and the user asked for a live computed value. The mask is not that value.
-Fail when a requested file was written by a redirect that captured a tool error (traceback, unable to load, could not read). Existence of that file is not a pass — overwrite it from successful output.
-If evidence lists files already on disk, do not claim they are missing. Fail only for what is still absent or wrong.
-Fail when the latest user message says the previous answer was wrong. In that case summary must include "operator rejected".
+Fail when a requested file was written by a redirect with a non-zero exit, or its contents are clearly tool failure output. Existence of that file is not a pass — overwrite it from successful output.
+If evidence lists files already on disk with good content, do not claim they are missing. Fail only for what is still absent or wrong.
+Fail when the latest user message says the previous answer was wrong — set operatorCorrected true.
 Use uncertain / gap / unknown_api when the task needs vendor docs, the web, or an API the agent has not looked up yet. Set needsResearch true in that case.
+Set needsUser true when the agent cannot continue without a secret or choice from the user.
+When verdict is fail, set failureKind: masked-deliverable | unrun-program | captured-error | missing-artifact | general.
 JSON only. No chain-of-thought.
 
 Reply as JSON only:
-{"verdict":"pass|fail|uncertain|unknown_api|gap","achieved":true|false,"requested":"what the user wanted","missing":"what is still missing or empty","summary":"...","needsResearch":true|false,"knowledgeQuery":"..."}`;
+{"verdict":"pass|fail|uncertain|unknown_api|gap","achieved":true|false,"requested":"what the user wanted","missing":"what is still missing or empty","summary":"...","needsResearch":true|false,"needsUser":true|false,"operatorCorrected":true|false,"failureKind":"general|masked-deliverable|unrun-program|captured-error|missing-artifact","knowledgeQuery":"..."}`;
 
 function reviewPacket(goal: string, latest: string, act: string, evidence: string): string {
   return [
     `Session goal: ${goal}`,
     `Latest user request (this is what must be satisfied): ${latest}`,
     `Agent reply:\n${act.slice(0, 4000)}`,
-    `Tool / console evidence:\n${evidence || "(none)"}`,
-    "Did the agent achieve the result the user asked for? If not, verdict must be fail.",
+    `Tool / console evidence (pins, exit codes, and console win over the agent reply):\n${evidence || "(none)"}`,
+    "Did the agent achieve the result the user asked for? Interpret errors and file contents yourself. If pins say Not yet written, Check failed on, or a write exited non-zero, or a config/syntax check failed in evidence, or a deliverable is missing asked fields, or a required URL was never opened, or evidence only inspected without applying an asked change, verdict must be fail.",
   ].filter(Boolean).join("\n\n");
 }
 
@@ -1300,10 +1357,18 @@ export function requestedFile(message: string): string | null {
   return "notes.md";
 }
 
-function reviewEvidence(run: { goal?: string; transcript: Array<{ kind: string; text: string }> }, latest: string): string {
+function reviewOpts(runId: string): { unverifiedPaths: string[] } {
+  return { unverifiedPaths: unverifiedPaths(runId) };
+}
+
+function reviewEvidence(
+  run: { id: { value: string }; goal?: string; transcript: Array<{ kind: string; text: string }> },
+  latest: string,
+): string {
   const pins = artifactPins(latest, artifactEvidence(run));
+  const validation = validationPinLine(run.id.value, requestedArtifacts(latest));
   const recent = recentEvidence(run);
-  return [pins, recent].filter(Boolean).join("\n---\n");
+  return [pins, validation, recent].filter(Boolean).join("\n---\n");
 }
 
 function persistNudge(strategy: StrategyName, review: Review, researchNote: string, goal: string, latest: string, evidence: string, learnedSkill = ""): string {
@@ -1346,5 +1411,121 @@ function hostOf(url: string): string {
     return new URL(url).host;
   } catch {
     return "";
+  }
+}
+
+const FS_MUTATE = new Set(["fs_write", "fs_edit", "fs_append"]);
+
+function isFsMutate(name: string): boolean {
+  return FS_MUTATE.has(name);
+}
+
+async function snapshotBeforeMutate(runId: string, ws: WorkspacePort, path: string): Promise<void> {
+  if (!path.trim()) return;
+  try {
+    const body = await ws.read(path);
+    if (body.startsWith("error:") || body.startsWith("directory:") || body.startsWith("binary ") || body.startsWith("file too large")) return;
+    rememberPrevious(runId, path, body);
+  } catch {
+    /* new file */
+  }
+}
+
+async function withWriteCheckpoint(
+  runId: string,
+  ws: WorkspacePort,
+  call: ToolCall,
+  raw: string,
+): Promise<string> {
+  const path = String(call.arguments?.path ?? "");
+  if (!path) return raw;
+  const prior = restoreBody(runId, path);
+  const body = await bodyAfterMutate(ws, call);
+  if (body != null) rememberGood(runId, path, body);
+  const canUndo = Boolean(prior && body != null && prior.content !== body);
+  const restore = canUndo
+    ? ` If a later check fails, fs_restore ${path} brings back the previous session version.`
+    : "";
+  const regression = wasPassedRun(runId, path)
+    ? " This file had a passing run earlier — avoid truncating or rewriting the whole file; fix minimally or fs_restore if broken."
+    : "";
+  return attachObserve(
+    raw,
+    `Validate this file yourself before claiming done — look up how to syntax-check or run it for this format, then do that via shell.${restore}${regression}`,
+  );
+}
+
+function noteShellRun(runId: string, call: ToolCall, raw: string): string {
+  const command = String(call.arguments?.command ?? "");
+  const code = shellExitCode(raw);
+  const redirects = redirectTargetsInCommand(command);
+  for (const path of redirects) trackMutated(runId, path);
+
+  if (code != null && code !== 0) {
+    const abs = absoluteFilePathsInCommand(command);
+    for (const path of abs) trackMutated(runId, path);
+    const touched = [...new Set([...trackedPathsInCommand(runId, command), ...redirects, ...abs])];
+    for (const path of touched) markCheckFailed(runId, path);
+    const failed = checkFailedPaths(runId);
+    if (!touched.length && !failed.length && !unverifiedPaths(runId).length) return raw;
+    const names = (touched.length ? touched : failed).slice(0, 4).join(", ");
+    const where = names ? ` on ${names}` : "";
+    return attachObserve(
+      raw,
+      `Check failed${where} — fix minimally or fs_restore; do not chain more patches on the same broken file.`,
+    );
+  }
+
+  if (code !== 0) return raw;
+  for (const path of redirects) markUnverified(runId, path);
+  const touched = trackedPathsInCommand(runId, command);
+  if (!touched.length) return raw;
+  const stdout = shellStdout(raw);
+  if (runOutputLooksIncomplete(stdout)) {
+    for (const path of touched) markUnverified(runId, path);
+    return attachObserve(
+      raw,
+      "Run exited 0 with no output on a file you wrote — fix it or fs_restore; do not replace the whole file with a shorter version.",
+    );
+  }
+  for (const path of touched) markPassedRun(runId, path);
+  return raw;
+}
+
+function noteMutateSuccess(runId: string, call: ToolCall): void {
+  const path = String(call.arguments?.path ?? "");
+  if (!path) return;
+  trackMutated(runId, path);
+  markUnverified(runId, path);
+  if (call.name === "fs_edit") clearFailedEdit(runId, path);
+}
+
+async function bodyAfterMutate(ws: WorkspacePort, call: ToolCall): Promise<string | undefined> {
+  if (call.name === "fs_write") {
+    const content = call.arguments?.content;
+    return typeof content === "string" ? content : undefined;
+  }
+  const path = String(call.arguments?.path ?? "");
+  try {
+    const body = await ws.read(path);
+    if (body.startsWith("error:") || body.startsWith("directory:") || body.startsWith("binary ")) return;
+    return body;
+  } catch {
+    return;
+  }
+}
+
+async function restoreFile(runId: string, ws: WorkspacePort, path: string): Promise<string> {
+  if (!path.trim()) return "error: path is required";
+  const hit = restoreBody(runId, path);
+  if (!hit) return `error: no checkpoint for ${path} in this session`;
+  try {
+    const out = await ws.write(path, hit.content);
+    rememberGood(runId, path, hit.content);
+    trackMutated(runId, path);
+    markUnverified(runId, path);
+    return attachObserve(`${out} (restored ${hit.source})`, "Validate the restored file yourself before claiming done.");
+  } catch (err) {
+    return `error: ${err instanceof Error ? err.message : String(err)}`;
   }
 }

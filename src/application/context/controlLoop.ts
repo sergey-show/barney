@@ -61,19 +61,14 @@ export function cycleStrategy(used: StrategyName[], attempts: number, skipResear
   return next;
 }
 
-export function needsUser(review: { missing?: string; summary: string }): boolean {
-  const text = `${review.missing ?? ""} ${review.summary}`;
-  if (/need (?:a |the |your )?(?:\w+[-\s]+){0,3}(password|api[_-]?key|\btoken\b)/i.test(text)) return true;
-  if (/need (?:a |the |your )?secret\b/i.test(text)) return true;
-  if (/which (one|host|file|password)/i.test(text)) return true;
-  if (/password (not|missing)|ask (the )?user/i.test(text)) return true;
-  return false;
+export function needsUser(review: { needsUser?: boolean }): boolean {
+  return review.needsUser === true;
 }
 
 export type HaltReason = "pass" | "abort" | "budget" | "attempts" | "need_user" | "wanting" | "continue";
 
 export function stopAfterFail(
-  review: { verdict: string; missing?: string; summary: string },
+  review: { verdict: string; missing?: string; summary: string; needsUser?: boolean },
   limits: {
     aborted?: boolean;
     exhausted: boolean;

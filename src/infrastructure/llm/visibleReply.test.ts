@@ -89,3 +89,12 @@ test("peels a short English pwd scratchpad from the Russian answer", () => {
   expect(split.text).not.toContain("The user is asking");
   expect(split.thinking).toContain("The user is asking");
 });
+
+test("peels Latin thinking glued to a Cyrillic answer in one paragraph", () => {
+  const leaked =
+    "The user asked what time it is now. I should answer with the local clock. Сейчас примерно полдень по местному времени.";
+  const split = peelUntaggedThinking(leaked);
+  expect(split.text).toContain("Сейчас примерно полдень");
+  expect(split.text).not.toContain("The user asked");
+  expect(split.thinking).toContain("The user asked");
+});

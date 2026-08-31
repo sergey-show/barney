@@ -1,5 +1,12 @@
 export type ReviewVerdict = "pass" | "fail" | "uncertain" | "unknown_api" | "gap";
 
+export type FailureKind =
+  | "masked-deliverable"
+  | "unrun-program"
+  | "captured-error"
+  | "missing-artifact"
+  | "general";
+
 export type Review = {
   verdict: ReviewVerdict;
   summary: string;
@@ -8,6 +15,9 @@ export type Review = {
   achieved?: boolean;
   requested?: string;
   missing?: string;
+  needsUser?: boolean;
+  operatorCorrected?: boolean;
+  failureKind?: FailureKind;
 };
 
 export function reviewNeedsResearch(review: Review): boolean {

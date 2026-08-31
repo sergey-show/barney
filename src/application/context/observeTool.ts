@@ -13,12 +13,9 @@ export function toolSignature(call: Pick<ToolCall, "name" | "arguments">): strin
 }
 
 const FAMILY_EXEMPT = new Set(["browser_open", "web_search"]);
-const TLS_CODES = /UNABLE_TO_VERIFY|ERR_CERT_|CERT_HAS_EXPIRED|SSL_ERROR_|DEPTH_ZERO_SELF_SIGNED|NET::ERR_CERT|curl: \((?:35|51|60)\)/i;
-const NET_CODES = /ENOTFOUND|ECONNREFUSED|ECONNRESET|EHOSTUNREACH|ETIMEDOUT|ERR_CONNECTION|ERR_TIMED_OUT|TimeoutError/i;
-const AUTH_CODES = /\b401\b|\b403\b/;
 const FULL_SECRET_TOKEN = /DETECTED_SECRET_[A-Z0-9]+_[A-F0-9]+/;
-const SHELL_TALK =
-  /(?:\.\.\.\s*wait|\bwait[,.!]|wait let's|\blet's just\b|\bthe user wants\b|\bbreak into small tool steps\b|\brun them now\b|\bi'll do step\b|\bno plan, no tools\b|\blet me break\b)/i;
+/** File redirect (`> path`), not fd dup (`2>&1`). */
+const FILE_REDIRECT = /(?:^|[\s;&|])(?:>{1,2}|tee)\s+(?!\d)(\S+)/;
 
 function exitCode(text: string): number | null {
   const match = text.match(/^exit (\d+)(?:\n|$)/);
@@ -29,6 +26,16 @@ function isFsTool(tool: string): boolean {
   return tool.startsWith("fs_");
 }
 
+/** Structural shape checks — not keyword commentary catalogs. */
+function invalidShellCommand(command: string): string | undefined {
+  if (/[\r\n]/.test(command)) return "command must be a single line";
+  if (/`/.test(command)) return "command must not contain backticks";
+  if (/\.\.\.\s+\S/.test(command)) return "command must not contain commentary after ...";
+}
+
+/**
+ * Prefer exit codes and harness prefixes. Do not catalog error prose — the model reads stderr.
+ */
 export function classifyToolResult(out: string, tool = ""): { error: boolean; observe: string } {
   const text = out.slice(0, 2000);
   if (/^BLOCKED:/i.test(text)) return { error: true, observe: text.split("\n")[0] ?? text };
@@ -42,25 +49,16 @@ export function classifyToolResult(out: string, tool = ""): { error: boolean; ob
   if (/^web_search /i.test(text)) return { error: false, observe: "" };
   const code = exitCode(text);
   if (code === 0) return { error: false, observe: "" };
+  if (code != null && code !== 0) {
+    return { error: true, observe: "Tool failed. Read the error, change tool or arguments, do not repeat this exact call." };
+  }
   if (isFsTool(tool)) {
-    if (/^(error:|Error:)/m.test(text) || /command failed/i.test(text)) {
+    if (/^(error:|Error:)/m.test(text)) {
       return { error: true, observe: "Tool failed. Read the error, change tool or arguments, do not repeat this exact call." };
     }
     return { error: false, observe: "" };
   }
-  if (TLS_CODES.test(text)) {
-    return { error: true, observe: "TLS/certificate failed. Retry the same URL with shell. Do not invent another host." };
-  }
-  if (AUTH_CODES.test(text) || /unauthorized|authentication required|access denied/i.test(text)) {
-    return { error: true, observe: "Auth failed. Use credentials already in this session on the same host. Do not ask again." };
-  }
-  if (NET_CODES.test(text)) {
-    return { error: true, observe: "Host unreachable. Retry the same URL; do not invent another host." };
-  }
-  if (code != null && code !== 0) {
-    return { error: true, observe: "Tool failed. Read the error, change tool or arguments, do not repeat this exact call." };
-  }
-  if (/^(error:|Error:)|Traceback|Exception\b|command failed/i.test(text)) {
+  if (/^(error:|Error:)/m.test(text)) {
     return { error: true, observe: "Tool failed. Read the error, change tool or arguments, do not repeat this exact call." };
   }
   return { error: false, observe: "" };
@@ -71,25 +69,33 @@ export function applyToolObserve(
   rawOut: string,
   failed: Set<string>,
   familyFails?: Map<string, number>,
-  opts?: { leftoverUnwritten?: string[] },
+  opts?: {
+    leftoverUnwritten?: string[];
+    restorePaths?: string[];
+    failedEditPaths?: string[];
+    checkFailedPaths?: string[];
+  },
 ): { out: string; skip: boolean } {
-  if (call.name === "shell" && SHELL_TALK.test(String(call.arguments?.command ?? ""))) {
-    const sig = toolSignature(call);
-    failed.add(sig);
-    return {
-      skip: true,
-      out: "error: command mixes shell with commentary.\n\nObserve: Put only the command in `command`. No plans, wait, or nudge text. Resend a clean one-liner.",
-    };
+  const sig = toolSignature(call);
+  if (call.name === "shell") {
+    const shape = invalidShellCommand(String(call.arguments?.command ?? ""));
+    if (shape) {
+      failed.add(sig);
+      return {
+        skip: true,
+        out: `error: ${shape}\n\nObserve: Put only the shell line in \`command\`. No plans or commentary. Resend a clean one-liner.`,
+      };
+    }
   }
   const family = familyKey(call);
-  const fsStillNeeded = isFsTool(call.name) && (opts?.leftoverUnwritten?.length ?? 0) > 0;
-  if (familyFails && familySaturated(familyFails.get(family) ?? 0) && !FAMILY_EXEMPT.has(call.name) && !fsStillNeeded) {
+  const stillLanding = (opts?.leftoverUnwritten?.length ?? 0) > 0;
+  const landExempt = stillLanding && (isFsTool(call.name) || call.name === "shell");
+  if (familyFails && familySaturated(familyFails.get(family) ?? 0) && !FAMILY_EXEMPT.has(call.name) && !landExempt) {
     return {
       skip: true,
       out: `BLOCKED: wanting without liking in ${family}. Change tool family, not another ${call.name}.`,
     };
   }
-  const sig = toolSignature(call);
   if (failed.has(sig)) {
     const hint = classifyToolResult(rawOut, call.name).observe || "Change tool or arguments.";
     return {
@@ -104,23 +110,42 @@ export function applyToolObserve(
       familyFails.set(family, (familyFails.get(family) ?? 0) + 1);
     }
     const redirectHint = shellRedirectHint(call, classified.observe);
-    return { skip: false, out: withObserve(rawOut, redirectHint, secretGrepHint(call)) };
+    return {
+      skip: false,
+      out: withObserve(
+        rawOut,
+        redirectHint,
+        fsEditRecoveryHint(call, opts?.failedEditPaths, opts?.restorePaths),
+        checkFailedHint(call, opts?.checkFailedPaths, opts?.restorePaths),
+        secretGrepHint(call),
+        restoreHint(call, opts?.restorePaths),
+      ),
+    };
   }
   const grepHint = secretGrepHint(call);
-  if (grepHint) return { skip: false, out: withObserve(rawOut, grepHint) };
+  const editHint = fsEditRecoveryHint(call, opts?.failedEditPaths, opts?.restorePaths);
+  const checkHint = checkFailedHint(call, opts?.checkFailedPaths, opts?.restorePaths);
+  if (grepHint || editHint || checkHint) return { skip: false, out: withObserve(rawOut, grepHint, editHint, checkHint) };
   return { skip: false, out: rawOut };
 }
 
 function withObserve(raw: string, ...hints: Array<string | undefined>): string {
-  const lines = hints.filter((hint): hint is string => Boolean(hint));
+  const lines = hints.filter((hint): hint is string => Boolean(hint?.trim()));
   if (!lines.length) return raw;
-  return `${raw}\n\nObserve: ${lines.join(" ")}`;
+  const merged = lines.join(" ").replace(/\s+/g, " ").trim();
+  const stripped = raw.replace(/\n\nObserve:[\s\S]*$/u, "").replace(/\nObserve:.*$/u, "");
+  return `${stripped}\n\nObserve: ${merged}`;
+}
+
+/** One Observe line; replaces any prior Observe tail. */
+export function attachObserve(raw: string, hint: string): string {
+  return withObserve(raw, hint);
 }
 
 function shellRedirectHint(call: Pick<ToolCall, "name" | "arguments">, fallback: string): string {
   if (call.name !== "shell") return fallback;
   const command = String(call.arguments?.command ?? "");
-  if (!/(?:^|[\s;&|])(?:>{1,2})\s*\S+/.test(command)) return fallback;
+  if (!FILE_REDIRECT.test(command)) return fallback;
   return "A redirect in this command may have written a file before the error. ls the target; do not retry this exact line.";
 }
 
@@ -130,6 +155,71 @@ function secretGrepHint(call: Pick<ToolCall, "name" | "arguments">): string | un
   if (!/\bgrep\b/i.test(command) || !command.includes("DETECTED_SECRET")) return;
   if (FULL_SECRET_TOKEN.test(command)) return;
   return "Disk holds live secrets, not the mask string. Use the full DETECTED_SECRET_<KIND>_<HASH> in fs_edit, fs_search, or sed.";
+}
+
+/** Ledger says a check failed on these paths — only when this call touches them. */
+function checkFailedHint(
+  call: Pick<ToolCall, "name" | "arguments">,
+  checkFailed?: string[],
+  restorePaths?: string[],
+): string | undefined {
+  if (!checkFailed?.length) return;
+  if (call.name === "shell") {
+    const command = String(call.arguments?.command ?? "");
+    const hit = checkFailed.find((path) => commandIncludesPath(command, path));
+    if (!hit) return;
+    const restore = restorePaths?.find((p) => pathEquals(hit, p));
+    const undo = restore ? `fs_restore ${restore} or ` : "";
+    return `Check failed on ${hit} — use ${undo}a minimal fix; do not chain more patches on the same broken file.`;
+  }
+  if (call.name === "fs_write" || call.name === "fs_edit" || call.name === "fs_append") {
+    const path = String(call.arguments?.path ?? "");
+    const hit = checkFailed.find((p) => pathEquals(path, p));
+    if (!hit) return;
+    const restore = restorePaths?.find((p) => pathEquals(hit, p));
+    const undo = restore ? `fs_restore ${restore} or ` : "";
+    return `Prior check failed on this path — use ${undo}a minimal fix; do not rewrite blindly.`;
+  }
+}
+
+function pathEquals(a: string, b: string): boolean {
+  return a === b || a.endsWith(b) || b.endsWith(a);
+}
+
+/** Ledger says fs_edit failed on this path — no parsing of error prose. */
+function fsEditRecoveryHint(
+  call: Pick<ToolCall, "name" | "arguments">,
+  failedEditPaths?: string[],
+  restorePaths?: string[],
+): string | undefined {
+  if (call.name !== "fs_edit" || !failedEditPaths?.length) return;
+  const path = String(call.arguments?.path ?? "");
+  if (!path || !failedEditPaths.some((p) => path === p || path.endsWith(p) || p.endsWith(path))) return;
+  const restore = restorePaths?.find((p) => path === p || path.endsWith(p) || p.endsWith(path));
+  const undo = restore ? `fs_restore ${restore} or ` : "";
+  return `fs_edit failed on this path — use ${undo}fs_write the full file; do not retry the same old snippet.`;
+}
+
+function restoreHint(call: Pick<ToolCall, "name" | "arguments">, restorePaths?: string[]): string | undefined {
+  if (!restorePaths?.length) return;
+  if (call.name === "shell") {
+    const command = String(call.arguments?.command ?? "");
+    const hit = restorePaths.find((path) => commandIncludesPath(command, path));
+    if (hit) return `If this run failed because the file is broken, fs_restore ${hit} brings back the last good session version.`;
+    return;
+  }
+  if (call.name === "fs_write" || call.name === "fs_edit" || call.name === "fs_append") {
+    const path = String(call.arguments?.path ?? "");
+    const hit = restorePaths.find((p) => path === p || path.endsWith(p) || p.endsWith(path));
+    if (hit) return `fs_restore ${hit} is available if you need the last good version.`;
+  }
+}
+
+function commandIncludesPath(command: string, path: string): boolean {
+  if (!path) return false;
+  if (command.includes(path)) return true;
+  const base = path.split("/").filter(Boolean).at(-1);
+  return Boolean(base && command.includes(base));
 }
 
 function countsTowardFamily(out: string): boolean {

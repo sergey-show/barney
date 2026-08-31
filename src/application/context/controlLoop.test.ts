@@ -42,17 +42,10 @@ test("skips research when the miss is a local file", () => {
   expect(cycleStrategy(["recall_failures"], 2, false)).toBe("research");
 });
 
-test("needsUser only for a real secret or choice", () => {
-  expect(needsUser({ summary: "no VM list yet", missing: "open the host" })).toBe(false);
-  expect(needsUser({ summary: "blocked", missing: "need the vcenter password" })).toBe(true);
-  expect(needsUser({
-    summary: "replace secrets with <your-github-token>",
-    missing: "Actual file modifications replacing secrets with placeholders",
-  })).toBe(false);
-  expect(needsUser({
-    summary: "still missing replacements",
-    missing: "need to replace secrets in ray_cluster.yaml",
-  })).toBe(false);
+test("needsUser follows structured reviewer field", () => {
+  expect(needsUser({ needsUser: false })).toBe(false);
+  expect(needsUser({})).toBe(false);
+  expect(needsUser({ needsUser: true })).toBe(true);
 });
 
 test("keeps going until pass, budget, or a user blocker", () => {
@@ -60,7 +53,7 @@ test("keeps going until pass, budget, or a user blocker", () => {
   expect(stopAfterFail(review, { exhausted: false, attempts: 2, maxAttempts: 12, minStrategies: 3, used: 2 })).toBe("continue");
   expect(stopAfterFail(review, { exhausted: false, attempts: 8, maxAttempts: 12, minStrategies: 3, used: 4, wanting: false })).toBe("continue");
   expect(stopAfterFail(review, { exhausted: true, attempts: 2, maxAttempts: 12, minStrategies: 3, used: 2 })).toBe("budget");
-  expect(stopAfterFail({ verdict: "fail", summary: "x", missing: "which host should I use" }, {
+  expect(stopAfterFail({ verdict: "fail", summary: "x", missing: "which host", needsUser: true }, {
     exhausted: false, attempts: 4, maxAttempts: 12, minStrategies: 3, used: 3,
   })).toBe("need_user");
 });

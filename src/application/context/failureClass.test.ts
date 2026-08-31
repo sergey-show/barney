@@ -1,18 +1,17 @@
 import { expect, test } from "bun:test";
 import { bumpBacklog, failureClass, learnedSkillDraft, shouldCloseClass, skillDraft } from "./failureClass.ts";
 
-test("does not name eval tickets; aborted is the only eval-shaped special class", () => {
-  expect(failureClass({ missing: "invalid url http://127.:0.:733/", summary: "truncated" })).toBe("general");
-  expect(failureClass({ summary: "said Moscow from MSK" })).toBe("general");
-  expect(failureClass({ summary: "AbortSignal omitted" })).toBe("general");
+test("defaults to general; aborted is the only special class without kind", () => {
+  expect(failureClass({})).toBe("general");
+  expect(failureClass({ kind: undefined })).toBe("general");
   expect(failureClass({ aborted: true })).toBe("aborted-unfinished");
 });
 
-test("names turn-law misses, not benchmark files", () => {
-  expect(failureClass({ missing: "wrote DETECTED_SECRET mask into /work/report.txt instead of the live value" })).toBe("masked-deliverable");
-  expect(failureClass({ missing: "no successful run of /work/check.py" })).toBe("unrun-program");
-  expect(failureClass({ missing: "last write captured a tool error for /work/report.txt" })).toBe("captured-error");
-  expect(failureClass({ missing: "no write of /work/report.txt" })).toBe("missing-artifact");
+test("uses structured failureKind from judge/ledger, not prose", () => {
+  expect(failureClass({ kind: "masked-deliverable" })).toBe("masked-deliverable");
+  expect(failureClass({ kind: "unrun-program" })).toBe("unrun-program");
+  expect(failureClass({ kind: "captured-error" })).toBe("captured-error");
+  expect(failureClass({ kind: "missing-artifact" })).toBe("missing-artifact");
 });
 
 test("closes a class on the second recurrence; learned skill is a recovery path, not a miss mantra", () => {

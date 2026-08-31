@@ -1,6 +1,7 @@
-/** Facts from tool stdout. The model may paraphrase; the harness pins the exact lines. */
+/** Facts from tool stdout for reply pinning. File bodies are written as the model sent them. */
 
 const TOOL_HEAD = /^[a-z][a-z0-9_]*\s+\{/;
+/** Harness protocol lines only — not an error/language catalog. */
 const SKIP = /^(exit \d+|\(no output\)|ok|Observe:|BLOCKED:)/i;
 const MIN = 6;
 const MAX = 240;
@@ -33,35 +34,17 @@ export function ensureToolEvidence(text: string, evidence: string[]): string {
 }
 
 /**
- * Pin exact tool lines into file content only when the write already references them.
- * Appends a missing atom when a long enough prefix is already present — no format repair.
+ * Do not rewrite fs_* payloads. Injecting stdout into files mixed shell errors into scripts.
+ * Evidence stays for replies via ensureToolEvidence; the model owns file contents.
  */
-export function pinRelatedEvidence(content: string, evidence: string[]): string {
-  let out = content ?? "";
-  for (const atom of unique(evidence)) {
-    if (!atom || out.includes(atom)) continue;
-    const frag = distinctiveFragment(atom);
-    if (!frag || !out.includes(frag)) continue;
-    out = out.trim() ? `${out.trim()}\n\n${atom}` : atom;
-  }
-  return out;
-}
-
-/** fs_write / fs_append / fs_edit: carry exact tool lines the model already tried to include. */
 export function bindFsWriteArgs(
   name: string,
   args: Record<string, unknown>,
-  evidence: string[],
+  _evidence: string[],
 ): Record<string, unknown> {
-  if (name !== "fs_write" && name !== "fs_append" && name !== "fs_edit") return args;
-  const next = { ...args };
-  if ((name === "fs_write" || name === "fs_append") && typeof next.content === "string") {
-    next.content = pinRelatedEvidence(String(next.content), evidence);
-  }
-  if (name === "fs_edit" && typeof next.new === "string") {
-    next.new = pinRelatedEvidence(String(next.new), evidence);
-  }
-  return next;
+  void name;
+  void _evidence;
+  return args;
 }
 
 function capEvidence(found: string[]): string[] {
@@ -72,13 +55,6 @@ function capEvidence(found: string[]): string[] {
     .slice(0, MAX_ATOMS);
   const keep = new Set(ranked.map((item) => item.text));
   return found.filter((text) => keep.has(text));
-}
-
-/** Contiguous fragment long enough to prove the model meant this atom but mangled it. */
-function distinctiveFragment(atom: string): string | undefined {
-  const trimmed = atom.trim();
-  if (trimmed.length < 12) return;
-  return trimmed.slice(0, Math.min(24, Math.max(12, Math.floor(trimmed.length * 0.4))));
 }
 
 function unique(items: string[]): string[] {

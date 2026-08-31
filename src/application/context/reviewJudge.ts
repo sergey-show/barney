@@ -1,6 +1,15 @@
-import type { Review, ReviewVerdict } from "../../domain/run/Review.ts";
+import type { FailureKind, Review, ReviewVerdict } from "../../domain/run/Review.ts";
 import { replyOmitsPageCode } from "../research/verifyReply.ts";
+import { pathsMatch } from "./validationLedger.ts";
 import { asText } from "./packSession.ts";
+
+const FAILURE_KINDS = new Set<FailureKind>([
+  "masked-deliverable",
+  "unrun-program",
+  "captured-error",
+  "missing-artifact",
+  "general",
+]);
 
 export function parseReview(text: string): Review {
   const stripped = stripReviewFence(text);
@@ -15,10 +24,7 @@ export function parseReview(text: string): Review {
   }
   const recovered = recoverReviewVerdict(stripped);
   if (recovered) return recovered;
-  if (/unknown_api|needs?\s*docs|vendor api/i.test(text)) {
-    return { verdict: "unknown_api", summary: text.slice(0, 400), needsResearch: true, knowledgeQuery: text.slice(0, 120) };
-  }
-  return { verdict: "fail", summary: text.slice(0, 400), needsResearch: false };
+  return { verdict: "uncertain", summary: text.slice(0, 400), needsResearch: true };
 }
 
 function stripReviewFence(text: string): string {
@@ -71,12 +77,17 @@ function recoverReviewVerdict(text: string): Review | undefined {
   const match = text.match(/"verdict"\s*:\s*"(pass|fail|uncertain|unknown_api|gap)"/);
   if (!match?.[1]) return;
   const achievedFalse = /"achieved"\s*:\s*false/.test(text);
-  const verdict: ReviewVerdict = match[1] === "pass" && achievedFalse ? "fail" : match[1] as ReviewVerdict;
+  const achievedTrue = /"achieved"\s*:\s*true/.test(text);
+  let verdict: ReviewVerdict = match[1] as ReviewVerdict;
+  // Truncated recovery must not invent a pass without an explicit achieved:true.
+  if (verdict === "pass" && (achievedFalse || !achievedTrue)) verdict = "fail";
   return {
     verdict,
     achieved: verdict === "pass",
     summary: "reviewer JSON was wrapped or truncated; recovered verdict",
     needsResearch: /"needsResearch"\s*:\s*true/.test(text),
+    needsUser: /"needsUser"\s*:\s*true/.test(text),
+    operatorCorrected: /"operatorCorrected"\s*:\s*true/.test(text),
   };
 }
 
@@ -87,28 +98,152 @@ function normalizeReview(parsed: Review): Review | undefined {
   parsed.missing = parsed.missing == null ? undefined : asText(parsed.missing) || undefined;
   parsed.requested = parsed.requested == null ? undefined : asText(parsed.requested) || undefined;
   parsed.knowledgeQuery = parsed.knowledgeQuery == null ? undefined : asText(parsed.knowledgeQuery) || undefined;
+  parsed.needsUser = parsed.needsUser === true;
+  parsed.operatorCorrected = parsed.operatorCorrected === true;
+  if (parsed.failureKind && !FAILURE_KINDS.has(parsed.failureKind)) parsed.failureKind = undefined;
   if (parsed.missing && parsed.verdict !== "pass") {
     parsed.summary = `${parsed.summary}${parsed.summary ? " " : ""}Missing: ${parsed.missing}`;
   }
   return parsed;
 }
 
-/** Trust the reviewer; apply only guard and explicit deliverable checks — no task-shaped turn-law. */
-export function judgeReview(text: string, latest: string, evidence = "", reply = ""): Review {
+/** Structural failure kind from evidence and ledger — not reviewer prose. */
+export function inferFailureKind(
+  latest: string,
+  evidence: string,
+  unverifiedPaths: string[] = [],
+  guard?: { fileMiss?: string; maskMiss?: string },
+): FailureKind {
+  if (guard?.maskMiss) return "masked-deliverable";
+  if (guard?.fileMiss?.startsWith("last write captured")) return "captured-error";
+  if (guard?.fileMiss) return "missing-artifact";
+  if (maskedArtifactWrite(latest, evidence)) return "masked-deliverable";
+  const fileMiss = missingArtifactWrites(latest, evidence);
+  if (fileMiss?.startsWith("last write captured")) return "captured-error";
+  if (fileMiss) return "missing-artifact";
+  const requested = requestedArtifacts(latest);
+  if (requested.some((path) => unverifiedPaths.some((hit) => pathsMatch(hit, path)))) return "unrun-program";
+  return "general";
+}
+
+/**
+ * Structural guards only (paths written?, secret mask?, conflict markers?).
+ * Whether stderr dumps, inspection-only work, or wrong file *content* satisfy the ask
+ * is the reviewer's job — do not regex-classify error prose here.
+ */
+export function judgeReview(
+  text: string,
+  latest: string,
+  evidence = "",
+  reply = "",
+  opts?: { unverifiedPaths?: string[] },
+): Review {
   const review = parseReview(text);
-  if (review.verdict !== "pass") return review;
+  const unverified = opts?.unverifiedPaths ?? [];
+  if (review.verdict !== "pass") {
+    review.failureKind = review.failureKind ?? inferFailureKind(latest, evidence, unverified);
+    return review;
+  }
   const fileMiss = missingArtifactWrites(latest, evidence);
   const maskMiss = maskedArtifactWrite(latest, evidence);
+  const conflictMiss = conflictedDeliverable(evidence);
+  const urlMiss = missingGoalUrlOpen(latest, evidence);
   const miss = reply && evidence ? replyOmitsPageCode(reply, evidence, latest) : undefined;
-  const why = fileMiss || maskMiss || miss;
-  if (!why) return review;
+  const why = fileMiss || maskMiss || conflictMiss || urlMiss || miss;
+  if (!why) {
+    const unverifiedMiss = inferFailureKind(latest, evidence, unverified);
+    if (unverifiedMiss === "unrun-program") {
+      return {
+        ...review,
+        verdict: "fail",
+        achieved: false,
+        missing: review.missing || "written but not validated since last edit",
+        summary: `${review.summary ? `${review.summary} ` : ""}Written but not validated since last edit`,
+        failureKind: "unrun-program",
+      };
+    }
+    return review;
+  }
   return {
     ...review,
     verdict: "fail",
     achieved: false,
     missing: review.missing || why,
     summary: `${review.summary ? `${review.summary} ` : ""}${why}`,
+    failureKind: inferFailureKind(latest, evidence, unverified, { fileMiss, maskMiss }),
   };
+}
+
+/** User asked to read/open a concrete URL — evidence must show that URL was opened. */
+export function missingGoalUrlOpen(latest: string, evidence: string): string | undefined {
+  if (!asksToOpenUrl(latest)) return;
+  const urls = goalHttpUrls(latest);
+  if (!urls.length) return;
+  const missing = urls.filter((url) => !evidenceOpenedUrl(evidence, url));
+  if (!missing.length) return;
+  return `no browser_open of ${missing.join(", ")}`;
+}
+
+function asksToOpenUrl(latest: string): boolean {
+  return /прочитай|открой|откройте|по\s+ссылке|read\b|open\b|fetch\b|look\s*up|article|статье|docs?\b|документац/i.test(latest);
+}
+
+export function goalHttpUrls(message: string): string[] {
+  const found: string[] = [];
+  for (const match of message.matchAll(/https?:\/\/[^\s)>"'\]]+/gi)) {
+    const url = (match[0] ?? "").replace(/[.,;:!?]+$/, "");
+    if (url) found.push(url);
+  }
+  return [...new Set(found)];
+}
+
+function evidenceOpenedUrl(evidence: string, wanted: string): boolean {
+  const wantId = urlPathId(wanted);
+  for (const block of evidence.split(/(?=(?:browser_open|opened) )/gi)) {
+    if (!/^(?:browser_open|opened) /i.test(block)) continue;
+    const opened = openedUrlFromBlock(block);
+    if (!opened) continue;
+    if (urlsMatchOpen(opened, wanted)) return true;
+    if (wantId && urlPathId(opened) === wantId) return true;
+  }
+  return false;
+}
+
+function openedUrlFromBlock(block: string): string | undefined {
+  const opened = block.match(/^opened\s+(https?:\/\/\S+)/i)?.[1];
+  if (opened) return opened.replace(/[.,;:]+$/, "");
+  const fromJson = block.match(/"url"\s*:\s*"(https?:\\\\\/\\\\\/[^"]+|https?:\/\/[^"]+)"/i)?.[1];
+  if (fromJson) return fromJson.replace(/\\\//g, "/");
+  const bare = block.match(/https?:\/\/[^\s"'\\]+/i)?.[0];
+  return bare?.replace(/[.,;:]+$/, "");
+}
+
+function urlsMatchOpen(opened: string, wanted: string): boolean {
+  const a = opened.replace(/\/+$/, "").toLowerCase();
+  const b = wanted.replace(/\/+$/, "").toLowerCase();
+  if (a === b || a.startsWith(b) || b.startsWith(a)) return true;
+  try {
+    const left = new URL(opened);
+    const right = new URL(wanted);
+    if (left.hostname !== right.hostname) return false;
+    const lp = left.pathname.replace(/\/+$/, "");
+    const rp = right.pathname.replace(/\/+$/, "");
+    return lp === rp || lp.endsWith(rp) || rp.endsWith(lp);
+  } catch {
+    return false;
+  }
+}
+
+function urlPathId(url: string): string | undefined {
+  try {
+    const parts = new URL(url).pathname.split("/").filter(Boolean);
+    const last = parts.at(-1) ?? "";
+    if (/^\d{5,}$/.test(last)) return last;
+    const digits = last.replace(/\D/g, "");
+    if (digits.length >= 5) return digits;
+  } catch {
+    /* ignore */
+  }
 }
 
 const WRITE_VERB = /\b(?:write|create|save|put|place|output|produce|store|generate)\b/i;
@@ -165,7 +300,7 @@ export function artifactPins(latest: string, evidence: string): string {
 export function stillMissingArtifacts(latest: string, evidence: string, reviewMissing?: string): string {
   const requested = requestedArtifacts(latest);
   if (!requested.length) return reviewMissing || "the requested result";
-  const missing = requested.filter((path) => !evidenceWrote(evidence, path));
+  const missing = unwrittenArtifacts(latest, evidence);
   if (missing.length) return missing.join(", ");
   return reviewMissing || "the requested result";
 }
@@ -212,16 +347,67 @@ function askedToReplaceSecrets(latest: string): boolean {
   return /<your-[a-z0-9-]+>/i.test(latest) || /\breplace secrets\b/i.test(latest);
 }
 
+/** Unresolved conflict markers in the *latest* body of a file — not stale grep/merge noise. */
+export function conflictedDeliverable(evidence: string): string | undefined {
+  const bodies = latestFileBodies(evidence);
+  for (const body of bodies.values()) {
+    if (hasConflictMarkers(body)) {
+      return "unresolved conflict markers remain in a deliverable";
+    }
+  }
+}
+
+function hasConflictMarkers(text: string): boolean {
+  return /^<<<<<<< /m.test(text) || /\n<<<<<<< /m.test(text);
+}
+
+/** Last on-disk snapshot per path from fs_read / fs_write / fs_edit (not shell grep of markers). */
+function latestFileBodies(evidence: string): Map<string, string> {
+  const bodies = new Map<string, string>();
+  for (const block of toolBlocks(evidence)) {
+    if (block.startsWith("fs_write ") || block.startsWith("fs_edit ")) {
+      const raw = block.replace(/^fs_(?:write|edit) /, "").split("\n")[0] ?? "";
+      try {
+        const parsed = JSON.parse(raw) as { path?: string; content?: string; new?: string };
+        if (!parsed.path) continue;
+        const body = parsed.content ?? parsed.new;
+        if (typeof body === "string") bodies.set(normEvidencePath(parsed.path), body);
+      } catch {
+        /* skip */
+      }
+      continue;
+    }
+    if (block.startsWith("fs_read ")) {
+      const raw = block.split("\n")[0] ?? "";
+      const pathMatch = raw.match(/"path"\s*:\s*"((?:\\.|[^"\\])*)"/);
+      const path = pathMatch?.[1]?.replace(/\\"/g, '"');
+      if (!path) continue;
+      const body = block.split("\n").slice(1).join("\n");
+      // Drop Observe/error tails from the read payload.
+      const clean = body.replace(/\n\nObserve:[\s\S]*$/, "").replace(/^error:[\s\S]*/i, "");
+      if (clean && !/^error:/i.test(clean)) bodies.set(normEvidencePath(path), clean);
+    }
+  }
+  return bodies;
+}
+
+function normEvidencePath(path: string): string {
+  return path.replaceAll("\\", "/");
+}
+
 function isRuntimeSink(path: string): boolean {
   const n = path.replaceAll("\\", "/");
   return /\.(log|pid)$/i.test(n) || /(^|\/)var\/log\//i.test(n);
 }
 
+/**
+ * A shell write with non-zero exit did not land. File content judgment is the reviewer's.
+ */
 export function evidenceWrote(evidence: string, requested: string): boolean {
   let state: "none" | "ok" | "poison" = "none";
   for (const block of toolBlocks(evidence)) {
     if (blockWrites(block, requested)) {
-      state = block.startsWith("shell ") && blockLooksFailed(block) ? "poison" : "ok";
+      state = block.startsWith("shell ") && shellExitFailed(block) ? "poison" : "ok";
       continue;
     }
     if (state === "none" && evidenceListed(block, requested)) state = "ok";
@@ -235,9 +421,13 @@ export function writeCapturedError(evidence: string, requested: string): boolean
   let poisoned = false;
   for (const block of toolBlocks(evidence)) {
     if (!blockWrites(block, requested)) continue;
-    poisoned = block.startsWith("shell ") && blockLooksFailed(block);
+    poisoned = block.startsWith("shell ") && shellExitFailed(block);
   }
   return poisoned;
+}
+
+function shellExitFailed(block: string): boolean {
+  return /\nexit [1-9]\d*(?:\n|$)/.test(block) || /^exit [1-9]\d*(?:\n|$)/.test(block);
 }
 
 function evidenceListed(evidence: string, requested: string): boolean {
@@ -249,7 +439,7 @@ function evidenceListed(evidence: string, requested: string): boolean {
 }
 
 function toolBlocks(evidence: string): string[] {
-  return evidence.split(/(?=(?:shell|fs_write|fs_edit) )/g).filter(Boolean);
+  return evidence.split(/(?=(?:shell|fs_write|fs_edit|fs_append|fs_restore|fs_read) )/g).filter(Boolean);
 }
 
 function blockWrites(block: string, requested: string): boolean {
@@ -260,10 +450,6 @@ function blockWrites(block: string, requested: string): boolean {
       "i",
     ).test(block);
   });
-}
-
-function blockLooksFailed(block: string): boolean {
-  return /Traceback\b|Unable to load|Could not (?:get|read|open|load)\b|SyntaxError\b|IndentationError\b|NameError\b|\bException\b|command failed|N\/A to N\/A/i.test(block);
 }
 
 function writeAliases(requested: string): string[] {
