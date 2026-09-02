@@ -62,6 +62,10 @@ These names describe the runtime. They are not a hard role pasted into a system 
 | **Shadow** | Recorded failures. They are not overwritten until they are worked through. |
 | **Motive / action / operation** | Why this session exists / what this step is / which tool runs. |
 | **Wanting ≠ liking** | Keep going by changing path, not by hammering the same call. |
+| **Dream** | Idle time compresses raw Shadow into a few heuristics. |
+| **Frustration** | Enough failed paths → stop and ask for a paradigm shift, naming the stuck Shadow. |
+| **Shadow recall** | Similar past fails surface before the act (embeddings when the host supports them). |
+| **Verified skill** | A skill is pinned only after a recovery that worked — not invented mid-miss. |
 | **Analyze then plan** | Same model: what must be true, then the steps, then the act and review. |
 
 ## Install
