@@ -1,7 +1,9 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { useLocale } from "./LocaleContext.tsx";
 import { sanitizeMermaid } from "./mermaidSanitize.ts";
+import { prepareAssistantReply } from "./replyPresent.ts";
 
 const MERMAID_LANGS = new Set([
   "mermaid",
@@ -22,11 +24,28 @@ const MERMAID_LANGS = new Set([
 const MERMAID_START = /^(flowchart|graph|sequenceDiagram|classDiagram|stateDiagram(?:-v2)?|erDiagram|mindmap|timeline|gitGraph|pie|journey)\b/;
 
 export function MarkdownBody(props: { text: string }) {
+  const { t } = useLocale();
+  const prepared = prepareAssistantReply(props.text);
   return (
     <div className="md">
       <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
-        {props.text}
+        {prepared.body}
       </ReactMarkdown>
+      {prepared.sources.length ? (
+        <nav className="md-sources" aria-label={t.replySources}>
+          <div className="md-sources-label">{t.replySources}</div>
+          <ul className="md-sources-list">
+            {prepared.sources.map((source) => (
+              <li key={source.href}>
+                <a className="md-source" href={source.href} target="_blank" rel="noreferrer">
+                  <span className="md-source-host">{source.host}</span>
+                  <span className="md-source-title">{source.title}</span>
+                </a>
+              </li>
+            ))}
+          </ul>
+        </nav>
+      ) : null}
     </div>
   );
 }
@@ -52,7 +71,7 @@ const components = {
   a: ({ href, children }: { href?: string; children?: ReactNode }) => {
     const safe = href && /^https?:\/\//i.test(href) ? href : undefined;
     return safe ? (
-      <a href={safe} target="_blank" rel="noreferrer">
+      <a className="md-link" href={safe} target="_blank" rel="noreferrer">
         {children}
       </a>
     ) : (
