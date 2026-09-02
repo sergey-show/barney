@@ -10,6 +10,13 @@ import { DomainError } from "../domain/shared/DomainError.ts";
 import { parseBoard } from "../application/psyche/board.ts";
 import { appendExistence, formatExistence, parseExistence } from "../application/psyche/existence.ts";
 import { nextIdleWork, studyQuery } from "../application/psyche/idleTick.ts";
+import {
+  applyDreamHeuristics,
+  compressShadowLocally,
+  dreamSystemPrompt,
+  dreamUserPrompt,
+  parseDreamHeuristics,
+} from "../application/psyche/dream.ts";
 import { slugKey } from "../domain/memory/MemoryNote.ts";
 import {
   DESIGN_GOAL,
@@ -73,6 +80,7 @@ export class Kernel {
   readonly mcpRuntime: McpRuntime;
   readonly browser: PlaywrightBrowser;
   readonly homeRepo: HomeRepo;
+  private readonly llm: RoleRouter;
   private readonly startRun: StartRun;
   private readonly driveSolve: DriveSolve;
   private readonly formAgent: FormAgentFromRun;
@@ -108,12 +116,13 @@ export class Kernel {
     this.browser = new PlaywrightBrowser();
     this.homeRepo = new HomeRepo(home);
     const worktrees = new GitWorktree(home);
+    this.llm = new RoleRouter(this.providers);
     this.startRun = new StartRun(this.agents, this.runs, worktrees, this.events);
     this.driveSolve = new DriveSolve(
       this.agents,
       this.runs,
       this.episodes,
-      new RoleRouter(this.providers),
+      this.llm,
       this.research,
       this.events,
       (root) => new NodeWorkspace(root, (text, path) => this.mask(text, path), (text) => this.reveal(text)),
@@ -227,6 +236,17 @@ export class Kernel {
         tags: ["samost", "psyche"],
         sourceAgentId: agent.id.value,
       }));
+    } else if (work.item === "dream") {
+      const heuristics = await this.dreamCompress(samost.shadow, rules);
+      if (heuristics.length) {
+        await this.memories.save(new MemoryNote({
+          key: samostKey(agent.id.value),
+          title: "Self",
+          body: formatSamost(applyDreamHeuristics(samost, heuristics)),
+          tags: ["samost", "psyche", "dream"],
+          sourceAgentId: agent.id.value,
+        }));
+      }
     } else if (work.item === "board_to_existence" && open) {
       const next = appendExistence(existence, { kind: "idle", text: work.text });
       await this.memories.save(new MemoryNote({
@@ -260,11 +280,25 @@ export class Kernel {
         }));
       }
     }
-    if (work.item === "seed_samost" || work.item === "absorb_shadow" || work.item === "study") {
+    if (work.item === "seed_samost" || work.item === "absorb_shadow" || work.item === "dream" || work.item === "study") {
       await this.become(agent.id.value, `become: idle ${work.item}`);
     }
     this.events.publish([event("psyche.tick", { item: work.item })]);
     return work.item;
+  }
+
+  private async dreamCompress(shadow: string[], rules: string[]): Promise<string[]> {
+    try {
+      const result = await this.llm.complete("planner", [
+        { role: "system", content: dreamSystemPrompt() },
+        { role: "user", content: dreamUserPrompt(shadow, rules) },
+      ]);
+      const parsed = parseDreamHeuristics(result.text || result.thinking || "");
+      if (parsed.length) return parsed;
+    } catch {
+      /* local fallback */
+    }
+    return compressShadowLocally(shadow);
   }
 
   private async postDesignSession(agentId: string): Promise<void> {

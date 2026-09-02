@@ -46,6 +46,21 @@ export function wantingWithoutLiking(input: {
   return input.extraApproaches >= 1;
 }
 
+/** Session-local stuckness: extra paths + saturated families + repeated same failure. */
+export function frustrationScore(input: {
+  extraApproaches: number;
+  saturatedFamilies?: number;
+  sameFailureCount?: number;
+}): number {
+  return (input.extraApproaches ?? 0)
+    + (input.saturatedFamilies ?? 0)
+    + Math.min(input.sameFailureCount ?? 0, 3);
+}
+
+export function frustrationCritical(score: number): boolean {
+  return score >= 5;
+}
+
 export function familySaturated(fails: number): boolean {
   return fails >= 2;
 }
@@ -77,6 +92,7 @@ export function stopAfterFail(
     minStrategies: number;
     used: number;
     wanting?: boolean;
+    frustration?: number;
   },
 ): HaltReason {
   if (review.verdict === "pass") return "pass";
@@ -84,6 +100,6 @@ export function stopAfterFail(
   if (limits.exhausted) return "budget";
   if (limits.attempts >= limits.maxAttempts) return "attempts";
   if (needsUser(review) && limits.used >= Math.max(1, limits.minStrategies)) return "need_user";
-  if (limits.wanting) return "wanting";
+  if (limits.wanting || frustrationCritical(limits.frustration ?? 0)) return "wanting";
   return "continue";
 }

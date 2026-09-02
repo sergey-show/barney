@@ -1,9 +1,10 @@
 import { buildActSystem, turnLawFromConstitution, workspaceLines } from "../context/actPrompt.ts";
-import { cycleStrategy, familyKey, stopAfterFail, wantingWithoutLiking, type HaltReason } from "../context/controlLoop.ts";
+import { cycleStrategy, familyKey, familySaturated, frustrationScore, stopAfterFail, wantingWithoutLiking, type HaltReason } from "../context/controlLoop.ts";
 import { draftPlan, formatPlan } from "../context/draftPlan.ts";
 import { bindToolArgs, goalAnchors } from "../context/bindAnchor.ts";
 import { bumpBacklog, failureClass, formatBacklog, learnedSkillDraft, parseBacklog } from "../context/failureClass.ts";
 import { emptyTrail, lessonRule, noteTrail, pickRules, isRecapLesson, type LessonTrail } from "../context/lessonRule.ts";
+import { formatShadowWarnings, rankByEmbeddings, rankBySimilarity, type RecallItem } from "../context/semanticRecall.ts";
 import { sealReply } from "../context/sealReply.ts";
 import { judgeReview, artifactPins, missingIsLocalArtifact, requestedArtifacts, stillMissingArtifacts, unwrittenArtifacts } from "../context/reviewJudge.ts";
 import { applyToolObserve, attachObserve, classifyToolResult } from "../context/observeTool.ts";
@@ -45,7 +46,7 @@ import {
   samostFromDesign,
 } from "../psyche/design.ts";
 import { boardKey, designKey, existenceKey, samostKey } from "../psyche/keys.ts";
-import { absorbIntoSamost, formatSamost, parseSamost, renderSamostPrompt, seedSamost, type Samost } from "../psyche/samost.ts";
+import { absorbIntoSamost, formatSamost, parseSamost, pickRelevantLines, renderSamostPrompt, seedSamost, type Samost } from "../psyche/samost.ts";
 import { renderSkillCatalog } from "../skills/starterSkills.ts";
 import { Episode } from "../../domain/memory/Episode.ts";
 import { classKey, pluginMemoryKey } from "../../domain/memory/experienceGraph.ts";
@@ -196,8 +197,15 @@ export class DriveSolve {
       body: planText,
       tags: ["plan", run.taskClass],
     });
+    const shadowWarnings = await this.recallShadowWarnings(
+      `${run.goal}\n${input.message}`,
+      [...recentMemories, ...hopNotes],
+      psyche.samost.shadow,
+      input.signal,
+    );
     const memoryNote = [
       rules.length ? `Rules from past runs of this task class (obey these):\n${rules.map((line) => `- ${line}`).join("\n")}` : "",
+      shadowWarnings,
       packed.digest ? `Session so far (compressed; full chat stays in the portal):\n${packed.digest}` : "",
       ...shared.map((note) => `[${note.key}] ${note.title}: ${note.body.slice(0, 160)}`),
       ...past.slice(0, 3).map((e) => `[${e.outcome}] ${e.goal} → ${e.nextHint}`),
@@ -357,8 +365,11 @@ export class DriveSolve {
     if (run.status === "ready" && review.verdict !== "pass") {
       const missing = review.missing || review.summary || "the requested result";
       const leftover = leftoverWork(input.message, artifactEvidence(run));
-      const why = haltAfterFail(review, run, extra.n, leftover);
-      const note = haltNote(why, missing);
+      const why = haltAfterFail(review, run, extra.n, leftover, input.signal?.aborted, familyFails);
+      const note = haltNote(why, missing, {
+        shadow: pickRelevantLines(psyche.samost.shadow, `${run.goal}\n${input.message}`, 1)[0],
+        family: lessonTrail.failedFamily,
+      });
       run.append("system", note);
     }
 
@@ -705,9 +716,9 @@ export class DriveSolve {
       && lessonTrail.recoveredBy
       && lessonTrail.recoveredBy !== lessonTrail.failedFamily,
     );
+    // Persist only after a verified recovery path this run — not from backlog alone.
+    if (!recovered) return "";
     if (!klass || klass === "general" || klass === "aborted-unfinished") return "";
-    const prev = parseBacklog((await this.memory.get(slugKey(`backlog/${klass}`)))?.body ?? "");
-    if (!recovered && !prev) return "";
     const draft = learnedSkillDraft(klass, {
       failedFamily: lessonTrail.failedFamily,
       recoveredBy: lessonTrail.recoveredBy,
@@ -720,7 +731,7 @@ export class DriveSolve {
       key: `plugin/${draft.name}`,
       title: `Plugin ${draft.name}`,
       body: draft.body,
-      tags: ["plugin", "learned", klass],
+      tags: ["plugin", "learned", "verified", klass],
     });
     await this.graph.link(classKey(klass), pluginMemoryKey(draft.name), "learned");
     await this.graph.link(slugKey(`backlog/${klass}`), pluginMemoryKey(draft.name), "recovered-by");
@@ -752,14 +763,19 @@ export class DriveSolve {
     const trail: ChatMessage[] = [{ role: "assistant", content: act.text }];
     while (true) {
       const leftover = leftoverWork(input.latest, artifactEvidence(input.run));
-      const halt = haltAfterFail(review, input.run, input.extra.n, leftover, input.signal?.aborted);
+      const halt = haltAfterFail(review, input.run, input.extra.n, leftover, input.signal?.aborted, input.familyFails);
       if (halt === "pass") return { act, review };
       if (halt === "abort") throw new DomainError("aborted", "step interrupted");
       if (halt !== "continue") {
-        if (halt === "wanting") {
-          const why = "wanting without liking: stop after extra path this message";
-          input.psyche.board = addBoard(input.psyche.board, { kind: "decision", text: why });
-          input.psyche.existence = appendExistence(input.psyche.existence, { kind: "act", text: why });
+        if (halt === "wanting" || halt === "need_user") {
+          const shadow = pickRelevantLines(input.psyche.samost.shadow, input.latest, 1)[0] ?? "";
+          const family = input.lessonTrail.failedFamily || "";
+          const why = haltNote(halt, review.missing || review.summary || "the requested result", { shadow, family });
+          input.psyche.board = addBoard(input.psyche.board, { kind: "decision", text: clipText(why, 200) });
+          input.psyche.existence = appendExistence(input.psyche.existence, { kind: "act", text: clipText(why, 180) });
+          if (shadow) {
+            input.psyche.board = addBoard(input.psyche.board, { kind: "blocker", text: clipText(shadow, 180) });
+          }
           await this.flushPsyche(input.run, input.run.agentId, input.psyche);
         }
         break;
@@ -1031,6 +1047,52 @@ export class DriveSolve {
     await this.runs.save(run);
   }
 
+  /** Top similar fail/rule notes (+ shadow lines) for Inform — embeddings when available. */
+  private async recallShadowWarnings(
+    query: string,
+    notes: Array<{ key: string; title: string; body: string; tags: string[] }>,
+    shadow: string[],
+    signal?: AbortSignal,
+  ): Promise<string> {
+    const candidates: RecallItem[] = [
+      ...notes
+        .filter((note) =>
+          note.tags.some((tag) => /fail|rule|experience|shadow|backlog/i.test(tag))
+          || /fail|rule|backlog|lesson/i.test(note.key),
+        )
+        .map((note) => ({
+          key: note.key,
+          text: `${note.title}: ${note.body}`.replace(/\s+/g, " ").trim().slice(0, 240),
+          tags: note.tags,
+        })),
+      ...shadow.map((line, index) => ({
+        key: `shadow/${index}`,
+        text: line,
+        tags: ["shadow"],
+      })),
+    ];
+    if (!candidates.length) return "";
+    let picked = rankBySimilarity(query, candidates, 3);
+    if (this.llm.embed) {
+      try {
+        const texts = [query, ...candidates.map((item) => item.text)];
+        const vectors = await this.llm.embed(texts, signal);
+        if (vectors && vectors.length === texts.length && vectors[0]) {
+          const queryVec = vectors[0];
+          const embedded = candidates.map((item, index) => ({
+            ...item,
+            vector: vectors[index + 1] ?? [],
+          })).filter((item) => item.vector.length);
+          const byEmbed = rankByEmbeddings(queryVec, embedded, 3);
+          if (byEmbed.length) picked = byEmbed;
+        }
+      } catch {
+        /* keep token rank */
+      }
+    }
+    return formatShadowWarnings(picked);
+  }
+
   private async loadPsyche(run: Run, agentId: string): Promise<PsycheState> {
     const [samostNote, existenceNote, boardNote] = await Promise.all([
       this.memory.get(samostKey(agentId)),
@@ -1209,7 +1271,9 @@ function haltAfterFail(
   extraApproaches: number,
   leftover?: { unwritten: string[] },
   aborted?: boolean,
+  familyFails?: Map<string, number>,
 ): HaltReason {
+  const saturated = [...(familyFails?.values() ?? [])].filter((n) => familySaturated(n)).length;
   return stopAfterFail(review, {
     aborted,
     exhausted: run.budget.exhausted(),
@@ -1218,17 +1282,32 @@ function haltAfterFail(
     minStrategies: run.minStrategies,
     used: run.usedStrategies.length,
     wanting: wantingWithoutLiking({ extraApproaches, leftover }),
+    frustration: frustrationScore({
+      extraApproaches,
+      saturatedFamilies: saturated,
+      sameFailureCount: run.sameFailureCount,
+    }),
   });
 }
 
-function haltNote(why: HaltReason, missing: string): string {
+function haltNote(
+  why: HaltReason,
+  missing: string,
+  stuck?: { shadow?: string; family?: string },
+): string {
+  const shadow = stuck?.shadow?.trim()
+    ? ` Stuck in shadow: ${clipText(stuck.shadow, 160)}.`
+    : "";
+  const family = stuck?.family?.trim()
+    ? ` Failed family: ${stuck.family}.`
+    : "";
   if (why === "need_user") {
-    return `Need a decision or secret: ${clipText(missing, 240)}. I cannot continue without it.`;
+    return `Need a decision or secret: ${clipText(missing, 240)}.${shadow}${family} I cannot continue without a paradigm shift from you.`;
   }
   if (why === "wanting") {
-    return `Wanting without liking: stopped after one extra path this message. Still missing: ${clipText(missing, 240)}. Next message continues from here.`;
+    return `Wanting without liking: stopped after extra paths this message.${shadow}${family} Still missing: ${clipText(missing, 240)}. Need a paradigm shift (different tool, constraint, or secret) — next message continues from here.`;
   }
-  return `Still missing: ${clipText(missing, 240)} (${why === "continue" ? "last approach could not start" : why}). Next message continues from here.`;
+  return `Still missing: ${clipText(missing, 240)} (${why === "continue" ? "last approach could not start" : why}).${shadow} Next message continues from here.`;
 }
 
 const SHORT_CHAT_RULES = `Short turn. No tools, no search, no review loop.
@@ -1385,8 +1464,8 @@ function persistNudge(strategy: StrategyName, review: Review, researchNote: stri
   }
   if (strategy === "write_capability") {
     const body = learnedSkill
-      ? `\nA scheme for this miss is in plugin ${learnedSkill}. plugin_read it, then deliver the result this turn.`
-      : `\nChange tool family. Do not invent a plugin from this miss. Still deliver the result this turn.`;
+      ? `\nA verified scheme for this miss is in plugin ${learnedSkill}. plugin_read it, then deliver the result this turn. Do not wrap it as a new MCP server.`
+      : `\nChange tool family. Do not invent a plugin or MCP from this miss. Still deliver the result this turn.`;
     return `${common}${body}`;
   }
   if (strategy === "switch_model") {

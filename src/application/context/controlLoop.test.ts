@@ -1,5 +1,14 @@
 import { expect, test } from "bun:test";
-import { cycleStrategy, familyKey, needsUser, stopAfterFail, toolFamily, wantingWithoutLiking } from "./controlLoop.ts";
+import {
+  cycleStrategy,
+  familyKey,
+  frustrationCritical,
+  frustrationScore,
+  needsUser,
+  stopAfterFail,
+  toolFamily,
+  wantingWithoutLiking,
+} from "./controlLoop.ts";
 
 test("wanting without liking is one extra path this message, not session age or family fails", () => {
   expect(wantingWithoutLiking({ extraApproaches: 0 })).toBe(false);
@@ -16,6 +25,16 @@ test("wanting does not stop while requested artifacts are still unwritten", () =
     extraApproaches: 1,
     leftover: { unwritten: [] },
   })).toBe(true);
+});
+
+test("frustration score hits critical and forces wanting halt", () => {
+  expect(frustrationScore({ extraApproaches: 1, saturatedFamilies: 1, sameFailureCount: 2 })).toBe(4);
+  expect(frustrationCritical(4)).toBe(false);
+  expect(frustrationCritical(5)).toBe(true);
+  const review = { verdict: "fail", summary: "no list", missing: "VM list" };
+  expect(stopAfterFail(review, {
+    exhausted: false, attempts: 2, maxAttempts: 12, minStrategies: 3, used: 1, wanting: false, frustration: 5,
+  })).toBe("wanting");
 });
 
 test("tool family and shell verb stay on the observe layer", () => {

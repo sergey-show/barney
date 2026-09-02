@@ -1,4 +1,5 @@
 import type { BoardEntry } from "./board.ts";
+import { needsDream } from "./dream.ts";
 import type { ExistenceBlock } from "./existence.ts";
 import type { Samost } from "./samost.ts";
 
@@ -9,6 +10,7 @@ export type IdleItem =
   | { item: "seed_samost" }
   | { item: "absorb_shadow"; rule: string }
   | { item: "board_to_existence"; text: string }
+  | { item: "dream" }
   | { item: "study"; topic: string }
   | { item: "none" };
 
@@ -30,6 +32,8 @@ export function nextIdleWork(input: {
   if (openBlocker && !already) {
     return { item: "board_to_existence", text: openBlocker.text };
   }
+
+  if (needsDream(input.samost.shadow)) return { item: "dream" };
 
   const freshRule = input.rules.find((rule) => {
     const needle = rule.toLowerCase();

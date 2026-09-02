@@ -123,6 +123,8 @@ export interface WorkspacePort {
 
 export interface LlmPort {
   complete(role: Role, messages: ChatMessage[], options?: CompleteOptions): Promise<ChatResult>;
+  /** OpenAI-compatible embeddings when the bound provider supports them. */
+  embed?(texts: string[], signal?: AbortSignal): Promise<number[][] | null>;
 }
 
 export interface ProviderCatalog {
