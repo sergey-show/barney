@@ -2,6 +2,7 @@ export type Alert = {
   level: "error" | "warning";
   title: string;
   detail: string;
+  allowPrefix?: string;
 };
 
 export function classifyClientError(err: unknown): Alert {

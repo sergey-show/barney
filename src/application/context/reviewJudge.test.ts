@@ -250,12 +250,70 @@ test("judgeReview fails a pass that wrote a DETECTED_SECRET mask into a delivera
   );
   expect(review.verdict).toBe("fail");
   expect(review.missing).toMatch(/DETECTED_SECRET|live value/i);
-  const sanitize = judgeReview(
+  const sanitizeMaskWrite = judgeReview(
     '{"verdict":"pass","achieved":true,"summary":"placeholders written","needsResearch":false}',
     "Replace secrets with `<your-aws-access-key-id>` in `/app/ray_cluster.yaml`",
-    'fs_write {"path":"/app/ray_cluster.yaml","content":"AWS_ACCESS_KEY_ID=DETECTED_SECRET_CREDENTIAL_AB"}\\nwrote /app/ray_cluster.yaml (40 chars)',
+    'fs_write {"path":"/app/ray_cluster.yaml","content":"AWS_ACCESS_KEY_ID=DETECTED_SECRET_CREDENTIAL_AB"}\nwrote /app/ray_cluster.yaml (40 chars)',
   );
-  expect(sanitize.verdict).toBe("pass");
+  expect(sanitizeMaskWrite.verdict).toBe("fail");
+  expect(sanitizeMaskWrite.missing).toMatch(/verify|DETECTED_SECRET/i);
+});
+
+test("judgeReview fails sanitize pass when secrets were replaced but never re-checked", () => {
+  const latest = [
+    "Please help sanitize my github repository of all API keys.",
+    "Replace with <your-aws-access-key-id> and <your-huggingface-token>.",
+  ].join("\n");
+  const evidence = [
+    'shell {"command":"cd /app/dclm && grep -n AKIA ray_processing/ray_cluster.yaml"}',
+    "exit 0",
+    "29: AWS_ACCESS_KEY_ID=DETECTED_SECRET_CREDENTIAL_12D84780",
+    'shell {"command":"cd /app/dclm && sed -i \'s/DETECTED_SECRET_CREDENTIAL_12D84780/<your-aws-access-key-id>/g\' ray_processing/ray_cluster.yaml && echo done"}',
+    "exit 0",
+    "done",
+  ].join("\n");
+  const review = judgeReview(
+    '{"verdict":"pass","achieved":true,"summary":"sed ok","needsResearch":false}',
+    latest,
+    evidence,
+  );
+  expect(review.verdict).toBe("fail");
+  expect(review.missing).toMatch(/verify|re-check|fs_read|grep/i);
+});
+
+test("judgeReview passes sanitize when replace is followed by a clean probe", () => {
+  const latest = "Sanitize secrets with <your-aws-access-key-id> in ray_cluster.yaml";
+  const evidence = [
+    'shell {"command":"sed -i \'s/DETECTED_SECRET_CREDENTIAL_12/<your-aws-access-key-id>/g\' ray_cluster.yaml"}',
+    "exit 0",
+    'shell {"command":"grep -n DETECTED_SECRET ray_cluster.yaml || true"}',
+    "exit 0",
+    "",
+  ].join("\n");
+  const review = judgeReview(
+    '{"verdict":"pass","achieved":true,"summary":"clean","needsResearch":false}',
+    latest,
+    evidence,
+  );
+  expect(review.verdict).toBe("pass");
+});
+
+test("judgeReview fails sanitize when probe after replace still shows DETECTED_SECRET", () => {
+  const latest = "Sanitize API keys; use <your-huggingface-token> placeholders";
+  const evidence = [
+    'shell {"command":"sed -i \'s/DETECTED_SECRET_HIGH_ENTROPY_AAA/<your-huggingface-token>/g\' ray_cluster.yaml"}',
+    "exit 0",
+    'shell {"command":"grep -n hf_ ray_cluster.yaml"}',
+    "exit 0",
+    "40: echo DETECTED_SECRET_HIGH_ENTROPY_BBB > ~/.cache/huggingface/token",
+  ].join("\n");
+  const review = judgeReview(
+    '{"verdict":"pass","achieved":true,"summary":"done","needsResearch":false}',
+    latest,
+    evidence,
+  );
+  expect(review.verdict).toBe("fail");
+  expect(review.missing).toMatch(/still on disk|every mask/i);
 });
 
 test("judgeReview does not treat a later secret mask in shell output as a write into an earlier file", () => {

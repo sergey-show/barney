@@ -9,6 +9,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { escapeDeniedMessage } from "../../domain/guard/outsideAccess.ts";
 import { denyShell } from "../../domain/guard/ShellPolicy.ts";
 import type { WorkspacePort } from "../../application/ports.ts";
 import { wrapSandboxed } from "../sandbox/OsSandbox.ts";
@@ -21,11 +22,17 @@ const MAX_READ = 200_000;
 const MAX_SEARCH_HITS = 40;
 const MAX_WALK = 400;
 
+/** Optional gate for absolute paths outside the worktree (session grants / eval auto-approve). */
+export type OutsideAccess = {
+  isAllowed: (absPath: string) => boolean;
+};
+
 export class NodeWorkspace implements WorkspacePort {
   constructor(
     private readonly root: string,
     private readonly mask: (text: string, path?: string) => string,
     private readonly unmask: (text: string) => string = (text) => text,
+    private readonly outside?: OutsideAccess,
   ) {}
 
   async list(rel = "."): Promise<string> {
@@ -181,6 +188,8 @@ export class NodeWorkspace implements WorkspacePort {
       : resolve(root, raw.replace(/^\/+/, ""));
     const relToRoot = relative(root, abs);
     if (relToRoot.startsWith("..") || isAbsolute(relToRoot)) {
+      if (this.outside?.isAllowed(abs)) return abs;
+      if (this.outside) throw new Error(escapeDeniedMessage(abs));
       throw new Error("path escapes worktree");
     }
     return abs;

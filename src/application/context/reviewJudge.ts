@@ -146,10 +146,11 @@ export function judgeReview(
   }
   const fileMiss = missingArtifactWrites(latest, evidence);
   const maskMiss = maskedArtifactWrite(latest, evidence);
+  const secretLeftover = leftoverSecretMasks(latest, evidence);
   const conflictMiss = conflictedDeliverable(evidence);
   const urlMiss = missingGoalUrlOpen(latest, evidence);
   const miss = reply && evidence ? replyOmitsPageCode(reply, evidence, latest) : undefined;
-  const why = fileMiss || maskMiss || conflictMiss || urlMiss || miss;
+  const why = fileMiss || maskMiss || secretLeftover || conflictMiss || urlMiss || miss;
   if (!why) {
     const unverifiedMiss = inferFailureKind(latest, evidence, unverified);
     if (unverifiedMiss === "unrun-program") {
@@ -170,7 +171,10 @@ export function judgeReview(
     achieved: false,
     missing: review.missing || why,
     summary: `${review.summary ? `${review.summary} ` : ""}${why}`,
-    failureKind: inferFailureKind(latest, evidence, unverified, { fileMiss, maskMiss }),
+    failureKind: inferFailureKind(latest, evidence, unverified, {
+      fileMiss,
+      maskMiss: maskMiss || secretLeftover,
+    }),
   };
 }
 
@@ -343,8 +347,66 @@ export function maskedArtifactWrite(latest: string, evidence: string): string | 
   }
 }
 
-function askedToReplaceSecrets(latest: string): boolean {
-  return /<your-[a-z0-9-]+>/i.test(latest) || /\breplace secrets\b/i.test(latest);
+/**
+ * Sanitize / placeholder goals: after a replace, evidence must show a clean probe
+ * (fs_read or grep/cat) with no DETECTED_SECRET_* left. Prevents false pass on sed exit 0.
+ */
+export function leftoverSecretMasks(latest: string, evidence: string): string | undefined {
+  if (!askedToReplaceSecrets(latest)) return;
+  if (!/DETECTED_SECRET_/i.test(evidence)) return;
+  const blocks = toolBlocks(evidence);
+  let lastMutate = -1;
+  for (let i = 0; i < blocks.length; i++) {
+    if (isSecretReplaceMutate(blocks[i] ?? "")) lastMutate = i;
+  }
+  if (lastMutate < 0) {
+    return "secrets still present as DETECTED_SECRET_* — replace with <your-…> placeholders";
+  }
+  let sawVerify = false;
+  for (let i = lastMutate + 1; i < blocks.length; i++) {
+    const block = blocks[i] ?? "";
+    if (!isSecretContentProbe(block)) continue;
+    sawVerify = true;
+    const body = block.split("\n").slice(1).join("\n");
+    if (/DETECTED_SECRET_/i.test(body)) {
+      return "DETECTED_SECRET_* still on disk after replace — finish every mask hash with <your-…> and re-check";
+    }
+  }
+  for (const body of latestFileBodies(evidence).values()) {
+    if (/DETECTED_SECRET_/i.test(body)) {
+      return "DETECTED_SECRET_* still on disk after replace — finish every mask hash with <your-…> and re-check";
+    }
+  }
+  if (!sawVerify) {
+    return "replaced secrets but did not verify — fs_read or grep the edited files; DETECTED_SECRET_* must be gone";
+  }
+}
+
+function isSecretReplaceMutate(block: string): boolean {
+  const head = block.split("\n")[0] ?? "";
+  if (/^fs_edit /.test(head) || /^fs_write /.test(head)) {
+    if (/^error:/im.test(block)) return false;
+    return /DETECTED_SECRET_|<your-[a-z0-9-]+>/i.test(head);
+  }
+  if (!/^shell /.test(head)) return false;
+  if (!/\bsed\b/i.test(head) || !/-i\b/.test(head)) return false;
+  if (!/^exit 0\b/m.test(block)) return false;
+  return /DETECTED_SECRET_|<your-[a-z0-9-]+>/i.test(head);
+}
+
+function isSecretContentProbe(block: string): boolean {
+  const head = block.split("\n")[0] ?? "";
+  if (/^fs_read /.test(head)) return true;
+  if (!/^shell /.test(head)) return false;
+  if (/\bsed\b/i.test(head) && /-i\b/.test(head)) return false;
+  return /\b(?:grep|cat|sed|head|tail)\b/i.test(head);
+}
+
+export function askedToReplaceSecrets(latest: string): boolean {
+  return /<your-[a-z0-9-]+>/i.test(latest)
+    || /\breplace secrets\b/i.test(latest)
+    || /\bsanitize\b/i.test(latest)
+    || /\bplaceholder values\b/i.test(latest);
 }
 
 /** Unresolved conflict markers in the *latest* body of a file — not stale grep/merge noise. */

@@ -8,6 +8,7 @@ import { formatShadowWarnings, rankByEmbeddings, rankBySimilarity, type RecallIt
 import { sealReply } from "../context/sealReply.ts";
 import { judgeReview, artifactPins, missingIsLocalArtifact, requestedArtifacts, stillMissingArtifacts, unwrittenArtifacts } from "../context/reviewJudge.ts";
 import { applyToolObserve, attachObserve, classifyToolResult } from "../context/observeTool.ts";
+import { permissionPrefix } from "../../domain/guard/outsideAccess.ts";
 import { rememberGood, rememberPrevious, restoreBody, pathsWithRestore } from "../context/fileCheckpoint.ts";
 import {
   absoluteFilePathsInCommand,
@@ -105,7 +106,7 @@ export class DriveSolve {
     private readonly llm: LlmPort,
     private readonly research: ResearchPort,
     private readonly events: EventBus,
-    private readonly workspaceFor: (root: string) => WorkspacePort,
+    private readonly workspaceFor: (root: string, runId?: string) => WorkspacePort,
     private readonly skills: SkillPort,
     private readonly browser: BrowserPort,
     private readonly memory: MemoryRepository,
@@ -502,7 +503,7 @@ export class DriveSolve {
     lessonTrail = emptyTrail(),
   ): Promise<ChatResult> {
     const started = Date.now();
-    const ws = this.workspaceFor(run.worktreePath);
+    const ws = this.workspaceFor(run.worktreePath, run.id.value);
     const tools = depth > 0 ? CHILD_TOOLS : AGENT_TOOLS;
     const userText = [...messages].reverse().find((message) => message.role === "user")?.content ?? "";
     const convo = [...messages];
@@ -510,6 +511,7 @@ export class DriveSolve {
     let tokens = 0;
     let usd = 0;
     let keepWritingN = 0;
+    const askedOutside = new Set<string>();
     for (let i = 0; i < MAX_TOOL_ROUNDS; i++) {
       if (signal?.aborted) throw new DomainError("aborted", "step interrupted");
       last = await this.completeRole(run, "coder", convo, { tools, signal });
@@ -581,6 +583,24 @@ export class DriveSolve {
         };
         const observed = preview.skip ? preview : applyToolObserve(call, raw, failedCalls, familyFails, observeOpts);
         const out = observed.out;
+        if (/permission required:.*path escapes worktree/i.test(out)) {
+          const fromMsg = /\(([^)\n]+)\)/.exec(out)?.[1];
+          const abs = fromMsg || String(call.arguments?.path ?? "");
+          const prefix = permissionPrefix(abs) || abs;
+          if (prefix && !askedOutside.has(prefix)) {
+            askedOutside.add(prefix);
+            this.events.publish([event("run.permission_needed", {
+              runId: run.id.value,
+              path: abs,
+              prefix,
+              tool: call.name,
+            })]);
+            run.append(
+              "system",
+              `Outside path needs permission: ${abs}. Allow with /allow ${prefix} (portal: Allow), then /continue.`,
+            );
+          }
+        }
         const failed = observed.skip || /BLOCKED:/.test(out) || classifyToolResult(out, call.name).error;
         noteTrail(lessonTrail, familyKey(call), failed);
         if (psyche) {
