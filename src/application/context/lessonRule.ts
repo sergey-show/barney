@@ -38,6 +38,13 @@ export type LessonInput = {
   failClass?: string;
   failedFamily?: string;
   recoveredBy?: string;
+  /** How many times this family failed before the rule was written. */
+  familyFailCount?: number;
+  /** Episode / run ids that birthed this rule. */
+  sources?: string[];
+  /** Prior confidence when reinforcing an existing rule. */
+  priorConfidence?: number;
+  priorVersion?: number;
 };
 
 export type LessonRule = {
@@ -45,28 +52,85 @@ export type LessonRule = {
   title: string;
   body: string;
   topic: string;
+  confidence: number;
+  version: number;
+  sources: string[];
 };
 
 export function lessonRule(input: LessonInput): LessonRule {
   const topic = ruleTopic(input);
   const body = redactSecrets(specificLesson(input) ?? trailLesson(input, topic) ?? genericLesson(input, topic));
+  const priorConf = input.priorConfidence ?? 0;
+  const priorVer = input.priorVersion ?? 0;
+  const confirmed = priorConf > 0;
+  const confidence = confirmed
+    ? Math.min(1, priorConf + 0.15)
+    : crystallizeConfidence(input);
+  const version = confirmed ? priorVer + 1 : 1;
+  const sources = [...(input.sources ?? [])].slice(0, 5);
+  const mode = classTag(input.failClass);
+  // Prefer failure-mode keys so recall transfers across task classes that share a miss shape.
+  const key = mode
+    ? slugKey(`rule/mode/${mode}/${topic}`)
+    : slugKey(`rule/${input.taskClass}/${topic}`);
   return {
-    key: slugKey(`rule/${input.taskClass}/${topic}`),
+    key,
     title: `Rule: ${topic}`,
     body,
     topic,
+    confidence,
+    version,
+    sources,
   };
 }
+
+/** Prompt / memory line with version, confidence, and episode provenance. */
+export function formatLessonLine(rule: LessonRule): string {
+  const conf = ` (v${rule.version}, conf ${rule.confidence.toFixed(2)})`;
+  const provenance = rule.sources.length ? ` [from ${rule.sources.join(", ")}]` : "";
+  return `${rule.body}${conf}${provenance}`;
+}
+
+function crystallizeConfidence(input: LessonInput): number {
+  if (input.operatorCorrected) return 0.9;
+  if ((input.familyFailCount ?? 0) >= 2 && input.failedFamily) return 0.75;
+  if (input.failedFamily && input.recoveredBy) return 0.7;
+  if (input.verdict === "pass" && input.failedFamily) return 0.65;
+  if (input.failClass && input.failClass !== "general") return 0.55;
+  return 0.4;
+}
+
+export type PickedRule = {
+  key: string;
+  line: string;
+  sourceClass: string;
+};
 
 export function pickRules(
   notes: Array<{ key: string; title: string; body: string; tags: string[] }>,
   taskClass: string,
   limit = 5,
   relatedKeys: string[] = [],
+  failureModes: string[] = [],
 ): string[] {
+  return pickRuleNotes(notes, taskClass, limit, relatedKeys, failureModes).map((r) => r.line);
+}
+
+/** Ranked rules with provenance for transfer accounting. */
+export function pickRuleNotes(
+  notes: Array<{ key: string; title: string; body: string; tags: string[] }>,
+  taskClass: string,
+  limit = 5,
+  relatedKeys: string[] = [],
+  failureModes: string[] = [],
+): PickedRule[] {
   const rules = notes.filter((note) => note.tags.includes("rule") || note.key.startsWith("rule/"));
   const related = new Set(relatedKeys);
+  const modes = new Set(failureModes.filter((m) => m && m !== "general" && m !== "aborted-unfinished"));
   const ranked = [
+    ...rules.filter((note) =>
+      [...modes].some((mode) => note.key.includes(`/mode/${mode}/`) || note.tags.includes(mode)),
+    ),
     ...rules.filter((note) =>
       (note.tags.includes("fail") || note.tags.includes("experience"))
       && (note.tags.includes(taskClass) || note.key.includes(`/${taskClass}/`)),
@@ -75,15 +139,35 @@ export function pickRules(
     ...rules.filter((note) => note.tags.includes(taskClass) && !note.tags.includes("fail")),
   ];
   const seen = new Set<string>();
-  const lines: string[] = [];
+  const out: PickedRule[] = [];
   for (const note of ranked) {
     const line = redactSecrets(note.body.split("\n")[0] ?? "").trim();
     if (!line || seen.has(line) || isRecapLesson(line)) continue;
     seen.add(line);
-    lines.push(line);
-    if (lines.length >= limit) break;
+    out.push({
+      key: note.key,
+      line,
+      sourceClass: ruleSourceClassFromNote(note),
+    });
+    if (out.length >= limit) break;
   }
-  return lines;
+  return out;
+}
+
+function ruleSourceClassFromNote(note: { key: string; tags: string[] }): string {
+  const mode = note.key.match(/^rule\/mode\/([^/]+)\//)?.[1];
+  if (mode) return `mode:${mode}`;
+  const fromKey = note.key.match(/^rule\/([^/]+)\//)?.[1];
+  if (fromKey && fromKey !== "mode") return fromKey;
+  const tag = note.tags.find((t) =>
+    t
+    && t !== "rule"
+    && t !== "lesson"
+    && t !== "fail"
+    && t !== "experience"
+    && !t.startsWith("conf:")
+  );
+  return tag || "general";
 }
 
 function specificLesson(input: LessonInput): string | null {
@@ -98,6 +182,7 @@ function trailLesson(input: LessonInput, topic: string): string | null {
   const recovered = clipFamily(input.recoveredBy);
   const klass = classTag(input.failClass);
   const prefix = klass ? `[${klass}] ` : "";
+  const repeats = input.familyFailCount ?? 0;
   if (input.verdict === "pass") {
     if (failed && recovered && recovered !== failed) {
       return oneSentence(`For ${topic}: after ${failed} failed, ${recovered} delivered.`);
@@ -105,6 +190,12 @@ function trailLesson(input: LessonInput, topic: string): string | null {
     return null;
   }
   if (!failed) return null;
+  if (repeats >= 2) {
+    return oneSentence(
+      `${prefix}when ${failed} fails twice on ${topic}, switch family before a third try` +
+        (recovered && recovered !== failed ? `; ${recovered} recovered` : ""),
+    );
+  }
   if (recovered && recovered !== failed) {
     return oneSentence(`${prefix}if ${failed} fails, do not repeat ${failed}; next was ${recovered}.`);
   }

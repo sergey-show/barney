@@ -106,7 +106,7 @@ export function openTui(header: { agent: string; model?: string }): Tui | null {
       move(L.metaRow, 1);
       write(pad(ansi.muted(`  ${header.agent}${header.model ? ` · ${header.model}` : ""}`), L.cols));
       move(L.metaRow + 1, 1);
-      write(pad(ansi.muted("  /work  /debug  /memory  /agents  /sessions  /form  /quit"), L.cols));
+      write(pad(ansi.muted("  /work  /debug  /memory  /agents  /sessions  /form  /allow  /quit"), L.cols));
       move(L.metaRow + 2, 1);
       const meta = [
         session && `session ${session}`,

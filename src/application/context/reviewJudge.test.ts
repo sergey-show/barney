@@ -83,15 +83,31 @@ test("judgeReview ignores stale conflict markers after a clean rewrite", () => {
   expect(review.verdict).toBe("pass");
 });
 
-test("judgeReview leaves inspection-vs-act to the reviewer, not keyword masks", () => {
+test("judgeReview fails sanitize pass that only inventories secrets (identification-without-action)", () => {
+  const latest = "Please help sanitize my github repository of all API keys and replace with <your-aws-access-key-id> placeholders.";
+  const evidence = [
+    'shell {"command":"grep -rInE AKIA ."}',
+    "exit 0",
+    "./ray_processing/process.py:122: AKIA123",
+    'fs_search {"query":"AKIA123"}',
+    "ray_processing/process.py:122",
+  ].join("\n");
+  const review = judgeReview(
+    '{"verdict":"pass","achieved":true,"summary":"found the keys, ready to execute on your go-ahead","needsResearch":false}',
+    latest,
+    evidence,
+    "Ready to execute the edits on your go-ahead.",
+  );
+  expect(review.verdict).toBe("fail");
+  expect(review.missing).toMatch(/identification-without-action|replace/i);
+});
+
+test("judgeReview still leaves pure find-and-merge inspection to the reviewer", () => {
   const latest = "I can't find those changes. Please help me find them and merge them into master.";
   const evidence = [
     'shell {"command":"cd /app/site && git status && git reflog --oneline -10"}',
     "exit 0",
     "c499730 HEAD@{1}: commit: Move to Stanford",
-    'shell {"command":"cd /app/site && git show --stat c499730"}',
-    "exit 0",
-    " _includes/about.md | 2 +-",
   ].join("\n");
   const softPass = judgeReview(
     '{"verdict":"pass","achieved":true,"summary":"found the commit","needsResearch":false}',
@@ -99,12 +115,6 @@ test("judgeReview leaves inspection-vs-act to the reviewer, not keyword masks", 
     evidence,
   );
   expect(softPass.verdict).toBe("pass");
-  const reviewerFail = judgeReview(
-    '{"verdict":"fail","achieved":false,"summary":"only inspected","missing":"merge into master","needsResearch":false}',
-    latest,
-    evidence,
-  );
-  expect(reviewerFail.verdict).toBe("fail");
 });
 
 test("judgeReview fails a deliverable write with non-zero exit, not by scraping stderr prose", () => {
@@ -250,12 +260,70 @@ test("judgeReview fails a pass that wrote a DETECTED_SECRET mask into a delivera
   );
   expect(review.verdict).toBe("fail");
   expect(review.missing).toMatch(/DETECTED_SECRET|live value/i);
-  const sanitize = judgeReview(
+  const sanitizeMaskWrite = judgeReview(
     '{"verdict":"pass","achieved":true,"summary":"placeholders written","needsResearch":false}',
     "Replace secrets with `<your-aws-access-key-id>` in `/app/ray_cluster.yaml`",
-    'fs_write {"path":"/app/ray_cluster.yaml","content":"AWS_ACCESS_KEY_ID=DETECTED_SECRET_CREDENTIAL_AB"}\\nwrote /app/ray_cluster.yaml (40 chars)',
+    'fs_write {"path":"/app/ray_cluster.yaml","content":"AWS_ACCESS_KEY_ID=DETECTED_SECRET_CREDENTIAL_AB"}\nwrote /app/ray_cluster.yaml (40 chars)',
   );
-  expect(sanitize.verdict).toBe("pass");
+  expect(sanitizeMaskWrite.verdict).toBe("fail");
+  expect(sanitizeMaskWrite.missing).toMatch(/verify|DETECTED_SECRET/i);
+});
+
+test("judgeReview fails sanitize pass when secrets were replaced but never re-checked", () => {
+  const latest = [
+    "Please help sanitize my github repository of all API keys.",
+    "Replace with <your-aws-access-key-id> and <your-huggingface-token>.",
+  ].join("\n");
+  const evidence = [
+    'shell {"command":"cd /app/dclm && grep -n AKIA ray_processing/ray_cluster.yaml"}',
+    "exit 0",
+    "29: AWS_ACCESS_KEY_ID=DETECTED_SECRET_CREDENTIAL_12D84780",
+    'shell {"command":"cd /app/dclm && sed -i \'s/DETECTED_SECRET_CREDENTIAL_12D84780/<your-aws-access-key-id>/g\' ray_processing/ray_cluster.yaml && echo done"}',
+    "exit 0",
+    "done",
+  ].join("\n");
+  const review = judgeReview(
+    '{"verdict":"pass","achieved":true,"summary":"sed ok","needsResearch":false}',
+    latest,
+    evidence,
+  );
+  expect(review.verdict).toBe("fail");
+  expect(review.missing).toMatch(/verify|re-check|fs_read|grep/i);
+});
+
+test("judgeReview passes sanitize when replace is followed by a clean probe", () => {
+  const latest = "Sanitize secrets with <your-aws-access-key-id> in ray_cluster.yaml";
+  const evidence = [
+    'shell {"command":"sed -i \'s/DETECTED_SECRET_CREDENTIAL_12/<your-aws-access-key-id>/g\' ray_cluster.yaml"}',
+    "exit 0",
+    'shell {"command":"grep -n DETECTED_SECRET ray_cluster.yaml || true"}',
+    "exit 0",
+    "",
+  ].join("\n");
+  const review = judgeReview(
+    '{"verdict":"pass","achieved":true,"summary":"clean","needsResearch":false}',
+    latest,
+    evidence,
+  );
+  expect(review.verdict).toBe("pass");
+});
+
+test("judgeReview fails sanitize when probe after replace still shows DETECTED_SECRET", () => {
+  const latest = "Sanitize API keys; use <your-huggingface-token> placeholders";
+  const evidence = [
+    'shell {"command":"sed -i \'s/DETECTED_SECRET_HIGH_ENTROPY_AAA/<your-huggingface-token>/g\' ray_cluster.yaml"}',
+    "exit 0",
+    'shell {"command":"grep -n hf_ ray_cluster.yaml"}',
+    "exit 0",
+    "40: echo DETECTED_SECRET_HIGH_ENTROPY_BBB > ~/.cache/huggingface/token",
+  ].join("\n");
+  const review = judgeReview(
+    '{"verdict":"pass","achieved":true,"summary":"done","needsResearch":false}',
+    latest,
+    evidence,
+  );
+  expect(review.verdict).toBe("fail");
+  expect(review.missing).toMatch(/still on disk|every mask/i);
 });
 
 test("judgeReview does not treat a later secret mask in shell output as a write into an earlier file", () => {

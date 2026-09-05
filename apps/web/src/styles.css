@@ -420,6 +420,63 @@ button.item.danger { color: #fecaca; border-color: #7f1d1d; }
 .md th, .md td { border: 1px solid var(--line); padding: 6px 8px; text-align: left; }
 .md th { color: var(--muted); font-weight: 600; background: #181818; }
 .md a { color: var(--accent); }
+.md-link {
+  color: var(--accent);
+  text-decoration: underline;
+  text-decoration-color: rgb(77 163 255 / 0.35);
+  text-underline-offset: 3px;
+}
+.md-link:hover {
+  text-decoration-color: var(--accent);
+}
+.md-sources {
+  margin: 1.1em 0 0;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+.md-sources-label {
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  margin-bottom: 8px;
+}
+.md-sources-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+.md-source {
+  display: grid;
+  grid-template-columns: minmax(72px, auto) 1fr;
+  gap: 10px;
+  align-items: baseline;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: #121218;
+  color: var(--text);
+  text-decoration: none;
+}
+.md-source:hover {
+  border-color: rgb(77 163 255 / 0.35);
+  background: #16161f;
+}
+.md-source-host {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.md-source-title {
+  font-size: 13px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
 .md img { max-width: 100%; height: auto; }
 .md :not(pre) > code {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;

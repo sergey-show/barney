@@ -35,6 +35,7 @@ const ru = {
   workOther: (n: number) => `${n} ещё`,
   hide: "Скрыть",
   user: "вы",
+  replySources: "Источники",
   kindWork: "работа",
   kindThinking: "мысли",
   kindConsole: "консоль",
@@ -45,6 +46,8 @@ const ru = {
   alertFailed: "Не вышло",
   alertInterrupted: "Шаг не закончился",
   alertAgent: "Ошибка Барни",
+  alertPermission: "Нужен доступ",
+  allowPath: "Разрешить",
   shownForYou: "Просмотр",
   close: "Закрыть",
   tryEmbed: "Встроить",
@@ -192,6 +195,7 @@ const en = {
   workOther: (n: number) => `${n} other`,
   hide: "Hide",
   user: "you",
+  replySources: "Sources",
   kindWork: "work",
   kindThinking: "thinking",
   kindConsole: "console",
@@ -202,6 +206,8 @@ const en = {
   alertFailed: "Request failed",
   alertInterrupted: "Last step did not finish",
   alertAgent: "Agent error",
+  alertPermission: "Permission needed",
+  allowPath: "Allow",
   shownForYou: "Preview",
   close: "Close",
   tryEmbed: "Embed",
@@ -338,5 +344,6 @@ export function alertTitle(locale: Locale, title: string): string {
   if (title === "Request failed") return t.alertFailed;
   if (title === "Last step did not finish") return t.alertInterrupted;
   if (title === "Agent error") return t.alertAgent;
+  if (title === "Permission needed") return t.alertPermission;
   return title;
 }

@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { MarkdownBody } from "./MarkdownBody.tsx";
 import { classifyClientError, interruptedNotice, type Alert } from "./alerts.ts";
-import { api } from "./api.ts";
+import { api, jsonBody } from "./api.ts";
 import { FilesPage } from "./FilesPage.tsx";
 import { useLocale } from "./LocaleContext.tsx";
 import { alertTitle } from "./i18n.ts";
@@ -110,7 +110,18 @@ export function App() {
       ws.onmessage = (ev) => {
         try {
           const data = JSON.parse(String(ev.data)) as {
-            event?: { type?: string; payload?: { runId?: string; delta?: string; name?: string; path?: string; url?: string; shot?: string } };
+            event?: {
+              type?: string;
+              payload?: {
+                runId?: string;
+                delta?: string;
+                name?: string;
+                path?: string;
+                prefix?: string;
+                url?: string;
+                shot?: string;
+              };
+            };
           };
           if (data.event?.type === "run.thinking_delta") {
             if (data.event.payload?.runId === runIdRef.current) {
@@ -120,6 +131,27 @@ export function App() {
           }
           if (data.event?.type === "run.thinking") {
             void refresh(runIdRef.current).finally(() => setLiveThink(""));
+            return;
+          }
+          if (data.event?.type === "run.permission_needed") {
+            const payload = data.event.payload;
+            if (!payload || payload.runId !== runIdRef.current) return;
+            const prefix = String(payload.prefix || payload.path || "").trim();
+            if (!prefix) return;
+            setAlert({
+              level: "warning",
+              title: "Permission needed",
+              detail: `Allow outside access for ${prefix}?`,
+              allowPrefix: prefix,
+            });
+            void refresh(runIdRef.current);
+            return;
+          }
+          if (data.event?.type === "run.permission_granted") {
+            if (data.event.payload?.runId === runIdRef.current) {
+              setAlert((prev) => (prev?.allowPrefix ? null : prev));
+              void refresh(runIdRef.current);
+            }
             return;
           }
           if (data.event?.type === "browser.shown") {
@@ -255,6 +287,23 @@ export function App() {
       setAlert(classifyClientError(err));
       setPending(null);
     } finally {
+      setBusy(false);
+    }
+  }
+
+  async function allowOutside(prefix: string) {
+    if (!runId || !prefix.trim()) return;
+    setBusy(true);
+    try {
+      await api<{ granted: string }>(`/api/sessions/${runId}/permissions`, {
+        method: "POST",
+        ...jsonBody({ path: prefix }),
+      });
+      setAlert(null);
+      await refresh(runId);
+      await resume("continue");
+    } catch (err) {
+      setAlert(classifyClientError(err));
       setBusy(false);
     }
   }
@@ -395,6 +444,7 @@ export function App() {
               canResume={Boolean(runId) && run?.status !== "done"}
               onContinue={() => void resume("continue")}
               onRetry={() => void resume("retry")}
+              onAllow={alert.allowPrefix && runId ? () => void allowOutside(alert.allowPrefix!) : undefined}
               onDismiss={() => {
                 dismissedAlert.current = alert.detail;
                 setAlert(null);
@@ -534,6 +584,7 @@ function AlertBanner(props: {
   canResume: boolean;
   onContinue: () => void;
   onRetry: () => void;
+  onAllow?: () => void;
   onDismiss: () => void;
 }) {
   const { locale, t } = useLocale();
@@ -542,11 +593,17 @@ function AlertBanner(props: {
       <div className="alert-title">{alertTitle(locale, props.alert.title)}</div>
       <div className="muted">{props.alert.detail}</div>
       <div className="alert-actions">
-        {props.canResume ? (
+        {props.onAllow ? (
+          <button type="button" className="primary" disabled={props.busy} onClick={props.onAllow}>{t.allowPath}</button>
+        ) : null}
+        {props.canResume && !props.onAllow ? (
           <>
             <button type="button" className="primary" disabled={props.busy} onClick={props.onContinue}>{t.continue}</button>
             <button type="button" className="item" disabled={props.busy} onClick={props.onRetry}>{t.retry}</button>
           </>
+        ) : null}
+        {props.canResume && props.onAllow ? (
+          <button type="button" className="item" disabled={props.busy} onClick={props.onContinue}>{t.continue}</button>
         ) : null}
         <button type="button" className="item" disabled={props.busy} onClick={props.onDismiss}>{t.dismiss}</button>
       </div>

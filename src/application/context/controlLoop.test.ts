@@ -1,7 +1,16 @@
 import { expect, test } from "bun:test";
-import { cycleStrategy, familyKey, needsUser, stopAfterFail, toolFamily, wantingWithoutLiking } from "./controlLoop.ts";
+import {
+  cycleStrategy,
+  familyKey,
+  frustrationCritical,
+  frustrationScore,
+  needsUser,
+  stopAfterFail,
+  toolFamily,
+  wantingWithoutLiking,
+} from "./controlLoop.ts";
 
-test("wanting without liking is one extra path this message, not session age or family fails", () => {
+test("wanting without liking stops after one flat extra path by default", () => {
   expect(wantingWithoutLiking({ extraApproaches: 0 })).toBe(false);
   expect(wantingWithoutLiking({ extraApproaches: 1 })).toBe(true);
   expect(wantingWithoutLiking({ extraApproaches: 4, passed: true })).toBe(false);
@@ -16,6 +25,39 @@ test("wanting does not stop while requested artifacts are still unwritten", () =
     extraApproaches: 1,
     leftover: { unwritten: [] },
   })).toBe(true);
+});
+
+test("progress improved or second wind extends wanting budget", () => {
+  const improved = {
+    score: 70,
+    missingArtifacts: 0,
+    mutates: 2,
+    probes: 1,
+    inspections: 1,
+    saturatedFamilies: 0,
+    sameFailureCount: 0,
+    boardFacts: 1,
+    delta: "improved" as const,
+    secondWind: false,
+    taskKind: "delivery" as const,
+    pinLine: "Progress 70/100",
+  };
+  expect(wantingWithoutLiking({ extraApproaches: 1, progress: improved })).toBe(false);
+  expect(wantingWithoutLiking({ extraApproaches: 3, progress: improved })).toBe(true);
+  expect(wantingWithoutLiking({
+    extraApproaches: 2,
+    progress: { ...improved, secondWind: true, delta: "flat" },
+  })).toBe(false);
+});
+
+test("frustration score hits critical and forces wanting halt", () => {
+  expect(frustrationScore({ extraApproaches: 1, saturatedFamilies: 1, sameFailureCount: 2 })).toBe(4);
+  expect(frustrationCritical(4)).toBe(false);
+  expect(frustrationCritical(5)).toBe(true);
+  const review = { verdict: "fail", summary: "no list", missing: "VM list" };
+  expect(stopAfterFail(review, {
+    exhausted: false, attempts: 2, maxAttempts: 12, minStrategies: 3, used: 1, wanting: false, frustration: 5,
+  })).toBe("wanting");
 });
 
 test("tool family and shell verb stay on the observe layer", () => {

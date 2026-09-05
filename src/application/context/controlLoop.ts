@@ -1,4 +1,5 @@
 import type { StrategyName } from "../../domain/run/Strategy.ts";
+import type { ProgressSnapshot } from "./progressSignal.ts";
 
 export const SOLVE_CYCLE: StrategyName[] = [
   "recall_failures",
@@ -34,24 +35,69 @@ export function shellHead(command: string): string {
   return first.replace(/^.*\//, "").replace(/\.exe$/i, "").toLowerCase();
 }
 
-/** Extra approaches this operator message (research, recovery, persist). Not run.attempts. Family fails stay in observe. */
+/**
+ * Wanting ≠ liking: stop hammering when approaches burn without progress.
+ * Progress / second wind / leftover writes keep the loop alive longer on delivery work.
+ */
 export function wantingWithoutLiking(input: {
   extraApproaches: number;
   passed?: boolean;
   leftover?: { unwritten: string[] };
+  progress?: ProgressSnapshot | null;
 }): boolean {
   if (input.passed) return false;
   const leftover = input.leftover;
   if (leftover && leftover.unwritten.length > 0) return false;
-  return input.extraApproaches >= 1;
+  const progress = input.progress;
+  if (progress?.secondWind) return false;
+  if (progress?.delta === "improved") {
+    const cap = progress.taskKind === "research" ? 2 : 3;
+    return input.extraApproaches >= cap;
+  }
+  if (progress?.delta === "regressed") {
+    return input.extraApproaches >= 1;
+  }
+  // Flat / unknown: research gets one extra path; delivery stops after first extra.
+  const flatCap = progress?.taskKind === "research" ? 2 : 1;
+  return input.extraApproaches >= flatCap;
+}
+
+/** Session-local stuckness: extra paths + saturated families + repeated same failure − progress credit. */
+export function frustrationScore(input: {
+  extraApproaches: number;
+  saturatedFamilies?: number;
+  sameFailureCount?: number;
+  progressScore?: number;
+}): number {
+  const raw = (input.extraApproaches ?? 0)
+    + (input.saturatedFamilies ?? 0)
+    + Math.min(input.sameFailureCount ?? 0, 3);
+  const credit = input.progressScore != null && input.progressScore >= 60
+    ? 1
+    : input.progressScore != null && input.progressScore >= 40
+    ? 0
+    : 0;
+  return Math.max(0, raw - credit);
+}
+
+export function frustrationCritical(score: number): boolean {
+  return score >= 5;
 }
 
 export function familySaturated(fails: number): boolean {
   return fails >= 2;
 }
 
-export function cycleStrategy(used: StrategyName[], attempts: number, skipResearch = false): StrategyName {
+export function cycleStrategy(
+  used: StrategyName[],
+  attempts: number,
+  skipResearch = false,
+  prefer: StrategyName[] = [],
+): StrategyName {
   const cycle = skipResearch ? SOLVE_CYCLE.filter((name) => name !== "research") : SOLVE_CYCLE;
+  for (const name of prefer) {
+    if (cycle.includes(name) && !used.includes(name)) return name;
+  }
   const unused = cycle.find((name) => !used.includes(name));
   if (unused) return unused;
   const next = cycle[attempts % cycle.length] ?? "recall_failures";
@@ -77,6 +123,7 @@ export function stopAfterFail(
     minStrategies: number;
     used: number;
     wanting?: boolean;
+    frustration?: number;
   },
 ): HaltReason {
   if (review.verdict === "pass") return "pass";
@@ -84,6 +131,6 @@ export function stopAfterFail(
   if (limits.exhausted) return "budget";
   if (limits.attempts >= limits.maxAttempts) return "attempts";
   if (needsUser(review) && limits.used >= Math.max(1, limits.minStrategies)) return "need_user";
-  if (limits.wanting) return "wanting";
+  if (limits.wanting || frustrationCritical(limits.frustration ?? 0)) return "wanting";
   return "continue";
 }

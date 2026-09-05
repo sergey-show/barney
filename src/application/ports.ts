@@ -22,6 +22,7 @@ export interface EpisodeRepository {
   save(episode: Episode): Promise<void>;
   findForAgent(agentId: string, taskClass?: string): Promise<Episode[]>;
   findFailures(taskClass: string, failureMode: string): Promise<Episode[]>;
+  findByFailureMode(failureMode: string, limit?: number): Promise<Episode[]>;
   findRecent(limit?: number): Promise<Episode[]>;
   search(query: string, limit?: number): Promise<Episode[]>;
 }
@@ -123,6 +124,8 @@ export interface WorkspacePort {
 
 export interface LlmPort {
   complete(role: Role, messages: ChatMessage[], options?: CompleteOptions): Promise<ChatResult>;
+  /** OpenAI-compatible embeddings when the bound provider supports them. */
+  embed?(texts: string[], signal?: AbortSignal): Promise<number[][] | null>;
 }
 
 export interface ProviderCatalog {

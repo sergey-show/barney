@@ -101,6 +101,25 @@ const cli = defineCommand({
         again();
         continue;
       }
+      if (line.startsWith("/allow")) {
+        if (!runId) { note("session", "none"); again(); continue; }
+        const path = line.slice(6).trim();
+        if (!path) {
+          note("permission", "usage: /allow /path/prefix");
+          again();
+          continue;
+        }
+        try {
+          const prefix = await kernel.grantOutside(runId, path);
+          note("permission", `allowed ${prefix}`);
+          current = await kernel.getRun(runId) ?? current;
+          if (tui && current) tui.setChat(current.transcript);
+        } catch (err) {
+          note("error", String(err));
+        }
+        again();
+        continue;
+      }
       if (line === "/continue" || line === "/retry") {
         if (!runId) { note("session", "none"); again(); continue; }
         const live = tui ? tui.livePrinter(() => runId) : createLivePrinter(() => runId);

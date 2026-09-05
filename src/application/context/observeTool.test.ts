@@ -211,6 +211,71 @@ test("path outside the worktree tells the model to use shell and does not satura
   expect(repeat.out).toContain("exact same");
 });
 
+test("permission-required escape asks for /allow and does not saturate fs", () => {
+  const call = { name: "fs_write", arguments: { path: "/etc/nginx/nginx.conf" } };
+  const out =
+    "error: permission required: path escapes worktree (/etc/nginx/nginx.conf). Ask the operator to allow /etc/nginx (CLI/portal: /allow /etc/nginx).";
+  expect(classifyToolResult(out).observe).toMatch(/\/allow/i);
+  const familyFails = new Map<string, number>();
+  const first = applyToolObserve(call, out, new Set(), familyFails);
+  expect(first.skip).toBe(false);
+  expect(first.out).toMatch(/\/allow|shell/i);
+  expect(familyFails.get("fs") ?? 0).toBe(0);
+});
+
+test("old text not found does not saturate fs and hints fs_read", () => {
+  const call = {
+    name: "fs_edit",
+    arguments: {
+      path: "ray_processing/ray_cluster.yaml",
+      old: "export AWS_ACCESS_KEY_ID=DETECTED_SECRET_CREDENTIAL_12",
+      new: "export AWS_ACCESS_KEY_ID=<your-aws-access-key-id>",
+    },
+  };
+  const out = "error: old text not found in ray_processing/ray_cluster.yaml";
+  expect(classifyToolResult(out, "fs_edit").observe).toMatch(/fs_read|whitespace|snippet/i);
+  const familyFails = new Map<string, number>();
+  const failed = new Set<string>();
+  const first = applyToolObserve(call, out, failed, familyFails);
+  expect(first.skip).toBe(false);
+  expect(first.out).toMatch(/fs_read|unique snippet|fs_write/i);
+  expect(familyFails.get("fs") ?? 0).toBe(0);
+  applyToolObserve(
+    { ...call, arguments: { ...call.arguments, old: "other snippet" } },
+    out,
+    failed,
+    familyFails,
+  );
+  expect(familyFails.get("fs") ?? 0).toBe(0);
+  const read = applyToolObserve(
+    { name: "fs_read", arguments: { path: "ray_processing/ray_cluster.yaml" } },
+    "export AWS_ACCESS_KEY_ID=DETECTED_SECRET_CREDENTIAL_12\n",
+    failed,
+    familyFails,
+  );
+  expect(read.skip).toBe(false);
+});
+
+test("fs_read stays open after fs family is saturated by other errors", () => {
+  const familyFails = new Map<string, number>([["fs", 2]]);
+  const read = applyToolObserve(
+    { name: "fs_read", arguments: { path: "a.yaml" } },
+    "key: value\n",
+    new Set(),
+    familyFails,
+  );
+  expect(read.skip).toBe(false);
+  const edit = applyToolObserve(
+    { name: "fs_edit", arguments: { path: "a.yaml", old: "x", new: "y" } },
+    "error: old text not found in a.yaml",
+    new Set(),
+    familyFails,
+  );
+  // saturated already — edit blocked, but old-text-not-found alone wouldn't have saturated
+  expect(edit.skip).toBe(true);
+  expect(edit.out).toMatch(/BLOCKED: wanting without liking in fs/i);
+});
+
 test("fs_read of a Python file is not a network error and does not saturate fs", () => {
   const py = [
     "#!/usr/bin/env python3",

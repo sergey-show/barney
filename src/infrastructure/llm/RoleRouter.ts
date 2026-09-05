@@ -3,6 +3,7 @@ import { LlmProvider } from "../../domain/provider/LlmProvider.ts";
 import { ROLES, type ChatMessage, type ChatResult, type CompleteOptions, type Role } from "../../domain/provider/Role.ts";
 import { clientFor } from "./clients/clientFor.ts";
 import { requestBodyExtras, schemaFor } from "./clients/schema.ts";
+import { fetchEmbeddings } from "./embed.ts";
 
 export { parseModelIds } from "./clients/openaiChat.ts";
 export { extractReasoning, ThinkStreamFilter } from "./thinkParse.ts";
@@ -28,6 +29,11 @@ export class RoleRouter implements LlmPort {
       onThinking: options?.onThinking,
     });
     return { ...result, model: result.model || model, ms: result.ms ?? Date.now() - started };
+  }
+
+  async embed(texts: string[], signal?: AbortSignal): Promise<number[][] | null> {
+    const { provider, model } = await resolveBinding(this.catalog, "embedder");
+    return fetchEmbeddings(provider, model, texts, signal);
   }
 }
 

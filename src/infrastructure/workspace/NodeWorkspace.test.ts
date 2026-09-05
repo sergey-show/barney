@@ -108,4 +108,31 @@ if ((await appWs.read("out/report.txt")) !== "inside-jail") {
   throw new Error("relative path should resolve inside the worktree root");
 }
 
+{
+  const outside = resolve("/tmp");
+  let denied = false;
+  try {
+    await appWs.read(join(outside, "nope-barney-outside.txt"));
+  } catch (err) {
+    denied = err instanceof Error && /path escapes worktree/.test(err.message);
+  }
+  if (!denied) throw new Error("outside path should deny without grant");
+
+  const granted = new Set([outside]);
+  const openWs = new NodeWorkspace(appRoot, (text) => text, (text) => text, {
+    isAllowed: (abs) => abs === outside || abs.startsWith(`${outside}/`),
+  });
+  writeFileSync(join(outside, "barney-outside-grant.txt"), "granted-ok");
+  const body = await openWs.read(join(outside, "barney-outside-grant.txt"));
+  if (body !== "granted-ok") throw new Error(`grant read: ${body}`);
+
+  const autoWs = new NodeWorkspace(appRoot, (text) => text, (text) => text, {
+    isAllowed: () => true,
+  });
+  if ((await autoWs.read(join(outside, "barney-outside-grant.txt"))) !== "granted-ok") {
+    throw new Error("auto-approve gate should allow outside reads");
+  }
+  void granted;
+}
+
 console.log("workspace jail ok");

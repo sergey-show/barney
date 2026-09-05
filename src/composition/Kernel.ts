@@ -1,5 +1,5 @@
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { Agent } from "../domain/agent/Agent.ts";
 import { GuardPolicy } from "../domain/guard/GuardPolicy.ts";
@@ -10,6 +10,13 @@ import { DomainError } from "../domain/shared/DomainError.ts";
 import { parseBoard } from "../application/psyche/board.ts";
 import { appendExistence, formatExistence, parseExistence } from "../application/psyche/existence.ts";
 import { nextIdleWork, studyQuery } from "../application/psyche/idleTick.ts";
+import {
+  applyDreamHeuristics,
+  compressShadowLocally,
+  dreamSystemPrompt,
+  dreamUserPrompt,
+  parseDreamHeuristics,
+} from "../application/psyche/dream.ts";
 import { slugKey } from "../domain/memory/MemoryNote.ts";
 import {
   DESIGN_GOAL,
@@ -54,6 +61,12 @@ import { PlaywrightBrowser } from "../infrastructure/browser/PlaywrightBrowser.t
 import { FsPluginStore, defaultCompatDirs, mcpView } from "../infrastructure/plugins/FsPluginStore.ts";
 import { McpRuntime } from "../infrastructure/mcp/McpRuntime.ts";
 import { NodeWorkspace } from "../infrastructure/workspace/NodeWorkspace.ts";
+import {
+  autoApproveOutside,
+  pathAllowedByGrants,
+  permissionGrantedMessage,
+  permissionPrefix,
+} from "../domain/guard/outsideAccess.ts";
 
 export class Kernel {
   readonly home: string;
@@ -73,6 +86,7 @@ export class Kernel {
   readonly mcpRuntime: McpRuntime;
   readonly browser: PlaywrightBrowser;
   readonly homeRepo: HomeRepo;
+  private readonly llm: RoleRouter;
   private readonly startRun: StartRun;
   private readonly driveSolve: DriveSolve;
   private readonly formAgent: FormAgentFromRun;
@@ -83,6 +97,8 @@ export class Kernel {
   private lastStudyAt = 0;
   private readonly research = new CompositeResearch(new Context7FirstResearch(), new DuckDuckGoSearch());
   private readonly inflight = new Map<string, AbortController>();
+  /** Session grants for fs_* paths outside the worktree (prefix → allowed). */
+  private readonly outsideGrants = new Map<string, Set<string>>();
 
   constructor(home = join(homedir(), ".barney")) {
     this.home = home;
@@ -108,15 +124,16 @@ export class Kernel {
     this.browser = new PlaywrightBrowser();
     this.homeRepo = new HomeRepo(home);
     const worktrees = new GitWorktree(home);
+    this.llm = new RoleRouter(this.providers);
     this.startRun = new StartRun(this.agents, this.runs, worktrees, this.events);
     this.driveSolve = new DriveSolve(
       this.agents,
       this.runs,
       this.episodes,
-      new RoleRouter(this.providers),
+      this.llm,
       this.research,
       this.events,
-      (root) => new NodeWorkspace(root, (text, path) => this.mask(text, path), (text) => this.reveal(text)),
+      (root, runId) => this.workspaceFor(root, runId),
       this.skills,
       this.browser,
       this.memories,
@@ -227,6 +244,17 @@ export class Kernel {
         tags: ["samost", "psyche"],
         sourceAgentId: agent.id.value,
       }));
+    } else if (work.item === "dream") {
+      const heuristics = await this.dreamCompress(samost.shadow, rules);
+      if (heuristics.length) {
+        await this.memories.save(new MemoryNote({
+          key: samostKey(agent.id.value),
+          title: "Self",
+          body: formatSamost(applyDreamHeuristics(samost, heuristics)),
+          tags: ["samost", "psyche", "dream"],
+          sourceAgentId: agent.id.value,
+        }));
+      }
     } else if (work.item === "board_to_existence" && open) {
       const next = appendExistence(existence, { kind: "idle", text: work.text });
       await this.memories.save(new MemoryNote({
@@ -260,11 +288,25 @@ export class Kernel {
         }));
       }
     }
-    if (work.item === "seed_samost" || work.item === "absorb_shadow" || work.item === "study") {
+    if (work.item === "seed_samost" || work.item === "absorb_shadow" || work.item === "dream" || work.item === "study") {
       await this.become(agent.id.value, `become: idle ${work.item}`);
     }
     this.events.publish([event("psyche.tick", { item: work.item })]);
     return work.item;
+  }
+
+  private async dreamCompress(shadow: string[], rules: string[]): Promise<string[]> {
+    try {
+      const result = await this.llm.complete("planner", [
+        { role: "system", content: dreamSystemPrompt() },
+        { role: "user", content: dreamUserPrompt(shadow, rules) },
+      ]);
+      const parsed = parseDreamHeuristics(result.text || result.thinking || "");
+      if (parsed.length) return parsed;
+    } catch {
+      /* local fallback */
+    }
+    return compressShadowLocally(shadow);
   }
 
   private async postDesignSession(agentId: string): Promise<void> {
@@ -302,6 +344,42 @@ export class Kernel {
 
   reveal(text: string): string {
     return this.vault.reveal(text);
+  }
+
+  /** Allow fs_* under a path prefix outside the worktree for this session. */
+  async grantOutside(runId: string, path: string): Promise<string> {
+    const abs = resolve(String(path || "").trim() || ".");
+    const prefix = permissionPrefix(abs) || abs;
+    if (!prefix) throw new Error("path required");
+    const grants = this.outsideGrants.get(runId) ?? new Set<string>();
+    grants.add(prefix);
+    this.outsideGrants.set(runId, grants);
+    this.events.publish([event("run.permission_granted", { runId, prefix, mode: "user" })]);
+    const run = await this.runs.get(runId);
+    if (run) {
+      run.append("system", permissionGrantedMessage(prefix, "user"));
+      await this.runs.save(run);
+    }
+    return prefix;
+  }
+
+  listOutsideGrants(runId: string): string[] {
+    return [...(this.outsideGrants.get(runId) ?? [])].sort();
+  }
+
+  outsideAllowed(runId: string | undefined, absPath: string): boolean {
+    if (autoApproveOutside()) return true;
+    if (!runId) return false;
+    return pathAllowedByGrants(absPath, this.outsideGrants.get(runId) ?? []);
+  }
+
+  workspaceFor(root: string, runId?: string): NodeWorkspace {
+    return new NodeWorkspace(
+      root,
+      (text, path) => this.mask(text, path),
+      (text) => this.reveal(text),
+      { isAllowed: (abs) => this.outsideAllowed(runId, abs) },
+    );
   }
 
   async createRun(goal: string, agentId?: string, repoDir?: string): Promise<Run> {

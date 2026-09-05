@@ -40,9 +40,12 @@ export function classifyToolResult(out: string, tool = ""): { error: boolean; ob
   const text = out.slice(0, 2000);
   if (/^BLOCKED:/i.test(text)) return { error: true, observe: text.split("\n")[0] ?? text };
   if (/path escapes worktree/i.test(text)) {
+    const permission = /permission required/i.test(text);
     return {
       error: true,
-      observe: "Path is outside the worktree. Use shell (cat >, tee, sed) for OS paths. Do not retry fs_* on that path.",
+      observe: permission
+        ? "Path is outside the worktree. Wait for the operator to /allow the prefix, or use shell (cat >, tee, sed). Do not retry the same fs_* call until allowed."
+        : "Path is outside the worktree. Use shell (cat >, tee, sed) for OS paths. Do not retry fs_* on that path.",
     };
   }
   if (/^opened |^showing /i.test(text)) return { error: false, observe: "" };
@@ -53,6 +56,13 @@ export function classifyToolResult(out: string, tool = ""): { error: boolean; ob
     return { error: true, observe: "Tool failed. Read the error, change tool or arguments, do not repeat this exact call." };
   }
   if (isFsTool(tool)) {
+    if (/old text not found/i.test(text)) {
+      return {
+        error: true,
+        observe:
+          "old snippet not on disk (context/whitespace mismatch). fs_read the exact lines, then fs_edit with a unique snippet or fs_write the full file. Do not retry the same old.",
+      };
+    }
     if (/^(error:|Error:)/m.test(text)) {
       return { error: true, observe: "Tool failed. Read the error, change tool or arguments, do not repeat this exact call." };
     }
@@ -90,7 +100,15 @@ export function applyToolObserve(
   const family = familyKey(call);
   const stillLanding = (opts?.leftoverUnwritten?.length ?? 0) > 0;
   const landExempt = stillLanding && (isFsTool(call.name) || call.name === "shell");
-  if (familyFails && familySaturated(familyFails.get(family) ?? 0) && !FAMILY_EXEMPT.has(call.name) && !landExempt) {
+  // Always allow fs_read through saturation — edits miss context without a re-read.
+  const readExempt = call.name === "fs_read";
+  if (
+    familyFails
+    && familySaturated(familyFails.get(family) ?? 0)
+    && !FAMILY_EXEMPT.has(call.name)
+    && !landExempt
+    && !readExempt
+  ) {
     return {
       skip: true,
       out: `BLOCKED: wanting without liking in ${family}. Change tool family, not another ${call.name}.`,
@@ -223,5 +241,8 @@ function commandIncludesPath(command: string, path: string): boolean {
 }
 
 function countsTowardFamily(out: string): boolean {
-  return !/path escapes worktree/i.test(out);
+  // Context-miss edits and jail escapes are redirects, not "wanting without liking".
+  if (/path escapes worktree/i.test(out)) return false;
+  if (/old text not found/i.test(out)) return false;
+  return true;
 }

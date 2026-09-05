@@ -276,6 +276,23 @@ function mountSessionRoutes(app: Hono, kernel: ReturnType<typeof getKernel>, pre
     return c.json({ decision: result.decision, agent: result.agent.snapshot() });
   });
 
+  app.post(`${prefix}/:id/permissions`, async (c) => {
+    try {
+      const body = await c.req.json<{ path?: string }>();
+      const path = String(body.path ?? "").trim();
+      if (!path) return c.json({ error: "path required" }, 400);
+      const granted = await kernel.grantOutside(c.req.param("id"), path);
+      const run = await kernel.getRun(c.req.param("id"));
+      return c.json({ granted, grants: kernel.listOutsideGrants(c.req.param("id")), session: run ? sessionView(kernel, run) : null });
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 400);
+    }
+  });
+
+  app.get(`${prefix}/:id/permissions`, async (c) => {
+    return c.json({ grants: kernel.listOutsideGrants(c.req.param("id")) });
+  });
+
   app.get(`${prefix}/:id/files`, async (c) => {
     const run = await kernel.getRun(c.req.param("id"));
     if (!run) return c.json({ error: "not found" }, 404);
