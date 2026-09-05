@@ -10,7 +10,7 @@ import {
   wantingWithoutLiking,
 } from "./controlLoop.ts";
 
-test("wanting without liking is one extra path this message, not session age or family fails", () => {
+test("wanting without liking stops after one flat extra path by default", () => {
   expect(wantingWithoutLiking({ extraApproaches: 0 })).toBe(false);
   expect(wantingWithoutLiking({ extraApproaches: 1 })).toBe(true);
   expect(wantingWithoutLiking({ extraApproaches: 4, passed: true })).toBe(false);
@@ -25,6 +25,29 @@ test("wanting does not stop while requested artifacts are still unwritten", () =
     extraApproaches: 1,
     leftover: { unwritten: [] },
   })).toBe(true);
+});
+
+test("progress improved or second wind extends wanting budget", () => {
+  const improved = {
+    score: 70,
+    missingArtifacts: 0,
+    mutates: 2,
+    probes: 1,
+    inspections: 1,
+    saturatedFamilies: 0,
+    sameFailureCount: 0,
+    boardFacts: 1,
+    delta: "improved" as const,
+    secondWind: false,
+    taskKind: "delivery" as const,
+    pinLine: "Progress 70/100",
+  };
+  expect(wantingWithoutLiking({ extraApproaches: 1, progress: improved })).toBe(false);
+  expect(wantingWithoutLiking({ extraApproaches: 3, progress: improved })).toBe(true);
+  expect(wantingWithoutLiking({
+    extraApproaches: 2,
+    progress: { ...improved, secondWind: true, delta: "flat" },
+  })).toBe(false);
 });
 
 test("frustration score hits critical and forces wanting halt", () => {

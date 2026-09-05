@@ -18,6 +18,7 @@ export type Review = {
   needsUser?: boolean;
   operatorCorrected?: boolean;
   failureKind?: FailureKind;
+  progressScore?: number;
 };
 
 export function reviewNeedsResearch(review: Review): boolean {

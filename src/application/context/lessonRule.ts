@@ -38,6 +38,13 @@ export type LessonInput = {
   failClass?: string;
   failedFamily?: string;
   recoveredBy?: string;
+  /** How many times this family failed before the rule was written. */
+  familyFailCount?: number;
+  /** Episode / run ids that birthed this rule. */
+  sources?: string[];
+  /** Prior confidence when reinforcing an existing rule. */
+  priorConfidence?: number;
+  priorVersion?: number;
 };
 
 export type LessonRule = {
@@ -45,17 +52,47 @@ export type LessonRule = {
   title: string;
   body: string;
   topic: string;
+  confidence: number;
+  version: number;
+  sources: string[];
 };
 
 export function lessonRule(input: LessonInput): LessonRule {
   const topic = ruleTopic(input);
   const body = redactSecrets(specificLesson(input) ?? trailLesson(input, topic) ?? genericLesson(input, topic));
+  const priorConf = input.priorConfidence ?? 0;
+  const priorVer = input.priorVersion ?? 0;
+  const confirmed = priorConf > 0;
+  const confidence = confirmed
+    ? Math.min(1, priorConf + 0.15)
+    : crystallizeConfidence(input);
+  const version = confirmed ? priorVer + 1 : 1;
+  const sources = [...(input.sources ?? [])].slice(0, 5);
   return {
     key: slugKey(`rule/${input.taskClass}/${topic}`),
     title: `Rule: ${topic}`,
     body,
     topic,
+    confidence,
+    version,
+    sources,
   };
+}
+
+/** Prompt / memory line with version, confidence, and episode provenance. */
+export function formatLessonLine(rule: LessonRule): string {
+  const conf = ` (v${rule.version}, conf ${rule.confidence.toFixed(2)})`;
+  const provenance = rule.sources.length ? ` [from ${rule.sources.join(", ")}]` : "";
+  return `${rule.body}${conf}${provenance}`;
+}
+
+function crystallizeConfidence(input: LessonInput): number {
+  if (input.operatorCorrected) return 0.9;
+  if ((input.familyFailCount ?? 0) >= 2 && input.failedFamily) return 0.75;
+  if (input.failedFamily && input.recoveredBy) return 0.7;
+  if (input.verdict === "pass" && input.failedFamily) return 0.65;
+  if (input.failClass && input.failClass !== "general") return 0.55;
+  return 0.4;
 }
 
 export function pickRules(
@@ -98,6 +135,7 @@ function trailLesson(input: LessonInput, topic: string): string | null {
   const recovered = clipFamily(input.recoveredBy);
   const klass = classTag(input.failClass);
   const prefix = klass ? `[${klass}] ` : "";
+  const repeats = input.familyFailCount ?? 0;
   if (input.verdict === "pass") {
     if (failed && recovered && recovered !== failed) {
       return oneSentence(`For ${topic}: after ${failed} failed, ${recovered} delivered.`);
@@ -105,6 +143,12 @@ function trailLesson(input: LessonInput, topic: string): string | null {
     return null;
   }
   if (!failed) return null;
+  if (repeats >= 2) {
+    return oneSentence(
+      `${prefix}when ${failed} fails twice on ${topic}, switch family before a third try` +
+        (recovered && recovered !== failed ? `; ${recovered} recovered` : ""),
+    );
+  }
   if (recovered && recovered !== failed) {
     return oneSentence(`${prefix}if ${failed} fails, do not repeat ${failed}; next was ${recovered}.`);
   }

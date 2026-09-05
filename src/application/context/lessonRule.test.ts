@@ -156,6 +156,21 @@ test("recovered trail becomes the lesson on pass and fail", () => {
   expect(pass.body).toBe("For general: after shell:openssl failed, shell:python3 delivered.");
 });
 
+test("repeated family fails crystallize a stronger switch rule", () => {
+  const rule = lessonRule({
+    taskClass: "general",
+    goal: "sanitize secrets",
+    verdict: "fail",
+    summary: "grep loop",
+    failedFamily: "shell:grep",
+    familyFailCount: 2,
+    sources: ["run-1", "run-2"],
+  });
+  expect(rule.body).toMatch(/fails twice|switch family/i);
+  expect(rule.confidence).toBeGreaterThanOrEqual(0.7);
+  expect(rule.sources).toEqual(["run-1", "run-2"]);
+});
+
 test("pickRules surfaces a trail lesson", () => {
   const lines = pickRules([
     { key: "rule/general/openssl", title: "x", body: "[unrun-program] if shell:openssl fails, do not repeat shell:openssl.", tags: ["rule", "fail", "general"] },

@@ -147,10 +147,11 @@ export function judgeReview(
   const fileMiss = missingArtifactWrites(latest, evidence);
   const maskMiss = maskedArtifactWrite(latest, evidence);
   const secretLeftover = leftoverSecretMasks(latest, evidence);
+  const idWithoutAction = identificationWithoutAction(latest, evidence, reply);
   const conflictMiss = conflictedDeliverable(evidence);
   const urlMiss = missingGoalUrlOpen(latest, evidence);
   const miss = reply && evidence ? replyOmitsPageCode(reply, evidence, latest) : undefined;
-  const why = fileMiss || maskMiss || secretLeftover || conflictMiss || urlMiss || miss;
+  const why = fileMiss || maskMiss || secretLeftover || idWithoutAction || conflictMiss || urlMiss || miss;
   if (!why) {
     const unverifiedMiss = inferFailureKind(latest, evidence, unverified);
     if (unverifiedMiss === "unrun-program") {
@@ -407,6 +408,52 @@ export function askedToReplaceSecrets(latest: string): boolean {
     || /\breplace secrets\b/i.test(latest)
     || /\bsanitize\b/i.test(latest)
     || /\bplaceholder values\b/i.test(latest);
+}
+
+/**
+ * Delivery goals that require mutation: inspection-only evidence (plus plan/go-ahead reply)
+ * cannot pass. Narrower than "any find/merge" so exploratory review stays LLM-judged.
+ */
+export function identificationWithoutAction(latest: string, evidence: string, reply = ""): string | undefined {
+  if (!asksMutatingDelivery(latest)) return;
+  if (evidenceHasSuccessfulMutate(evidence)) return;
+  if (!evidenceHasInspection(evidence)) return;
+  if (askedToReplaceSecrets(latest)) {
+    return "identification-without-action: found secrets but did not replace them with placeholders";
+  }
+  if (/ready to execute|on your go-ahead|awaiting (your )?approval|planned replacements/i.test(reply)) {
+    return "identification-without-action: planned delivery without applying edits";
+  }
+  // Explicit write/create path goals without mutate are covered by missingArtifactWrites.
+  if (requestedArtifacts(latest).length) return;
+  if (/\b(fix|patch|replace|edit|implement)\b/i.test(latest)) {
+    return "identification-without-action: inspected the problem but made no edit";
+  }
+}
+
+function asksMutatingDelivery(latest: string): boolean {
+  return askedToReplaceSecrets(latest)
+    || /\b(sanitize|redact|decontaminat)\b/i.test(latest)
+    || (/\b(fix|patch|replace|edit|implement)\b/i.test(latest) && !/\b(find|search|explain|what is)\b/i.test(latest))
+    || (WRITE_VERB.test(latest) && requestedArtifacts(latest).length > 0);
+}
+
+function evidenceHasSuccessfulMutate(evidence: string): boolean {
+  for (const block of toolBlocks(evidence)) {
+    const head = block.split("\n")[0] ?? "";
+    if (/^fs_(?:write|edit|append) /.test(head) && !/^error:/im.test(block)) return true;
+    if (/^shell /.test(head) && /\bsed\b/i.test(head) && /-i\b/.test(head) && /^exit 0\b/m.test(block)) return true;
+  }
+  return false;
+}
+
+function evidenceHasInspection(evidence: string): boolean {
+  for (const block of toolBlocks(evidence)) {
+    const head = block.split("\n")[0] ?? "";
+    if (/^fs_(?:search|list|read) /.test(head)) return true;
+    if (/^shell /.test(head) && /\b(?:grep|find|rg|git\s+(?:status|log|show|diff))\b/i.test(head)) return true;
+  }
+  return false;
 }
 
 /** Unresolved conflict markers in the *latest* body of a file — not stale grep/merge noise. */

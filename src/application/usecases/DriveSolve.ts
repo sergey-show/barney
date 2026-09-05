@@ -3,10 +3,22 @@ import { cycleStrategy, familyKey, familySaturated, frustrationScore, stopAfterF
 import { draftPlan, formatPlan } from "../context/draftPlan.ts";
 import { bindToolArgs, goalAnchors } from "../context/bindAnchor.ts";
 import { bumpBacklog, failureClass, formatBacklog, learnedSkillDraft, parseBacklog } from "../context/failureClass.ts";
-import { emptyTrail, lessonRule, noteTrail, pickRules, isRecapLesson, type LessonTrail } from "../context/lessonRule.ts";
+import { emptyTrail, formatLessonLine, lessonRule, noteTrail, pickRules, isRecapLesson, type LessonTrail } from "../context/lessonRule.ts";
 import { formatShadowWarnings, rankByEmbeddings, rankBySimilarity, type RecallItem } from "../context/semanticRecall.ts";
 import { sealReply } from "../context/sealReply.ts";
 import { judgeReview, artifactPins, missingIsLocalArtifact, requestedArtifacts, stillMissingArtifacts, unwrittenArtifacts } from "../context/reviewJudge.ts";
+import { measureProgress, type ProgressSnapshot } from "../context/progressSignal.ts";
+import { pickTactic } from "../context/tacticPick.ts";
+import { immuneBoundaryNote, selfGateTool, selfViolationNote } from "../context/selfGate.ts";
+import {
+  emptyStats,
+  formatStatsHint,
+  parseTaskClassStats,
+  preferredStrategies,
+  recordStrategyOutcome,
+  statsMemoryKey,
+  type TaskClassStats,
+} from "../context/taskClassStats.ts";
 import { applyToolObserve, attachObserve, classifyToolResult } from "../context/observeTool.ts";
 import { permissionPrefix } from "../../domain/guard/outsideAccess.ts";
 import { rememberGood, rememberPrevious, restoreBody, pathsWithRestore } from "../context/fileCheckpoint.ts";
@@ -168,6 +180,11 @@ export class DriveSolve {
       (note): note is NonNullable<typeof note> => Boolean(note),
     );
     const rules = pickRules([...recentMemories, ...hopNotes], run.taskClass, 5, relatedKeys);
+    const statsNote = await this.memory.get(statsMemoryKey(run.taskClass));
+    const classStats = statsNote
+      ? parseTaskClassStats(statsNote.body, run.taskClass)
+      : emptyStats(run.taskClass);
+    const statsHint = formatStatsHint(classStats);
     const psyche = await this.loadPsyche(run, agent.id.value);
     psyche.existence = appendExistence(psyche.existence, { kind: "act", text: clipText(input.message, 180) });
     psyche.board = addBoard(psyche.board, { kind: "motive", text: clipText(run.goal, 200) });
@@ -205,6 +222,8 @@ export class DriveSolve {
       input.signal,
     );
     const memoryNote = [
+      immuneBoundaryNote(agent.constitution),
+      statsHint,
       rules.length ? `Rules from past runs of this task class (obey these):\n${rules.map((line) => `- ${line}`).join("\n")}` : "",
       shadowWarnings,
       packed.digest ? `Session so far (compressed; full chat stays in the portal):\n${packed.digest}` : "",
@@ -216,6 +235,10 @@ export class DriveSolve {
     const extra = { n: 0 };
     const lessonTrail = emptyTrail();
     const failKlass = { last: "" };
+    const progressBag: { prev: ProgressSnapshot | null; last: ProgressSnapshot | null } = {
+      prev: null,
+      last: null,
+    };
 
     try {
       this.events.publish(run.beginAct("retry_with_error", `${input.message.slice(0, 80)} #${run.attempts + 1}`));
@@ -358,6 +381,8 @@ export class DriveSolve {
         psyche,
         lessonTrail,
         failKlass,
+        progressBag,
+        classStats,
       });
       act = persisted.act;
       review = persisted.review;
@@ -366,10 +391,19 @@ export class DriveSolve {
     if (run.status === "ready" && review.verdict !== "pass") {
       const missing = review.missing || review.summary || "the requested result";
       const leftover = leftoverWork(input.message, artifactEvidence(run));
-      const why = haltAfterFail(review, run, extra.n, leftover, input.signal?.aborted, familyFails);
+      const progress = refreshProgress(progressBag, {
+        latest: input.message,
+        evidence: artifactEvidence(run),
+        leftover,
+        familyFails,
+        run,
+        boardFacts: psyche.board.filter((e) => e.kind === "fact").length,
+      });
+      const why = haltAfterFail(review, run, extra.n, leftover, input.signal?.aborted, familyFails, progress);
       const note = haltNote(why, missing, {
         shadow: pickRelevantLines(psyche.samost.shadow, `${run.goal}\n${input.message}`, 1)[0],
         family: lessonTrail.failedFamily,
+        progress: progress.pinLine,
       });
       run.append("system", note);
     }
@@ -379,6 +413,8 @@ export class DriveSolve {
       kind: review.failureKind,
       aborted: false,
     });
+    const maxFamilyFails = Math.max(0, ...familyFails.values());
+    const priorRule = recentMemories.find((note) => note.key === slugKey(`rule/${run.taskClass}/`) || note.key.startsWith(`rule/${run.taskClass}/`));
     const learned = lessonRule({
       taskClass: run.taskClass,
       goal: run.goal,
@@ -391,21 +427,41 @@ export class DriveSolve {
       failClass: klass,
       failedFamily: lessonTrail.failedFamily,
       recoveredBy: lessonTrail.recoveredBy,
+      familyFailCount: lessonTrail.failedFamily ? (familyFails.get(lessonTrail.failedFamily) ?? maxFamilyFails) : maxFamilyFails,
+      sources: [run.id.value],
+      priorConfidence: priorRule ? 0.4 : undefined,
+      priorVersion: priorRule ? 1 : undefined,
     });
     if (!isRecapLesson(learned.body)) {
       psyche.samost = absorbIntoSamost(psyche.samost, learned.body, review.verdict === "pass" && !corrected ? "light" : "shadow");
+    }
+    const violation = selfViolationNote(agent.constitution, act.text);
+    if (violation) {
+      psyche.board = addBoard(psyche.board, { kind: "blocker", text: clipText(violation, 180) });
     }
     psyche.existence = appendExistence(psyche.existence, {
       kind: "review",
       text: clipText(`${review.verdict}: ${review.summary}`, 180),
     });
     await this.flushPsyche(run, agent.id.value, psyche);
+    const lastStrategy = run.usedStrategies.at(-1) || "retry_with_error";
+    const nextStats = recordStrategyOutcome(
+      classStats,
+      lastStrategy,
+      review.verdict === "pass" && !corrected ? "success" : "fail",
+    );
+    await this.remember(run, agent.id.value, {
+      key: statsMemoryKey(run.taskClass),
+      title: `Stats: ${run.taskClass}`,
+      body: JSON.stringify(nextStats),
+      tags: ["stats", run.taskClass],
+    });
     if (review.verdict === "pass" && !corrected) {
       await this.remember(run, agent.id.value, {
         key: learned.key,
         title: learned.title,
-        body: learned.body,
-        tags: ["rule", "lesson", run.taskClass],
+        body: formatLessonLine(learned),
+        tags: ["rule", "lesson", run.taskClass, `conf:${learned.confidence.toFixed(2)}`],
       });
       await this.graph.link(classKey(run.taskClass), learned.key, "learned");
       await this.growBodyFromRecovery(run, agent, failKlass.last, lessonTrail);
@@ -430,8 +486,8 @@ export class DriveSolve {
       await this.remember(run, agent.id.value, {
         key: learned.key,
         title: learned.title,
-        body: learned.body,
-        tags: ["rule", "fail", "experience", run.taskClass, review.verdict],
+        body: formatLessonLine(learned),
+        tags: ["rule", "fail", "experience", run.taskClass, review.verdict, `conf:${learned.confidence.toFixed(2)}`],
       });
       await this.graph.link(classKey(klass), learned.key, "failed-as");
       await this.episodes.save(
@@ -777,20 +833,37 @@ export class DriveSolve {
     psyche: PsycheState;
     lessonTrail: LessonTrail;
     failKlass: { last: string };
+    progressBag: { prev: ProgressSnapshot | null; last: ProgressSnapshot | null };
+    classStats: TaskClassStats;
   }): Promise<{ act: ChatResult; review: Review }> {
     let { act, review } = input;
     rememberFailKlass(input.failKlass, review);
     const trail: ChatMessage[] = [{ role: "assistant", content: act.text }];
     while (true) {
-      const leftover = leftoverWork(input.latest, artifactEvidence(input.run));
-      const halt = haltAfterFail(review, input.run, input.extra.n, leftover, input.signal?.aborted, input.familyFails);
+      const evidence = artifactEvidence(input.run);
+      const leftover = leftoverWork(input.latest, evidence);
+      const progress = refreshProgress(input.progressBag, {
+        latest: input.latest,
+        evidence,
+        leftover,
+        familyFails: input.familyFails,
+        run: input.run,
+        boardFacts: input.psyche.board.filter((e) => e.kind === "fact").length,
+        newSignal: Boolean(review.needsResearch),
+      });
+      review = { ...review, progressScore: progress.score };
+      const halt = haltAfterFail(review, input.run, input.extra.n, leftover, input.signal?.aborted, input.familyFails, progress);
       if (halt === "pass") return { act, review };
       if (halt === "abort") throw new DomainError("aborted", "step interrupted");
       if (halt !== "continue") {
         if (halt === "wanting" || halt === "need_user") {
           const shadow = pickRelevantLines(input.psyche.samost.shadow, input.latest, 1)[0] ?? "";
           const family = input.lessonTrail.failedFamily || "";
-          const why = haltNote(halt, review.missing || review.summary || "the requested result", { shadow, family });
+          const why = haltNote(halt, review.missing || review.summary || "the requested result", {
+            shadow,
+            family,
+            progress: progress.pinLine,
+          });
           input.psyche.board = addBoard(input.psyche.board, { kind: "decision", text: clipText(why, 200) });
           input.psyche.existence = appendExistence(input.psyche.existence, { kind: "act", text: clipText(why, 180) });
           if (shadow) {
@@ -815,7 +888,17 @@ export class DriveSolve {
         }
       }
 
-      const strategy = cycleStrategy(input.run.usedStrategies, input.run.attempts, localFiles);
+      const prefer = preferredStrategies(input.classStats).filter((name): name is StrategyName =>
+        (["recall_failures", "research", "decompose", "write_capability", "switch_model"] as StrategyName[]).includes(name as StrategyName)
+      );
+      const strategy = cycleStrategy(input.run.usedStrategies, input.run.attempts, localFiles, prefer);
+      const saturatedNames = [...input.familyFails.entries()].filter(([, n]) => familySaturated(n)).map(([k]) => k);
+      const tactic = pickTactic({
+        strategy,
+        saturated: saturatedNames,
+        progress,
+        failedFamily: input.lessonTrail.failedFamily,
+      });
       let learnedSkill = "";
       if (strategy === "write_capability") {
         const klass = failureClass({ kind: review.failureKind });
@@ -824,6 +907,7 @@ export class DriveSolve {
       }
       const why = `${strategy}: ${clipText(review.missing || review.summary || "unsolved", 100)} #${input.run.attempts + 1}`;
       input.psyche.board = addBoard(input.psyche.board, { kind: "decision", text: why });
+      input.psyche.board = addBoard(input.psyche.board, { kind: "note", text: clipText(tactic.line, 200) });
       input.psyche.existence = appendExistence(input.psyche.existence, { kind: "act", text: why });
       await this.flushPsyche(input.run, input.run.agentId, input.psyche);
       try {
@@ -843,7 +927,20 @@ export class DriveSolve {
         input.run.append("research", researchNote);
       }
 
-      trail.push({ role: "user", content: persistNudge(strategy, review, researchNote, input.run.goal, input.latest, artifactEvidence(input.run), learnedSkill) });
+      trail.push({
+        role: "user",
+        content: persistNudge(
+          strategy,
+          review,
+          researchNote,
+          input.run.goal,
+          input.latest,
+          artifactEvidence(input.run),
+          learnedSkill,
+          progress,
+          tactic.line,
+        ),
+      });
       const next = this.sealAct(input.run, await this.verifyAgainstEvidence(
         input.run,
         await this.actWithTools(input.run, [...input.actMessages, ...trail], input.signal, input.depth, input.failedCalls, input.psyche, input.familyFails, input.lessonTrail),
@@ -855,6 +952,18 @@ export class DriveSolve {
       act = next;
       review = await this.reviewLatest(input.run, input.latest, next.text, input.signal);
       rememberFailKlass(input.failKlass, review);
+      // Mark second wind if we got a mutate after a research note this approach.
+      if (researchNote) {
+        refreshProgress(input.progressBag, {
+          latest: input.latest,
+          evidence: artifactEvidence(input.run),
+          leftover: leftoverWork(input.latest, artifactEvidence(input.run)),
+          familyFails: input.familyFails,
+          run: input.run,
+          boardFacts: input.psyche.board.filter((e) => e.kind === "fact").length,
+          newSignal: true,
+        });
+      }
     }
     return { act, review };
   }
@@ -876,6 +985,13 @@ export class DriveSolve {
     signal?: AbortSignal,
     depth = 0,
   ): Promise<string> {
+    const agent = await this.agents.get(run.agentId);
+    const gate = selfGateTool({
+      toolName: call.name,
+      args: call.arguments,
+      constitution: agent?.constitution,
+    });
+    if (gate.blocked) return gate.reason ?? "BLOCKED by Self.";
     if (call.name.startsWith("self_")) {
       return runSelfTool(this.home, call);
     }
@@ -1292,6 +1408,7 @@ function haltAfterFail(
   leftover?: { unwritten: string[] },
   aborted?: boolean,
   familyFails?: Map<string, number>,
+  progress?: ProgressSnapshot | null,
 ): HaltReason {
   const saturated = [...(familyFails?.values() ?? [])].filter((n) => familySaturated(n)).length;
   return stopAfterFail(review, {
@@ -1301,19 +1418,48 @@ function haltAfterFail(
     maxAttempts: run.maxAttempts,
     minStrategies: run.minStrategies,
     used: run.usedStrategies.length,
-    wanting: wantingWithoutLiking({ extraApproaches, leftover }),
+    wanting: wantingWithoutLiking({ extraApproaches, leftover, progress }),
     frustration: frustrationScore({
       extraApproaches,
       saturatedFamilies: saturated,
       sameFailureCount: run.sameFailureCount,
+      progressScore: progress?.score,
     }),
   });
+}
+
+function refreshProgress(
+  bag: { prev: ProgressSnapshot | null; last: ProgressSnapshot | null },
+  input: {
+    latest: string;
+    evidence: string;
+    leftover: { unwritten: string[] };
+    familyFails: Map<string, number>;
+    run: Run;
+    boardFacts?: number;
+    newSignal?: boolean;
+  },
+): ProgressSnapshot {
+  const saturated = [...input.familyFails.values()].filter((n) => familySaturated(n)).length;
+  const snap = measureProgress({
+    latest: input.latest,
+    evidence: input.evidence,
+    missingArtifacts: input.leftover.unwritten,
+    saturatedFamilies: saturated,
+    sameFailureCount: input.run.sameFailureCount,
+    boardFacts: input.boardFacts,
+    prev: bag.last,
+    newSignal: input.newSignal,
+  });
+  bag.prev = bag.last;
+  bag.last = snap;
+  return snap;
 }
 
 function haltNote(
   why: HaltReason,
   missing: string,
-  stuck?: { shadow?: string; family?: string },
+  stuck?: { shadow?: string; family?: string; progress?: string },
 ): string {
   const shadow = stuck?.shadow?.trim()
     ? ` Stuck in shadow: ${clipText(stuck.shadow, 160)}.`
@@ -1321,13 +1467,14 @@ function haltNote(
   const family = stuck?.family?.trim()
     ? ` Failed family: ${stuck.family}.`
     : "";
+  const progress = stuck?.progress?.trim() ? ` ${stuck.progress}.` : "";
   if (why === "need_user") {
-    return `Need a decision or secret: ${clipText(missing, 240)}.${shadow}${family} I cannot continue without a paradigm shift from you.`;
+    return `Need a decision or secret: ${clipText(missing, 240)}.${shadow}${family}${progress} I cannot continue without a paradigm shift from you.`;
   }
   if (why === "wanting") {
-    return `Wanting without liking: stopped after extra paths this message.${shadow}${family} Still missing: ${clipText(missing, 240)}. Need a paradigm shift (different tool, constraint, or secret) — next message continues from here.`;
+    return `Wanting without liking: stopped after extra paths without progress this message.${shadow}${family}${progress} Still missing: ${clipText(missing, 240)}. Need a paradigm shift (different tool, constraint, or secret) — next message continues from here.`;
   }
-  return `Still missing: ${clipText(missing, 240)} (${why === "continue" ? "last approach could not start" : why}).${shadow} Next message continues from here.`;
+  return `Still missing: ${clipText(missing, 240)} (${why === "continue" ? "last approach could not start" : why}).${shadow}${progress} Next message continues from here.`;
 }
 
 const SHORT_CHAT_RULES = `Short turn. No tools, no search, no review loop.
@@ -1470,12 +1617,24 @@ function reviewEvidence(
   return [pins, validation, recent].filter(Boolean).join("\n---\n");
 }
 
-function persistNudge(strategy: StrategyName, review: Review, researchNote: string, goal: string, latest: string, evidence: string, learnedSkill = ""): string {
+function persistNudge(
+  strategy: StrategyName,
+  review: Review,
+  researchNote: string,
+  goal: string,
+  latest: string,
+  evidence: string,
+  learnedSkill = "",
+  progress?: ProgressSnapshot | null,
+  tacticLine = "",
+): string {
   const missing = stillMissingArtifacts(latest, evidence, review.missing || review.summary);
   const pins = artifactPins(latest, evidence);
   const research = researchNote ? `\nResearch notes:\n${researchNote}` : "";
   const keep = pins ? `\n${pins}` : "";
-  const common = `Session goal: ${goal}${keep}\nStill missing: ${missing}\nDo not give up. Copy URLs/IPs from Session facts exactly. Do not ask the user to repeat them.${research}`;
+  const progressPin = progress ? `\n${progress.pinLine}` : "";
+  const tactic = tacticLine ? `\nTactic: ${tacticLine}` : "";
+  const common = `Session goal: ${goal}${keep}${progressPin}${tactic}\nStill missing: ${missing}\nDo not give up. Copy URLs/IPs from Session facts exactly. Do not ask the user to repeat them.${research}`;
   if (strategy === "research") {
     return `${common}\nLook up the vendor API/docs, then execute with tools.`;
   }
@@ -1491,7 +1650,7 @@ function persistNudge(strategy: StrategyName, review: Review, researchNote: stri
   if (strategy === "switch_model") {
     return `${common}\nChange approach completely (browser vs shell vs API vs plugin). Do not repeat the failed guess.`;
   }
-  return `${common}\nKeep files that already exist. Only create what is still missing. Follow the working plan in order.`;
+  return `${common}\nKeep files that already exist. Only create what is still missing. Follow the working plan in order. Do not stop at identification — apply the edits.`;
 }
 
 function regulationOf(call: ToolCall, goal: string): "task" | "competence" | "wander" {

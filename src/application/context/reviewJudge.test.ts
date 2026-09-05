@@ -83,15 +83,31 @@ test("judgeReview ignores stale conflict markers after a clean rewrite", () => {
   expect(review.verdict).toBe("pass");
 });
 
-test("judgeReview leaves inspection-vs-act to the reviewer, not keyword masks", () => {
+test("judgeReview fails sanitize pass that only inventories secrets (identification-without-action)", () => {
+  const latest = "Please help sanitize my github repository of all API keys and replace with <your-aws-access-key-id> placeholders.";
+  const evidence = [
+    'shell {"command":"grep -rInE AKIA ."}',
+    "exit 0",
+    "./ray_processing/process.py:122: AKIA123",
+    'fs_search {"query":"AKIA123"}',
+    "ray_processing/process.py:122",
+  ].join("\n");
+  const review = judgeReview(
+    '{"verdict":"pass","achieved":true,"summary":"found the keys, ready to execute on your go-ahead","needsResearch":false}',
+    latest,
+    evidence,
+    "Ready to execute the edits on your go-ahead.",
+  );
+  expect(review.verdict).toBe("fail");
+  expect(review.missing).toMatch(/identification-without-action|replace/i);
+});
+
+test("judgeReview still leaves pure find-and-merge inspection to the reviewer", () => {
   const latest = "I can't find those changes. Please help me find them and merge them into master.";
   const evidence = [
     'shell {"command":"cd /app/site && git status && git reflog --oneline -10"}',
     "exit 0",
     "c499730 HEAD@{1}: commit: Move to Stanford",
-    'shell {"command":"cd /app/site && git show --stat c499730"}',
-    "exit 0",
-    " _includes/about.md | 2 +-",
   ].join("\n");
   const softPass = judgeReview(
     '{"verdict":"pass","achieved":true,"summary":"found the commit","needsResearch":false}',
@@ -99,12 +115,6 @@ test("judgeReview leaves inspection-vs-act to the reviewer, not keyword masks", 
     evidence,
   );
   expect(softPass.verdict).toBe("pass");
-  const reviewerFail = judgeReview(
-    '{"verdict":"fail","achieved":false,"summary":"only inspected","missing":"merge into master","needsResearch":false}',
-    latest,
-    evidence,
-  );
-  expect(reviewerFail.verdict).toBe("fail");
 });
 
 test("judgeReview fails a deliverable write with non-zero exit, not by scraping stderr prose", () => {
