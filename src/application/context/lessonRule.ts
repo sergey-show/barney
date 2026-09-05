@@ -68,8 +68,13 @@ export function lessonRule(input: LessonInput): LessonRule {
     : crystallizeConfidence(input);
   const version = confirmed ? priorVer + 1 : 1;
   const sources = [...(input.sources ?? [])].slice(0, 5);
+  const mode = classTag(input.failClass);
+  // Prefer failure-mode keys so recall transfers across task classes that share a miss shape.
+  const key = mode
+    ? slugKey(`rule/mode/${mode}/${topic}`)
+    : slugKey(`rule/${input.taskClass}/${topic}`);
   return {
-    key: slugKey(`rule/${input.taskClass}/${topic}`),
+    key,
     title: `Rule: ${topic}`,
     body,
     topic,
@@ -95,15 +100,37 @@ function crystallizeConfidence(input: LessonInput): number {
   return 0.4;
 }
 
+export type PickedRule = {
+  key: string;
+  line: string;
+  sourceClass: string;
+};
+
 export function pickRules(
   notes: Array<{ key: string; title: string; body: string; tags: string[] }>,
   taskClass: string,
   limit = 5,
   relatedKeys: string[] = [],
+  failureModes: string[] = [],
 ): string[] {
+  return pickRuleNotes(notes, taskClass, limit, relatedKeys, failureModes).map((r) => r.line);
+}
+
+/** Ranked rules with provenance for transfer accounting. */
+export function pickRuleNotes(
+  notes: Array<{ key: string; title: string; body: string; tags: string[] }>,
+  taskClass: string,
+  limit = 5,
+  relatedKeys: string[] = [],
+  failureModes: string[] = [],
+): PickedRule[] {
   const rules = notes.filter((note) => note.tags.includes("rule") || note.key.startsWith("rule/"));
   const related = new Set(relatedKeys);
+  const modes = new Set(failureModes.filter((m) => m && m !== "general" && m !== "aborted-unfinished"));
   const ranked = [
+    ...rules.filter((note) =>
+      [...modes].some((mode) => note.key.includes(`/mode/${mode}/`) || note.tags.includes(mode)),
+    ),
     ...rules.filter((note) =>
       (note.tags.includes("fail") || note.tags.includes("experience"))
       && (note.tags.includes(taskClass) || note.key.includes(`/${taskClass}/`)),
@@ -112,15 +139,35 @@ export function pickRules(
     ...rules.filter((note) => note.tags.includes(taskClass) && !note.tags.includes("fail")),
   ];
   const seen = new Set<string>();
-  const lines: string[] = [];
+  const out: PickedRule[] = [];
   for (const note of ranked) {
     const line = redactSecrets(note.body.split("\n")[0] ?? "").trim();
     if (!line || seen.has(line) || isRecapLesson(line)) continue;
     seen.add(line);
-    lines.push(line);
-    if (lines.length >= limit) break;
+    out.push({
+      key: note.key,
+      line,
+      sourceClass: ruleSourceClassFromNote(note),
+    });
+    if (out.length >= limit) break;
   }
-  return lines;
+  return out;
+}
+
+function ruleSourceClassFromNote(note: { key: string; tags: string[] }): string {
+  const mode = note.key.match(/^rule\/mode\/([^/]+)\//)?.[1];
+  if (mode) return `mode:${mode}`;
+  const fromKey = note.key.match(/^rule\/([^/]+)\//)?.[1];
+  if (fromKey && fromKey !== "mode") return fromKey;
+  const tag = note.tags.find((t) =>
+    t
+    && t !== "rule"
+    && t !== "lesson"
+    && t !== "fail"
+    && t !== "experience"
+    && !t.startsWith("conf:")
+  );
+  return tag || "general";
 }
 
 function specificLesson(input: LessonInput): string | null {

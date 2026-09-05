@@ -31,6 +31,15 @@ export class SqliteEpisodeRepository implements EpisodeRepository {
     return rows.map((r) => new Episode(JSON.parse(r.snapshot)));
   }
 
+  async findByFailureMode(failureMode: string, limit = 12): Promise<Episode[]> {
+    const mode = failureMode.trim();
+    if (!mode || mode === "general") return [];
+    const rows = this.db.query<{ snapshot: string }, [string, number]>(
+      "SELECT snapshot FROM episodes WHERE failure_mode = ? ORDER BY id DESC LIMIT ?",
+    ).all(mode, limit);
+    return rows.map((r) => new Episode(JSON.parse(r.snapshot)));
+  }
+
   async findRecent(limit = 12): Promise<Episode[]> {
     const rows = this.db.query<{ snapshot: string }, [number]>(
       "SELECT snapshot FROM episodes ORDER BY id DESC LIMIT ?",

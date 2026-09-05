@@ -3,7 +3,27 @@ import { cycleStrategy, familyKey, familySaturated, frustrationScore, stopAfterF
 import { draftPlan, formatPlan } from "../context/draftPlan.ts";
 import { bindToolArgs, goalAnchors } from "../context/bindAnchor.ts";
 import { bumpBacklog, failureClass, formatBacklog, learnedSkillDraft, parseBacklog } from "../context/failureClass.ts";
-import { emptyTrail, formatLessonLine, lessonRule, noteTrail, pickRules, isRecapLesson, type LessonTrail } from "../context/lessonRule.ts";
+import { emptyTrail, formatLessonLine, lessonRule, noteTrail, pickRuleNotes, isRecapLesson, type LessonTrail } from "../context/lessonRule.ts";
+import {
+  classifyReuse,
+  emptyTransferStats,
+  extractGoalHashes,
+  formatTransferHint,
+  goalHash,
+  parseTransferStats,
+  recordReuse,
+  transferMemoryKey,
+} from "../context/transferLedger.ts";
+import {
+  admitNewSkill,
+  canRewriteSkill,
+  formatSkillBodyHint,
+  parseSkillBody,
+  recordSkillOutcome,
+  skillBodyKey,
+  type SkillBodyRecord,
+} from "../context/bodyStability.ts";
+import { buildEpisodeMarkers } from "../context/episodeMarkers.ts";
 import { formatShadowWarnings, rankByEmbeddings, rankBySimilarity, type RecallItem } from "../context/semanticRecall.ts";
 import { sealReply } from "../context/sealReply.ts";
 import { judgeReview, artifactPins, missingIsLocalArtifact, requestedArtifacts, stillMissingArtifacts, unwrittenArtifacts } from "../context/reviewJudge.ts";
@@ -161,6 +181,8 @@ export class DriveSolve {
       tags: ["session", "digest", run.taskClass],
     });
     const past = await this.episodes.findForAgent(agent.id.value, run.taskClass);
+    const recentAll = await this.episodes.findRecent(30);
+    const priorHashes = extractGoalHashes([...past, ...recentAll]);
     const digestKey = slugKey(`session/${run.id.value}/digest`);
     const shared = (await this.memory.search(input.message, 3)).filter((note) =>
       note.key !== digestKey
@@ -172,19 +194,41 @@ export class DriveSolve {
       && !note.tags.includes("digest"),
     );
     const recentMemories = await this.memory.recent(40);
+    const modeHints = [
+      ...past.slice(0, 8).map((e) => e.failureMode).filter((m): m is string => Boolean(m)),
+      ...recentAll.slice(0, 12).map((e) => e.failureMode).filter((m): m is string => Boolean(m)),
+    ];
+    const uniqueModes = [...new Set(modeHints)].slice(0, 4);
+    const modeEpisodes = (
+      await Promise.all(uniqueModes.map((mode) => this.episodes.findByFailureMode(mode, 6)))
+    ).flat();
     const relatedKeys = await this.graph.neighborhood([
       classKey(run.taskClass),
+      ...uniqueModes.map((mode) => classKey(mode)),
       ...past.slice(0, 6).flatMap((episode) => episode.failureMode ? [classKey(episode.failureMode)] : []),
     ], 2);
     const hopNotes = (await Promise.all(relatedKeys.map((key) => this.memory.get(key)))).filter(
       (note): note is NonNullable<typeof note> => Boolean(note),
     );
-    const rules = pickRules([...recentMemories, ...hopNotes], run.taskClass, 5, relatedKeys);
+    const pickedRules = pickRuleNotes(
+      [...recentMemories, ...hopNotes],
+      run.taskClass,
+      5,
+      relatedKeys,
+      uniqueModes,
+    );
+    const rules = pickedRules.map((r) => r.line);
+    const recalledMeta = pickedRules;
     const statsNote = await this.memory.get(statsMemoryKey(run.taskClass));
     const classStats = statsNote
       ? parseTaskClassStats(statsNote.body, run.taskClass)
       : emptyStats(run.taskClass);
     const statsHint = formatStatsHint(classStats);
+    const transferNote = await this.memory.get(transferMemoryKey(agent.id.value));
+    const transferStats = transferNote ? parseTransferStats(transferNote.body) : emptyTransferStats();
+    const transferHint = formatTransferHint(transferStats);
+    const skillBodyRecs = await this.loadSkillBodies(agent);
+    const bodyHint = formatSkillBodyHint(skillBodyRecs);
     const psyche = await this.loadPsyche(run, agent.id.value);
     psyche.existence = appendExistence(psyche.existence, { kind: "act", text: clipText(input.message, 180) });
     psyche.board = addBoard(psyche.board, { kind: "motive", text: clipText(run.goal, 200) });
@@ -223,12 +267,20 @@ export class DriveSolve {
     );
     const memoryNote = [
       immuneBoundaryNote(agent.constitution),
+      transferHint,
+      bodyHint,
       statsHint,
-      rules.length ? `Rules from past runs of this task class (obey these):\n${rules.map((line) => `- ${line}`).join("\n")}` : "",
+      rules.length
+        ? `Rules from past runs (task class + shared failure modes — obey these):\n${rules.map((line) => `- ${line}`).join("\n")}`
+        : "",
       shadowWarnings,
       packed.digest ? `Session so far (compressed; full chat stays in the portal):\n${packed.digest}` : "",
       ...shared.map((note) => `[${note.key}] ${note.title}: ${note.body.slice(0, 160)}`),
       ...past.slice(0, 3).map((e) => `[${e.outcome}] ${e.goal} → ${e.nextHint}`),
+      ...modeEpisodes
+        .filter((e) => e.taskClass !== run.taskClass)
+        .slice(0, 2)
+        .map((e) => `[transfer-seed ${e.failureMode}] ${e.taskClass}: ${e.nextHint}`),
     ].filter(Boolean).join("\n\n");
     const failedCalls = new Set<string>();
     const familyFails = new Map<string, number>();
@@ -414,7 +466,18 @@ export class DriveSolve {
       aborted: false,
     });
     const maxFamilyFails = Math.max(0, ...familyFails.values());
-    const priorRule = recentMemories.find((note) => note.key === slugKey(`rule/${run.taskClass}/`) || note.key.startsWith(`rule/${run.taskClass}/`));
+    const gHash = goalHash(run.goal);
+    const reuse = classifyReuse({
+      goalHash: gHash,
+      priorGoalHashes: priorHashes,
+      currentClass: run.taskClass,
+      recalledFromClasses: recalledMeta.map((r) => r.sourceClass),
+    });
+    const priorRule = recentMemories.find((note) =>
+      note.key === learnedModeKey(klass, run.taskClass)
+      || note.key.startsWith(`rule/${run.taskClass}/`)
+      || (klass !== "general" && note.key.includes(`/mode/${klass}/`)),
+    );
     const learned = lessonRule({
       taskClass: run.taskClass,
       goal: run.goal,
@@ -445,10 +508,11 @@ export class DriveSolve {
     });
     await this.flushPsyche(run, agent.id.value, psyche);
     const lastStrategy = run.usedStrategies.at(-1) || "retry_with_error";
+    const outcomeOk = review.verdict === "pass" && !corrected;
     const nextStats = recordStrategyOutcome(
       classStats,
       lastStrategy,
-      review.verdict === "pass" && !corrected ? "success" : "fail",
+      outcomeOk ? "success" : "fail",
     );
     await this.remember(run, agent.id.value, {
       key: statsMemoryKey(run.taskClass),
@@ -456,15 +520,45 @@ export class DriveSolve {
       body: JSON.stringify(nextStats),
       tags: ["stats", run.taskClass],
     });
-    if (review.verdict === "pass" && !corrected) {
+    const nextTransfer = recordReuse(transferStats, reuse, outcomeOk ? "success" : "fail");
+    await this.remember(run, agent.id.value, {
+      key: transferMemoryKey(agent.id.value),
+      title: `Transfer metrics`,
+      body: JSON.stringify(nextTransfer),
+      tags: ["metrics", "transfer"],
+    });
+    await this.touchSkillBodies(run, agent, skillBodyRecs, {
+      success: outcomeOk,
+      transfer: reuse === "transfer",
+    });
+    const epMarkers = buildEpisodeMarkers({
+      source: "solve",
+      status: run.status,
+      goalHash: gHash,
+      reuse,
+      rulesRecalled: recalledMeta.map((r) => r.key),
+      failureMode: outcomeOk ? (failKlass.last || null) : (review.verdict || klass),
+      progressScore: review.progressScore,
+      experience: !outcomeOk,
+    });
+    const ruleTags = [
+      "rule",
+      run.taskClass,
+      `conf:${learned.confidence.toFixed(2)}`,
+      ...(klass !== "general" && klass !== "aborted-unfinished" ? [klass] : []),
+    ];
+    if (outcomeOk) {
       await this.remember(run, agent.id.value, {
         key: learned.key,
         title: learned.title,
         body: formatLessonLine(learned),
-        tags: ["rule", "lesson", run.taskClass, `conf:${learned.confidence.toFixed(2)}`],
+        tags: [...ruleTags, "lesson"],
       });
       await this.graph.link(classKey(run.taskClass), learned.key, "learned");
-      await this.growBodyFromRecovery(run, agent, failKlass.last, lessonTrail);
+      if (klass !== "general" && klass !== "aborted-unfinished") {
+        await this.graph.link(classKey(klass), learned.key, "learned");
+      }
+      const created = await this.growBodyFromRecovery(run, agent, failKlass.last || klass, lessonTrail);
       await this.episodes.save(
         new Episode({
           agentId: agent.id.value,
@@ -474,8 +568,8 @@ export class DriveSolve {
           outcome: "success",
           failureMode: null,
           capabilitiesUsed: agent.skillsLock.list().map((s) => `${s.kind}:${s.name}`).concat("solve:act"),
-          capabilitiesCreated: [],
-          markers: [`source:solve`, `status:${run.status}`],
+          capabilitiesCreated: created ? [`skill:${created}`] : [],
+          markers: epMarkers,
           nextHint: learned.body,
           worktreeRef: run.worktreePath,
           tokens: run.budget.tokensUsed,
@@ -487,7 +581,7 @@ export class DriveSolve {
         key: learned.key,
         title: learned.title,
         body: formatLessonLine(learned),
-        tags: ["rule", "fail", "experience", run.taskClass, review.verdict, `conf:${learned.confidence.toFixed(2)}`],
+        tags: [...ruleTags, "fail", "experience", review.verdict],
       });
       await this.graph.link(classKey(klass), learned.key, "failed-as");
       await this.episodes.save(
@@ -500,7 +594,7 @@ export class DriveSolve {
           failureMode: review.verdict,
           capabilitiesUsed: agent.skillsLock.list().map((s) => `${s.kind}:${s.name}`).concat("solve:act"),
           capabilitiesCreated: [],
-          markers: [`source:solve`, `status:${run.status}`, "experience:fail"],
+          markers: epMarkers,
           nextHint: learned.body,
           worktreeRef: run.worktreePath,
           tokens: run.budget.tokensUsed,
@@ -799,20 +893,66 @@ export class DriveSolve {
       failedFamily: lessonTrail.failedFamily,
       recoveredBy: lessonTrail.recoveredBy,
     });
-    if (!draft || this.skills.get(draft.name)) return draft?.name ?? "";
-    this.skills.writeFile(draft.name, "SKILL.md", draft.body);
+    if (!draft) return "";
+    const existingBody = await this.memory.get(skillBodyKey(draft.name));
+    const bodyRec = existingBody ? parseSkillBody(existingBody.body, draft.name) : null;
+    if (this.skills.get(draft.name) && !canRewriteSkill(bodyRec)) {
+      return draft.name;
+    }
+    if (!this.skills.get(draft.name)) {
+      this.skills.writeFile(draft.name, "SKILL.md", draft.body);
+    }
     agent.evolve({ skills: [{ kind: "skill", name: draft.name, version: "1" }] });
     await this.agents.save(agent);
+    const admitted = bodyRec && !canRewriteSkill(bodyRec)
+      ? bodyRec
+      : admitNewSkill(draft.name, run.taskClass, klass);
+    await this.remember(run, agent.id.value, {
+      key: skillBodyKey(draft.name),
+      title: `Body: ${draft.name}`,
+      body: JSON.stringify(admitted),
+      tags: ["body", "skill", admitted.status, klass],
+    });
     await this.remember(run, agent.id.value, {
       key: `plugin/${draft.name}`,
       title: `Plugin ${draft.name}`,
       body: draft.body,
-      tags: ["plugin", "learned", "verified", klass],
+      tags: ["plugin", "learned", admitted.status, klass],
     });
     await this.graph.link(classKey(klass), pluginMemoryKey(draft.name), "learned");
     await this.graph.link(slugKey(`backlog/${klass}`), pluginMemoryKey(draft.name), "recovered-by");
-    await this.become(`become: skill ${draft.name}`);
+    await this.become(`become: skill ${draft.name} (${admitted.status})`);
     return draft.name;
+  }
+
+  private async loadSkillBodies(agent: Agent): Promise<SkillBodyRecord[]> {
+    const out: SkillBodyRecord[] = [];
+    for (const ref of agent.skillsLock.list()) {
+      if (ref.kind !== "skill") continue;
+      const note = await this.memory.get(skillBodyKey(ref.name));
+      if (note) out.push(parseSkillBody(note.body, ref.name));
+    }
+    return out;
+  }
+
+  private async touchSkillBodies(
+    run: Run,
+    agent: Agent,
+    recs: SkillBodyRecord[],
+    input: { success: boolean; transfer: boolean },
+  ): Promise<void> {
+    const byName = new Map(recs.map((r) => [r.name, r]));
+    for (const ref of agent.skillsLock.list()) {
+      if (ref.kind !== "skill") continue;
+      const prev = byName.get(ref.name) ?? admitNewSkill(ref.name, run.taskClass, "general");
+      const next = recordSkillOutcome(prev, input);
+      await this.remember(run, agent.id.value, {
+        key: skillBodyKey(ref.name),
+        title: `Body: ${ref.name}`,
+        body: JSON.stringify(next),
+        tags: ["body", "skill", next.status],
+      });
+    }
   }
 
   private commitAct(run: Run, act: ChatResult): void {
@@ -1484,6 +1624,13 @@ Keep thinking short. The visible reply is the result, not a plan.`;
 
 function isPsycheKey(key: string): boolean {
   return key.startsWith("samost/") || key.startsWith("existence/") || key.startsWith("tree/") || key.startsWith("session/") || key.startsWith("design/");
+}
+
+function learnedModeKey(failClass: string, taskClass: string): string {
+  if (failClass && failClass !== "general" && failClass !== "aborted-unfinished") {
+    return `rule/mode/${failClass}/`;
+  }
+  return `rule/${taskClass}/`;
 }
 
 const RECOVERY_NUDGE = `No tool ran. Do the user's requested work now with real tool calls.
