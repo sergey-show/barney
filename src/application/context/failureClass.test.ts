@@ -29,7 +29,7 @@ test("closes a class on the second recurrence; learned skill is a recovery path,
   });
   expect(learned?.name).toBe("learned-unrun-program");
   expect(learned?.body).toContain("origin: learned");
-  expect(learned?.body).toContain("verified: true");
+  expect(learned?.body).toContain("status: quarantine");
   expect(learned?.body).toContain("after shell:openssl failed, shell:python3 delivered");
   expect(learned?.body).toContain("Do not edit the kernel");
   expect(learned?.body).not.toMatch(/change path/i);

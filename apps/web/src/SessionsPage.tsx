@@ -11,19 +11,27 @@ export function SessionsPage(props: {
   onCloseSession: (id: string) => void;
 }) {
   const [query, setQuery] = useState("");
+  const [scope, setScope] = useState<"all" | "open" | "done">("all");
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    const items = needle
+    const searched = needle
       ? props.sessions.filter((session) => `${session.goal} ${session.status} ${session.id}`.toLowerCase().includes(needle))
       : props.sessions;
+    const items = searched.filter((session) => {
+      if (scope === "open") return session.status !== "done";
+      if (scope === "done") return session.status === "done";
+      return true;
+    });
     return [...items].sort((a, b) => lastActivity(b).localeCompare(lastActivity(a)));
-  }, [props.sessions, query]);
+  }, [props.sessions, query, scope]);
   const { t } = useLocale();
   const pager = usePager(filtered);
+  const openCount = props.sessions.filter((session) => session.status !== "done").length;
+  const doneCount = props.sessions.length - openCount;
 
   useEffect(() => {
     pager.setPage(0);
-  }, [query]);
+  }, [query, scope]);
 
   return (
     <section className="page">
@@ -35,15 +43,31 @@ export function SessionsPage(props: {
         <button className="primary" type="button" onClick={props.onNew}>{t.newChat}</button>
       </header>
       <div className="page-body wide">
-        <label htmlFor="session-search">{t.searchSessions}</label>
-        <input
-          id="session-search"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder={t.searchSessionsPh}
-        />
+        <div className="list-toolbar">
+          <div className="chip-row" role="tablist" aria-label={t.sessionFilter}>
+            <button type="button" className={`chip ${scope === "all" ? "active" : ""}`} onClick={() => setScope("all")}>
+              {t.allSessions} <span className="count">{props.sessions.length}</span>
+            </button>
+            <button type="button" className={`chip ${scope === "open" ? "active" : ""}`} onClick={() => setScope("open")}>
+              {t.openGroup} <span className="count">{openCount}</span>
+            </button>
+            <button type="button" className={`chip ${scope === "done" ? "active" : ""}`} onClick={() => setScope("done")}>
+              {t.closedGroup} <span className="count">{doneCount}</span>
+            </button>
+          </div>
+          <input
+            id="session-search"
+            aria-label={t.searchSessions}
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder={t.searchSessionsPh}
+          />
+        </div>
         {filtered.length === 0 ? (
-          <div className="muted">{t.noSessions}</div>
+          <div className="empty-panel">
+            <strong>{query ? t.noSearchResults : t.noSessions}</strong>
+            <span>{query ? t.noSearchResultsHint : t.noSessionsHint}</span>
+          </div>
         ) : (
           <>
             <div className="plain-list">
@@ -52,6 +76,7 @@ export function SessionsPage(props: {
                   <button type="button" className="plain-main" onClick={() => props.onOpen(session.id)}>
                     <div className="plain-title">{session.goal || t.untitled}</div>
                     <div className="plain-meta">
+                      <span className={`status-dot ${session.running ? "running" : session.status}`} />
                       {session.running ? t.running : session.status}
                       {" · "}
                       {lastActivity(session) || session.id.slice(0, 8)}

@@ -6,7 +6,6 @@ import { GuardPolicy } from "../domain/guard/GuardPolicy.ts";
 import { MemoryNote } from "../domain/memory/MemoryNote.ts";
 import type { Run } from "../domain/run/Run.ts";
 import { event } from "../domain/shared/DomainEvent.ts";
-import { DomainError } from "../domain/shared/DomainError.ts";
 import { parseBoard } from "../application/psyche/board.ts";
 import { appendExistence, formatExistence, parseExistence } from "../application/psyche/existence.ts";
 import { nextIdleWork, studyQuery } from "../application/psyche/idleTick.ts";
@@ -35,6 +34,7 @@ import { DriveSolve } from "../application/usecases/DriveSolve.ts";
 import { EnsureDefaultAgent } from "../application/usecases/EnsureDefaultAgent.ts";
 import { FormAgentFromRun } from "../application/usecases/FormAgentFromRun.ts";
 import { StartRun } from "../application/usecases/StartRun.ts";
+import { SessionService } from "../application/services/SessionService.ts";
 import type { TeamAgentView } from "../application/ports.ts";
 import { InMemoryEventBus } from "../infrastructure/events/InMemoryEventBus.ts";
 import { GitWorktree } from "../infrastructure/git/GitWorktree.ts";
@@ -89,6 +89,7 @@ export class Kernel {
   private readonly llm: RoleRouter;
   private readonly startRun: StartRun;
   private readonly driveSolve: DriveSolve;
+  private readonly sessionService: SessionService;
   private readonly formAgent: FormAgentFromRun;
   private readonly ensureAgent: EnsureDefaultAgent;
   private seeded = false;
@@ -96,7 +97,6 @@ export class Kernel {
   private lastIdleAt = 0;
   private lastStudyAt = 0;
   private readonly research = new CompositeResearch(new Context7FirstResearch(), new DuckDuckGoSearch());
-  private readonly inflight = new Map<string, AbortController>();
   /** Session grants for fs_* paths outside the worktree (prefix → allowed). */
   private readonly outsideGrants = new Map<string, Set<string>>();
 
@@ -148,6 +148,18 @@ export class Kernel {
       this.processes,
       this.mcpRuntime,
     );
+    this.sessionService = new SessionService(
+      () => this.boot(),
+      this.startRun,
+      this.driveSolve,
+      this.runs,
+      this.agents,
+      this.memories,
+      this.browser,
+      this.processes,
+      this.events,
+      (text) => this.mask(text),
+    );
     this.formAgent = new FormAgentFromRun(this.agents, this.runs, this.events);
     this.ensureAgent = new EnsureDefaultAgent(this.agents);
   }
@@ -159,7 +171,7 @@ export class Kernel {
     }
     if (!this.recovered) {
       this.recovered = true;
-      await this.recoverStuckRuns();
+      await this.sessionService.recoverInterrupted();
     }
     const agent = await this.ensureAgent.execute();
     await this.homeRepo.ensure();
@@ -192,7 +204,7 @@ export class Kernel {
   }
 
   async tick(): Promise<string | null> {
-    if (this.inflight.size) return null;
+    if (this.sessionService.isBusy()) return null;
     if (Date.now() - this.lastIdleAt < 45_000) return null;
     this.lastIdleAt = Date.now();
     const agent = await this.boot();
@@ -383,71 +395,23 @@ export class Kernel {
   }
 
   async createRun(goal: string, agentId?: string, repoDir?: string): Promise<Run> {
-    await this.boot();
-    return this.startRun.execute({ goal: this.mask(goal), agentId, repoDir });
+    return this.sessionService.create(goal, agentId, repoDir);
   }
 
   async send(runId: string, message: string): Promise<Run> {
-    await this.boot();
-    this.inflight.get(runId)?.abort();
-    const ac = new AbortController();
-    this.inflight.set(runId, ac);
-    try {
-      return await this.driveSolve.execute({ runId, message: this.mask(message), signal: ac.signal });
-    } catch (err) {
-      const run = await this.runs.get(runId);
-      if (!run) throw err;
-      const aborted = isKernelAbort(err);
-      const detail = err instanceof Error ? err.message : String(err);
-      if (run.status === "acting" || run.status === "reviewing" || run.status === "researching") {
-        this.events.publish(run.interrupt(aborted ? "Step interrupted." : `Error: ${detail}`));
-      } else {
-        run.append("system", aborted ? "Step interrupted." : `Error: ${detail}`);
-      }
-      await this.runs.save(run);
-      return run;
-    } finally {
-      if (this.inflight.get(runId) === ac) this.inflight.delete(runId);
-    }
+    return this.sessionService.prompt(runId, message);
   }
 
   stepRunning(runId: string): boolean {
-    return this.inflight.has(runId);
+    return this.sessionService.isRunning(runId);
   }
 
   async resume(runId: string, mode: "continue" | "retry" = "continue"): Promise<Run> {
-    await this.boot();
-    if (this.inflight.has(runId)) throw new Error("a step is already running");
-    const run = await this.runs.get(runId);
-    if (!run) throw new Error(`run not found: ${runId}`);
-    if (run.status === "done" || run.status === "parked" || run.status === "failed") {
-      throw new Error(`session is ${run.status}`);
-    }
-    if (run.status === "acting" || run.status === "reviewing" || run.status === "researching") {
-      this.events.publish(run.interrupt("Step interrupted before resume."));
-      await this.runs.save(run);
-    }
-    const lastUser = [...run.transcript].reverse().find((item) => item.kind === "user")?.text ?? run.goal;
-    const message = mode === "retry"
-      ? lastUser
-      : `Continue the interrupted work from where you left off.\nLast user request:\n${lastUser}\nDo not redo finished files unless they are broken. Report what is still missing.`;
-    return this.send(runId, message);
+    return this.sessionService.resume(runId, mode);
   }
 
   abortStep(runId: string): { ok: boolean } {
-    const ac = this.inflight.get(runId);
-    if (!ac) return { ok: false };
-    ac.abort();
-    return { ok: true };
-  }
-
-  private async recoverStuckRuns(): Promise<void> {
-    const runs = await this.runs.list();
-    for (const run of runs) {
-      if (run.status !== "acting" && run.status !== "reviewing" && run.status !== "researching") continue;
-      this.events.publish(run.interrupt("Portal restarted; last step was interrupted."));
-      await this.runs.save(run);
-    }
+    return this.sessionService.cancel(runId);
   }
 
   async formFromRun(runId: string, name?: string) {
@@ -464,43 +428,7 @@ export class Kernel {
   }
 
   async closeSession(runId: string): Promise<Run> {
-    const run = await this.runs.get(runId);
-    if (!run) throw new Error(`run not found: ${runId}`);
-    if (run.status === "done") return run;
-    const agent = await this.agents.get(run.agentId);
-    await this.browser.close(runId);
-    await this.processes.killRun(runId);
-    this.events.publish(run.close());
-    if (agent) {
-      const { Episode } = await import("../domain/memory/Episode.ts");
-      await this.episodes.save(
-        new Episode({
-          agentId: agent.id.value,
-          runId: run.id.value,
-          taskClass: run.taskClass,
-          goal: run.goal,
-          outcome: "success",
-          failureMode: null,
-          capabilitiesUsed: agent.skillsLock.list().map((s) => `${s.kind}:${s.name}`).concat("session:close"),
-          capabilitiesCreated: [],
-          markers: ["source:close", `status:${run.status}`],
-          nextHint: "session closed by user",
-          worktreeRef: run.worktreePath,
-          tokens: run.budget.tokensUsed,
-          usd: run.budget.usdUsed,
-        }),
-      );
-      await this.memories.save(new MemoryNote({
-        key: `session/${run.id.value}`,
-        title: `Closed: ${run.goal.slice(0, 80)}`,
-        body: lastAssistant(run) || "session closed",
-        tags: ["session", run.taskClass],
-        sourceRunId: run.id.value,
-        sourceAgentId: agent.id.value,
-      }));
-    }
-    await this.runs.save(run);
-    return run;
+    return this.sessionService.close(runId);
   }
 
   async listAgents(): Promise<Agent[]> {
@@ -852,12 +780,6 @@ function lastAssistant(run: Run): string {
 
 function slugName(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40) || "specialist";
-}
-
-function isKernelAbort(err: unknown): boolean {
-  if (err instanceof DomainError && err.code === "aborted") return true;
-  if (err instanceof Error && (err.name === "AbortError" || err.message === "step interrupted")) return true;
-  return false;
 }
 
 let singleton: Kernel | undefined;

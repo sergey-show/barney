@@ -5,16 +5,16 @@ import { visibleAssistantText } from "../../infrastructure/llm/visibleReply.ts";
 const CHAT = new Set(["user", "assistant"]);
 
 export const HUD = {
-  text: "#f8f4ea",
-  muted: "#b8a88a",
-  accent: "#e8b86d",
-  think: "#f0d78c",
-  thinkDim: "#c4a46a",
-  cons: "#d4c4a0",
-  consDim: "#a8946c",
-  review: "#f0d78c",
-  research: "#c9b07a",
-  line: "#3d3420",
+  text: "#f2f4f8",
+  muted: "#8d96a7",
+  accent: "#6f8cff",
+  think: "#9ecbff",
+  thinkDim: "#7595b8",
+  cons: "#c8f542",
+  consDim: "#87a53c",
+  review: "#f5d76e",
+  research: "#ff8fbd",
+  line: "#252b36",
   error: "#ef4444",
 };
 
@@ -82,7 +82,7 @@ export function printBanner(agent: string, model?: string): void {
   for (const row of logoLines()) console.log(row);
   console.log();
   console.log(ansi.muted(`   ${agent}${model ? ` · ${model}` : ""}`));
-  console.log(ansi.muted("   /work  /debug  /memory  /agents  /sessions  /form  /quit"));
+  console.log(ansi.muted("   /help  /new  /sessions  /memory  /work  /status  /quit"));
   console.log(ansi.line(`╭${"─".repeat(width - 2)}╮`));
   console.log();
 }

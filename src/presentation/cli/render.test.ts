@@ -1,11 +1,11 @@
 import { expect, test } from "bun:test";
 import { HUD, LOGO_ROWS, renderMarkdown, workSummary, workView } from "./render.ts";
 
-test("CLI HUD tokens match the portal amber palette", () => {
-  expect(HUD.text).toBe("#f8f4ea");
-  expect(HUD.muted).toBe("#b8a88a");
-  expect(HUD.accent).toBe("#e8b86d");
-  expect(HUD.line).toBe("#3d3420");
+test("CLI HUD tokens match the portal blue palette", () => {
+  expect(HUD.text).toBe("#f2f4f8");
+  expect(HUD.muted).toBe("#8d96a7");
+  expect(HUD.accent).toBe("#6f8cff");
+  expect(HUD.line).toBe("#252b36");
   expect(HUD.error).toBe("#ef4444");
 });
 

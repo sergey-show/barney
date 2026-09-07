@@ -21,6 +21,7 @@
   },
   "scripts": {
     "cli": "bun run src/presentation/cli/main.ts cli",
+    "acp": "bun run src/presentation/cli/main.ts acp",
     "web": "bun run src/presentation/cli/main.ts web",
     "dev:ui": "vite --config apps/web/vite.config.ts",
     "build:web": "vite build --config apps/web/vite.config.ts",
@@ -30,9 +31,11 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@agentclientprotocol/sdk": "^1.4.0",
     "citty": "^0.1.6",
     "hono": "^4.9.6",
-    "playwright": "^1.62.1"
+    "playwright": "^1.62.1",
+    "zod": "^4.0.0"
   },
   "devDependencies": {
     "@types/react": "^19.1.12",

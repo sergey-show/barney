@@ -4,7 +4,7 @@ import { classifyClientError, interruptedNotice, type Alert } from "./alerts.ts"
 import { api, jsonBody } from "./api.ts";
 import { FilesPage } from "./FilesPage.tsx";
 import { useLocale } from "./LocaleContext.tsx";
-import { alertTitle } from "./i18n.ts";
+import { alertTitle, type Messages } from "./i18n.ts";
 import { IconChat, IconMemory, IconPsyche, IconSessions, IconSettings } from "./icons.tsx";
 import { MemoryPage } from "./MemoryPage.tsx";
 import { PsychePage } from "./PsychePage.tsx";
@@ -44,7 +44,7 @@ export function App() {
   const [filePath, setFilePath] = useState<string>();
   const [moreOpen, setMoreOpen] = useState(false);
   const { locale, t, setLocale } = useLocale();
-  const composerRef = useRef<HTMLInputElement>(null);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
   const streamRef = useRef<HTMLDivElement>(null);
   const runIdRef = useRef<string | undefined>(runId);
   const pinBottomRef = useRef(true);
@@ -67,6 +67,23 @@ export function App() {
   const lanes = useMemo(() => lanesOf(providerState), [providerState]);
   const activeCoder = providerState.bindings.find((b) => b.role === "coder");
   const transcriptEntries = useMemo(() => groupTranscript(run?.transcript ?? []), [run?.transcript]);
+  const recentRuns = useMemo(
+    () => [...runs].sort((a, b) => {
+      const aAt = a.transcript.at(-1)?.at ?? "";
+      const bAt = b.transcript.at(-1)?.at ?? "";
+      return bAt.localeCompare(aAt);
+    }).slice(0, 4),
+    [runs],
+  );
+  const hasModel = Boolean(lanes.large);
+  const runBusy = busy || Boolean(run?.running) || ["acting", "reviewing", "researching"].includes(run?.status ?? "");
+  const runBlocked = ["done", "parked", "failed"].includes(run?.status ?? "");
+  const canCompose = hasModel && !runBusy && !runBlocked;
+  const starters = [
+    { icon: "⌘", title: t.starterBuildTitle, hint: t.starterBuildHint, prompt: t.starterBuildPrompt },
+    { icon: "◇", title: t.starterFixTitle, hint: t.starterFixHint, prompt: t.starterFixPrompt },
+    { icon: "◎", title: t.starterExploreTitle, hint: t.starterExploreHint, prompt: t.starterExplorePrompt },
+  ];
 
   useLayoutEffect(() => {
     stickBottom();
@@ -239,7 +256,7 @@ export function App() {
 
   async function send() {
     const text = draft.trim();
-    if (!text || run?.status === "done") return;
+    if (!text || !canCompose) return;
     setDraft("");
     setAlert(null);
     pinBottomRef.current = true;
@@ -342,17 +359,19 @@ export function App() {
     void refresh(id);
   }
 
+  function useStarter(text: string) {
+    setDraft(text);
+    queueMicrotask(() => composerRef.current?.focus());
+  }
+
   return (
     <div className="shell">
       <aside className="side">
-        <div className="brand">
+        <button type="button" className="brand" onClick={beginSession} aria-label="Barney">
           <img className="brand-logo" src="/logo-barney.svg" alt="Barney" />
-        </div>
-        <div className="lang-switch" role="group" aria-label={t.language}>
-          <button type="button" className={locale === "ru" ? "item active" : "item"} onClick={() => setLocale("ru")}>RU</button>
-          <button type="button" className={locale === "en" ? "item active" : "item"} onClick={() => setLocale("en")}>EN</button>
-        </div>
-        <button className="primary" onClick={beginSession}>{t.newChat}</button>
+          <span className="brand-beta">Agent</span>
+        </button>
+        <button className="primary new-task" onClick={beginSession}><span aria-hidden="true">＋</span>{t.newTask}</button>
         <nav className="nav-main" aria-label={t.navAria}>
           <NavBtn active={pane.kind === "chat"} onClick={() => { setPane({ kind: "chat" }); setChatTab("talk"); }} icon={<IconChat />} label={t.navChat} hint={run ? run.goal : t.navChatHint} />
           <NavBtn active={pane.kind === "sessions"} onClick={() => setPane({ kind: "sessions" })} icon={<IconSessions />} label={t.navHistory} hint={t.navHistoryHint(runs.filter((item) => item.status !== "done").length)} />
@@ -360,23 +379,60 @@ export function App() {
           <NavBtn active={pane.kind === "psyche"} onClick={() => setPane({ kind: "psyche" })} icon={<IconPsyche />} label={t.navCharacter} hint={t.navCharacterHint} />
           <NavBtn active={pane.kind === "settings" || pane.kind === "provider" || pane.kind === "new-provider"} onClick={() => setPane({ kind: "settings" })} icon={<IconSettings />} label={t.navSettings} hint={t.navSettingsHint} />
         </nav>
+        {recentRuns.length ? (
+          <div className="recent-block">
+            <div className="nav-section-label">{t.recentTasks}</div>
+            {recentRuns.map((item) => (
+              <button
+                type="button"
+                key={item.id}
+                className={`recent-run ${item.id === runId && pane.kind === "chat" ? "active" : ""}`}
+                onClick={() => openSession(item.id)}
+              >
+                <span className={`status-dot ${item.running ? "running" : item.status}`} />
+                <span>{item.goal || t.untitled}</span>
+              </button>
+            ))}
+          </div>
+        ) : null}
+        <div className="side-footer">
+          <button type="button" className="model-status" onClick={() => setPane({ kind: "settings" })}>
+            <span className={`status-dot ${hasModel ? "ready" : "warning"}`} />
+            <span>
+              <strong>{hasModel ? shortModel(lanes.large!.model) : t.modelNotReady}</strong>
+              <small>{hasModel ? t.modelReady : t.configureModel}</small>
+            </span>
+          </button>
+          <div className="lang-compact" role="group" aria-label={t.language}>
+            <button type="button" className={locale === "ru" ? "active" : ""} onClick={() => setLocale("ru")}>RU</button>
+            <button type="button" className={locale === "en" ? "active" : ""} onClick={() => setLocale("en")}>EN</button>
+          </div>
+        </div>
       </aside>
       {pane.kind === "chat" ? (
         <section className="chat">
           <header className="chat-head">
-            <div className="chat-tabs">
-              <button type="button" className={`item ${chatTab === "talk" ? "active" : ""}`} onClick={() => setChatTab("talk")}>{t.talkTab}</button>
-              <button type="button" className={`item ${chatTab === "files" ? "active" : ""}`} onClick={() => setChatTab("files")}>
-                {t.filesTab}{files.length ? ` · ${files.length}` : ""}
-              </button>
+            <div className="task-heading">
+              <div className="task-title">{run?.goal || t.newTask}</div>
+              <div className="task-meta">
+                {run ? <span className={`run-status ${run.running ? "running" : run.status}`}><span className="status-dot" />{run.running ? t.running : statusLabel(run.status, t)}</span> : null}
+                {run?.attempts ? <span>{t.attempts(run.attempts)}</span> : null}
+                {runId ? <span className="mono task-id">{runId.slice(0, 8)}</span> : null}
+              </div>
             </div>
-            <div className="chat-tabs">
-              <button type="button" className="item" onClick={beginSession}>{t.newChat}</button>
-              <button type="button" className="item" disabled={!runId || run?.status === "done"} onClick={() => void closeSession()}>{t.closeChat}</button>
+            <div className="head-actions">
+              <div className="view-switch" role="tablist" aria-label={t.taskView}>
+                <button type="button" className={chatTab === "talk" ? "active" : ""} onClick={() => setChatTab("talk")}>{t.talkTab}</button>
+                <button type="button" className={chatTab === "files" ? "active" : ""} onClick={() => setChatTab("files")}>
+                  {t.filesTab}{files.length ? ` ${files.length}` : ""}
+                </button>
+              </div>
               <div className="more-pop">
-                <button type="button" className="item" aria-expanded={moreOpen} onClick={() => setMoreOpen((v) => !v)}>{t.more}</button>
+                <button type="button" className="icon-button" aria-label={t.more} aria-expanded={moreOpen} onClick={() => setMoreOpen((v) => !v)}>•••</button>
                 {moreOpen ? (
                   <div className="more-menu">
+                    <button type="button" className="menu-item" onClick={() => { setMoreOpen(false); beginSession(); }}>{t.newTask}</button>
+                    <button type="button" className="menu-item" disabled={!runId || run?.status === "done"} onClick={() => { setMoreOpen(false); void closeSession(); }}>{t.closeChat}</button>
                     <button type="button" className="item" disabled={!runId} onClick={() => { setMoreOpen(false); void formAgent(); }}>{t.formAgent}</button>
                     {plugins.map((plugin) => (
                       <button
@@ -401,12 +457,26 @@ export function App() {
           <div className="stream" ref={streamRef} onScroll={onStreamScroll}>
             {!run && !pending ? (
               <div className="empty-hero">
+                <div className="hero-mark" aria-hidden="true">B</div>
+                <h1>{t.emptyTitle}</h1>
                 <p>{t.emptyChat}</p>
-                <div className="muted">
-                  {lanes.large
-                    ? t.emptyChatModels(shortModel(lanes.large.model))
-                    : t.pickModels}
-                </div>
+                {!hasModel ? (
+                  <button type="button" className="setup-callout" onClick={() => setPane({ kind: "settings" })}>
+                    <span className="status-dot warning" />
+                    <span><strong>{t.setupModelTitle}</strong><small>{t.pickModels}</small></span>
+                    <span aria-hidden="true">→</span>
+                  </button>
+                ) : (
+                  <div className="starter-grid">
+                    {starters.map((starter) => (
+                      <button type="button" key={starter.title} className="starter-card" onClick={() => useStarter(starter.prompt)}>
+                        <span className="starter-icon">{starter.icon}</span>
+                        <span><strong>{starter.title}</strong><small>{starter.hint}</small></span>
+                        <span className="starter-arrow" aria-hidden="true">↗</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
             ) : (
               <>
@@ -452,21 +522,40 @@ export function App() {
             />
           ) : null}
           <form className="composer" onSubmit={(e) => { e.preventDefault(); void send(); }}>
-            <input
+            <textarea
               ref={composerRef}
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+                  e.preventDefault();
+                  void send();
+                }
+              }}
               onFocus={() => {
                 pinBottomRef.current = true;
                 requestAnimationFrame(stickBottom);
               }}
-              placeholder={busy ? t.composerBusy : run?.status === "done" ? t.composerClosed : run ? t.composerFollow : t.composerEmpty}
-              disabled={busy || run?.status === "done"}
+              placeholder={runBusy
+                ? t.composerBusy
+                : run?.status === "parked" || run?.status === "failed"
+                ? t.composerBlocked
+                : runBlocked
+                ? t.composerClosed
+                : run
+                ? t.composerFollow
+                : t.composerEmpty}
+              disabled={!canCompose}
+              rows={1}
             />
-            {busy ? (
-              <button type="button" className="item stop" disabled={!runId} onClick={() => void abortStep()}>{t.stop}</button>
+            <div className="composer-meta">
+              <span>{run ? t.composerContext(files.length) : hasModel ? t.composerReady(shortModel(lanes.large!.model)) : t.configureModel}</span>
+              <span>{t.sendHint}</span>
+            </div>
+            {runBusy ? (
+              <button type="button" className="composer-action stop" disabled={!runId} onClick={() => void abortStep()} aria-label={t.stop}>■</button>
             ) : (
-              <button className="primary" disabled={run?.status === "done"}>{t.send}</button>
+              <button className="composer-action send" disabled={!draft.trim() || !canCompose} aria-label={t.send}>↑</button>
             )}
           </form>
           </>
@@ -491,32 +580,37 @@ export function App() {
         <MemoryPage />
       ) : pane.kind === "psyche" ? (
         <PsychePage runId={runId} />
-      ) : pane.kind === "settings" ? (
-        <ModelsEditor
-          providers={providerState.providers}
-          lanes={lanes}
-          plugins={plugins}
-          debug={debug}
-          onDebug={(value) => {
-            setDebug(value);
-            localStorage.setItem("barney.debug", value ? "1" : "0");
-          }}
-          onOpenProvider={(id) => setPane(id ? { kind: "provider", id } : { kind: "new-provider" })}
-          onChanged={async () => { await refresh(runId); }}
-        />
+      ) : pane.kind === "settings" || pane.kind === "provider" || pane.kind === "new-provider" ? (
+        <>
+          <ModelsEditor
+            providers={providerState.providers}
+            lanes={lanes}
+            plugins={plugins}
+            debug={debug}
+            onDebug={(value) => {
+              setDebug(value);
+              localStorage.setItem("barney.debug", value ? "1" : "0");
+            }}
+            onOpenProvider={(id) => setPane(id ? { kind: "provider", id } : { kind: "new-provider" })}
+            onChanged={async () => { await refresh(runId); }}
+          />
+          {pane.kind === "provider" || pane.kind === "new-provider" ? (
+            <ProviderEditor
+              pane={pane}
+              providers={providerState.providers}
+              lanes={lanes}
+              activeModel={activeCoder?.model}
+              onClose={() => setPane({ kind: "settings" })}
+              onChanged={async (nextId) => {
+                await refresh(runId);
+                if (nextId) setPane({ kind: "provider", id: nextId });
+                else setPane({ kind: "settings" });
+              }}
+            />
+          ) : null}
+        </>
       ) : (
-        <ProviderEditor
-          pane={pane}
-          providers={providerState.providers}
-          lanes={lanes}
-          activeModel={activeCoder?.model}
-          onClose={() => setPane({ kind: "settings" })}
-          onChanged={async (nextId) => {
-            await refresh(runId);
-            if (nextId) setPane({ kind: "provider", id: nextId });
-            else setPane({ kind: "settings" });
-          }}
-        />
+        <section className="page" />
       )}
       {browserModal ? (
         <BrowserModal
@@ -528,6 +622,16 @@ export function App() {
       ) : null}
     </div>
   );
+}
+
+function statusLabel(status: string, t: Messages): string {
+  if (status === "done") return t.statusDone;
+  if (status === "failed") return t.statusFailed;
+  if (status === "parked") return t.statusPaused;
+  if (status === "reviewing") return t.statusReviewing;
+  if (status === "researching") return t.statusResearching;
+  if (status === "acting") return t.statusWorking;
+  return t.statusReady;
 }
 
 type ProcessEntry = { type: "stream"; kind: "thinking" | "console"; items: Item[] } | { type: "row"; item: Item };
@@ -908,66 +1012,114 @@ function ModelsEditor(props: {
           <p className="lede">{t.settingsLede}</p>
         </div>
       </header>
-      <div className="page-body wide">
-        <label htmlFor="ui-lang">{t.language}</label>
-        <div className="lang-switch" id="ui-lang">
-          <button type="button" className={locale === "ru" ? "item active" : "item"} onClick={() => setLocale("ru")}>RU</button>
-          <button type="button" className={locale === "en" ? "item active" : "item"} onClick={() => setLocale("en")}>EN</button>
-        </div>
-        <LaneFields
-          title={t.largeModel}
-          providers={props.providers}
-          providerId={largeProvider}
-          model={largeModel}
-          models={catalog[largeProvider] ?? []}
-          onProvider={(id) => setLargeProvider(id)}
-          onModel={setLargeModel}
-          onLoad={() => void load(largeProvider)}
-          busy={busy}
-        />
-        {error ? <div className="error" role="alert">{error}</div> : null}
-        <div className="settings-actions">
-          <button className="primary" disabled={busy || !largeProvider} onClick={() => void apply()}>{t.applyLanes}</button>
-        </div>
-        <h3>{t.providers}</h3>
-        {props.providers.length === 0 ? (
-          <div className="muted">{t.noProviders}</div>
-        ) : (
-          <div className="plain-list">
-            {props.providers.map((item) => (
-              <button key={item.id} type="button" className="plain-row" onClick={() => props.onOpenProvider(item.id)}>
-                <span className="plain-main">
-                  <span className="plain-title">{item.name}</span>
-                  <span className="plain-meta mono">{item.dialect ? `${item.dialect} · ` : ""}{item.baseUrl}</span>
-                </span>
-              </button>
-            ))}
+      <div className="page-body settings-page">
+        <section className="settings-section model-section">
+          <div className="section-heading">
+            <div>
+              <span className="section-kicker">{t.runtime}</span>
+              <h3>{t.activeModel}</h3>
+              <p>{t.activeModelHint}</p>
+            </div>
+            <span className={`connection-badge ${props.lanes.large ? "connected" : ""}`}>
+              <span className="status-dot" />
+              {props.lanes.large ? t.connected : t.notConfigured}
+            </span>
           </div>
-        )}
-        <div className="settings-actions">
-          <button type="button" className="item" onClick={() => props.onOpenProvider()}>{t.addProvider}</button>
-        </div>
-        <h3>{t.plugins}</h3>
-        {props.plugins.length === 0 ? <div className="muted">{t.noPlugins}</div> : (
-          <div className="plain-list">
-            {props.plugins.map((plugin) => (
-              <div key={plugin.name} className="plain-row">
-                <div className="plain-main">
-                  <div className="plain-title">{plugin.name}</div>
-                  {plugin.description ? <div className="plain-meta">{plugin.description}</div> : null}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-        <label className="debug-toggle">
-          <input
-            type="checkbox"
-            checked={props.debug}
-            onChange={(e) => props.onDebug(e.target.checked)}
+          <LaneFields
+            title={t.largeModel}
+            providers={props.providers}
+            providerId={largeProvider}
+            model={largeModel}
+            models={catalog[largeProvider] ?? []}
+            onProvider={(id) => setLargeProvider(id)}
+            onModel={setLargeModel}
+            onLoad={() => void load(largeProvider)}
+            busy={busy}
           />
-          {t.showDebug}
-        </label>
+          {error ? <div className="error" role="alert">{error}</div> : null}
+          <div className="section-actions">
+            <button className="primary compact" disabled={busy || !largeProvider} onClick={() => void apply()}>{t.applyLanes}</button>
+          </div>
+        </section>
+
+        <section className="settings-section">
+          <div className="section-heading">
+            <div>
+              <span className="section-kicker">{t.infrastructure}</span>
+              <h3>{t.providers}</h3>
+              <p>{t.providersHint}</p>
+            </div>
+            <button type="button" className="secondary-button" onClick={() => props.onOpenProvider()}>＋ {t.addProvider}</button>
+          </div>
+          {props.providers.length === 0 ? (
+            <div className="section-empty">{t.noProviders}</div>
+          ) : (
+            <div className="integration-grid">
+              {props.providers.map((item) => {
+                const active = props.lanes.large?.providerId === item.id;
+                return (
+                  <button key={item.id} type="button" className="integration-card" onClick={() => props.onOpenProvider(item.id)}>
+                    <span className="integration-mark">{item.name.slice(0, 1).toUpperCase()}</span>
+                    <span className="integration-copy">
+                      <span className="integration-title">
+                        {item.name}
+                        {active ? <span className="mini-badge">{t.active}</span> : null}
+                      </span>
+                      <span className="integration-meta">{item.dialect || item.kind}</span>
+                      <span className="integration-url mono">{item.baseUrl}</span>
+                    </span>
+                    <span className="integration-arrow">→</span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </section>
+
+        <section className="settings-section">
+          <div className="section-heading">
+            <div>
+              <span className="section-kicker">{t.capabilities}</span>
+              <h3>{t.plugins}</h3>
+              <p>{t.pluginsHint}</p>
+            </div>
+            <span className="count-badge">{props.plugins.length}</span>
+          </div>
+          {props.plugins.length === 0 ? <div className="section-empty">{t.noPlugins}</div> : (
+            <div className="plugin-grid">
+              {props.plugins.map((plugin) => (
+                <div key={plugin.name} className="plugin-card">
+                  <span className="plugin-mark">⌁</span>
+                  <span className="integration-copy">
+                    <span className="integration-title">{plugin.name}</span>
+                    <span className="integration-meta">{plugin.description || t.pluginNoDescription}</span>
+                  </span>
+                  <span className="mini-badge">{plugin.ui ? "UI" : plugin.mcp ? "MCP" : t.installed}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+
+        <section className="settings-section preferences-section">
+          <div className="section-heading">
+            <div>
+              <span className="section-kicker">{t.preferences}</span>
+              <h3>{t.interfaceTitle}</h3>
+            </div>
+          </div>
+          <div className="preference-row">
+            <div><strong>{t.language}</strong><span>{t.languageHint}</span></div>
+            <div className="segmented" id="ui-lang">
+              <button type="button" className={locale === "ru" ? "active" : ""} onClick={() => setLocale("ru")}>RU</button>
+              <button type="button" className={locale === "en" ? "active" : ""} onClick={() => setLocale("en")}>EN</button>
+            </div>
+          </div>
+          <label className="preference-row toggle-row">
+            <div><strong>{t.showDebug}</strong><span>{t.showDebugHint}</span></div>
+            <input type="checkbox" checked={props.debug} onChange={(e) => props.onDebug(e.target.checked)} />
+          </label>
+        </section>
       </div>
     </section>
   );
@@ -987,25 +1139,28 @@ function LaneFields(props: {
   const { t } = useLocale();
   const options = props.model && !props.models.includes(props.model) ? [props.model, ...props.models] : props.models;
   return (
-    <div className="lane">
-      <h3>{props.title}</h3>
-      <label>{t.provider}</label>
-      <select value={props.providerId} onChange={(e) => props.onProvider(e.target.value)}>
-        {props.providers.length === 0 ? <option value="">{t.noProviders}</option> : null}
-        {props.providers.map((item) => (
-          <option key={item.id} value={item.id}>{item.name} · {item.kind}</option>
-        ))}
-      </select>
-      <label>{t.model}</label>
-      {options.length > 0 ? (
-        <select value={props.model} onChange={(e) => props.onModel(e.target.value)}>
-          {options.map((item) => <option key={item} value={item}>{item}</option>)}
+    <div className="model-picker">
+      <div className="field-group">
+        <label>{t.provider}</label>
+        <select value={props.providerId} onChange={(e) => props.onProvider(e.target.value)}>
+          {props.providers.length === 0 ? <option value="">{t.noProviders}</option> : null}
+          {props.providers.map((item) => (
+            <option key={item.id} value={item.id}>{item.name} · {item.kind}</option>
+          ))}
         </select>
-      ) : (
-        <input value={props.model} onChange={(e) => props.onModel(e.target.value)} placeholder={t.modelPlaceholder} />
-      )}
-      <div className="settings-actions">
-        <button className="item" type="button" disabled={props.busy || !props.providerId} onClick={props.onLoad}>{t.loadModels}</button>
+      </div>
+      <div className="field-group model-field">
+        <label>{props.title}</label>
+        {options.length > 0 ? (
+          <select value={props.model} onChange={(e) => props.onModel(e.target.value)}>
+            {options.map((item) => <option key={item} value={item}>{item}</option>)}
+          </select>
+        ) : (
+          <input value={props.model} onChange={(e) => props.onModel(e.target.value)} placeholder={t.modelPlaceholder} />
+        )}
+      </div>
+      <div className="field-action">
+        <button className="secondary-button" type="button" disabled={props.busy || !props.providerId} onClick={props.onLoad}>{t.loadModels}</button>
       </div>
     </div>
   );
@@ -1026,6 +1181,7 @@ function ProviderEditor(props: {
   const [dialect, setDialect] = useState(existing?.dialect ?? "");
   const [apiKey, setApiKey] = useState("");
   const [models, setModels] = useState<string[]>([]);
+  const [confirmRemove, setConfirmRemove] = useState(false);
   const [largeModel, setLargeModel] = useState(
     existing && props.lanes.large?.providerId === existing.id ? props.lanes.large.model : existing?.defaultModel ?? props.activeModel ?? "",
   );
@@ -1041,6 +1197,7 @@ function ProviderEditor(props: {
     setModels([]);
     setLargeModel(existing && props.lanes.large?.providerId === existing.id ? props.lanes.large.model : existing?.defaultModel ?? "");
     setError("");
+    setConfirmRemove(false);
   }, [existing?.id, props.pane.kind, props.lanes.large?.providerId, props.lanes.large?.model]);
 
   async function save() {
@@ -1124,50 +1281,113 @@ function ProviderEditor(props: {
     }
   }
 
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !busy) props.onClose();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [busy, props.onClose]);
+
   return (
-    <section className="settings">
-      <div className="settings-head">
-        <h2>{props.pane.kind === "new-provider" ? t.newProvider : existing?.name ?? t.provider}</h2>
-        <button className="item" onClick={props.onClose}>{t.backSettings}</button>
-      </div>
-      <div className="settings-body">
-        <label>{t.noteTitle}</label>
-        <input value={name} onChange={(e) => setName(e.target.value)} />
-        <label>{t.host}</label>
-        <input value={host} onChange={(e) => setHost(e.target.value)} placeholder="http://127.0.0.1:11434/v1" disabled={existing?.kind === "stub"} />
-        <label>{t.dialect}</label>
-        <select value={dialect} onChange={(e) => setDialect(e.target.value)} disabled={existing?.kind === "stub"}>
-          <option value="">{t.dialectAuto}</option>
-          {["llamacpp", "ollama", "vllm", "openai-custom", "openai", "groq", "openrouter", "anthropic"].map((id) => (
-            <option key={id} value={id}>{id}</option>
-          ))}
-        </select>
-        <label>{t.apiKey} {existing?.hasKey ? t.apiKeySaved : t.apiKeyOptional}</label>
-        <input value={apiKey} onChange={(e) => setApiKey(e.target.value)} type="password" placeholder={existing?.hasKey ? "••••••••" : t.apiKeyOptional} />
-        <div className="muted">{existing ? `${existing.kind} · ${existing.baseUrl}` : t.providerHelp}</div>
-        {error ? <div className="error">{error}</div> : null}
-        <div className="settings-actions">
-          <button className="primary" disabled={busy} onClick={() => void save()}>{t.save}</button>
-          <button className="item" disabled={busy || props.pane.kind === "new-provider"} onClick={() => void loadModels()}>{t.loadModels}</button>
-          <button className="item" disabled={busy || props.pane.kind === "new-provider"} onClick={() => void useIt()}>{t.useLanes}</button>
-          {existing && existing.name !== "stub" ? (
-            <button className="item" disabled={busy} onClick={() => void remove()}>{t.delete}</button>
-          ) : null}
+    <div className="modal-root provider-modal-root" role="dialog" aria-modal="true" aria-labelledby="provider-modal-title">
+      <button type="button" className="modal-backdrop" aria-label={t.close} onClick={props.onClose} />
+      <section className="provider-modal">
+      <header className="provider-modal-head">
+        <div>
+          <span className="section-kicker">{t.connection}</span>
+          <h2 id="provider-modal-title">{props.pane.kind === "new-provider" ? t.newProvider : existing?.name ?? t.provider}</h2>
+          <p className="lede">{props.pane.kind === "new-provider" ? t.providerCreateHint : t.providerEditHint}</p>
         </div>
-        {models.length > 0 ? (
-          <>
+        <button type="button" className="modal-close" onClick={props.onClose} aria-label={t.close}>×</button>
+      </header>
+      <div className="provider-modal-body">
+        <section className="settings-section">
+          <div className="section-heading">
+            <div>
+              <span className="section-kicker">{t.connection}</span>
+              <h3>{t.connectionDetails}</h3>
+              <p>{t.connectionDetailsHint}</p>
+            </div>
+            {existing ? (
+              <span className="connection-badge connected"><span className="status-dot" />{existing.kind}</span>
+            ) : null}
+          </div>
+          <div className="provider-form-grid">
+            <div className="field-group">
+              <label>{t.noteTitle}</label>
+              <input value={name} onChange={(e) => setName(e.target.value)} />
+            </div>
+            <div className="field-group">
+              <label>{t.dialect}</label>
+              <select value={dialect} onChange={(e) => setDialect(e.target.value)} disabled={existing?.kind === "stub"}>
+                <option value="">{t.dialectAuto}</option>
+                {["llamacpp", "ollama", "vllm", "openai-custom", "openai", "groq", "openrouter", "anthropic"].map((id) => (
+                  <option key={id} value={id}>{id}</option>
+                ))}
+              </select>
+            </div>
+            <div className="field-group span-2">
+              <label>{t.host}</label>
+              <input value={host} onChange={(e) => setHost(e.target.value)} placeholder="http://127.0.0.1:11434/v1" disabled={existing?.kind === "stub"} />
+            </div>
+            <div className="field-group span-2">
+              <label>{t.apiKey} {existing?.hasKey ? t.apiKeySaved : t.apiKeyOptional}</label>
+              <input value={apiKey} onChange={(e) => setApiKey(e.target.value)} type="password" placeholder={existing?.hasKey ? "••••••••" : t.apiKeyOptional} />
+            </div>
+          </div>
+          {error ? <div className="error">{error}</div> : null}
+          <div className="section-actions">
+            <button className="primary compact" disabled={busy} onClick={() => void save()}>{t.saveConnection}</button>
+          </div>
+        </section>
+
+        <section className="settings-section">
+          <div className="section-heading">
+            <div>
+              <span className="section-kicker">{t.model}</span>
+              <h3>{t.modelSelection}</h3>
+              <p>{t.modelSelectionHint}</p>
+            </div>
+            <button className="secondary-button" disabled={busy || props.pane.kind === "new-provider"} onClick={() => void loadModels()}>{t.loadModels}</button>
+          </div>
+          <div className="field-group">
             <label>{t.largeModel}</label>
-            <select value={largeModel} onChange={(e) => setLargeModel(e.target.value)}>
-              {(largeModel && !models.includes(largeModel) ? [largeModel, ...models] : models).map((item) => <option key={item} value={item}>{item}</option>)}
-            </select>
-          </>
-        ) : (
-          <>
-            <label>{t.largeModel}</label>
-            <input value={largeModel} onChange={(e) => setLargeModel(e.target.value)} placeholder={t.loadModels} />
-          </>
-        )}
+            {models.length > 0 ? (
+              <select value={largeModel} onChange={(e) => setLargeModel(e.target.value)}>
+                {(largeModel && !models.includes(largeModel) ? [largeModel, ...models] : models).map((item) => <option key={item} value={item}>{item}</option>)}
+              </select>
+            ) : (
+              <input value={largeModel} onChange={(e) => setLargeModel(e.target.value)} placeholder={t.modelPlaceholder} />
+            )}
+          </div>
+          <div className="section-actions">
+            <button className="primary compact" disabled={busy || props.pane.kind === "new-provider"} onClick={() => void useIt()}>{t.useLanes}</button>
+          </div>
+        </section>
+
+        {existing && existing.name !== "stub" ? (
+          <section className={`settings-section danger-zone ${confirmRemove ? "confirming" : ""}`}>
+            <div>
+              <h3>{t.deleteConnection}</h3>
+              <p>{confirmRemove ? t.deleteConnectionConfirm : t.deleteConnectionHint}</p>
+            </div>
+            <div className="danger-actions">
+              {confirmRemove ? (
+                <button className="secondary-button" disabled={busy} onClick={() => setConfirmRemove(false)}>{t.cancel}</button>
+              ) : null}
+              <button
+                className="danger-button"
+                disabled={busy}
+                onClick={() => confirmRemove ? void remove() : setConfirmRemove(true)}
+              >
+                {confirmRemove ? t.confirmDelete : t.delete}
+              </button>
+            </div>
+          </section>
+        ) : null}
       </div>
-    </section>
+      </section>
+    </div>
   );
 }

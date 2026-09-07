@@ -36,7 +36,7 @@ export function learnedSkillDraft(klass: string, path: {
       `name: ${name}`,
       `description: Scheme that recovered a ${klass} miss.`,
       "origin: learned",
-      "verified: true",
+      "status: quarantine",
       "---",
       "",
       line,

@@ -1,2 +1,3 @@
 #!/usr/bin/env bun
-import "../src/presentation/cli/main.ts";
+process.argv.splice(2, 0, "acp");
+await import("../src/presentation/cli/main.ts");

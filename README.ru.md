@@ -151,6 +151,7 @@ barney providers use local --model <id-из-/v1/models>
 |                                          |                                            |
 | ---------------------------------------- | ------------------------------------------ |
 | `barney web`                             | web-ui (`--port 7331`, `--host 127.0.0.1`) |
+| `barney acp`                             | ACP v1-агент через stdio                    |
 | `barney cli`                             | Интерактивная сессия                       |
 | `barney run "<цель>"`                    | Один прогон                                |
 | `barney providers ls`                    | Список провайдеров LLM                     |
@@ -159,7 +160,18 @@ barney providers use local --model <id-из-/v1/models>
 | `barney agents ls`                       | Экземпляры                                 |
 
 
-В `cli`: `/memory`, `/sessions`, `/work`, `/debug`, `/continue`, `/retry`, `/form`, `/quit`.
+Интерактивный CLI использует ту же границу сессий, что и Web. Полный список
+показывает `/help`; основные сценарии: `/new`, `/sessions [запрос]`,
+`/open <id>`, `/memory [запрос]`, `/note <ключ>`, `/work`, `/status`,
+`/continue`, `/retry`. Ctrl+C останавливает активный шаг, не закрывая CLI.
+
+## ACP
+
+Barney предоставляет IDE тот же локальный жизненный цикл сессии через
+стабильный ACP v1. Укажите в ACP-клиенте команду `barney-agent` либо запустите
+`barney acp` напрямую. Транспорт — JSON-RPC 2.0 через stdio: сетевой listener и
+hosted-сервис не запускаются. Первый prompt создаёт Barney-run в `cwd` клиента,
+следующие продолжают его, а отмена использует тот же runtime-путь, что Web и CLI.
 
 ## Тело
 
