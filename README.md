@@ -25,6 +25,8 @@ It runs as a CLI or a WEB portal.
 
 ## Why this shape
 
+![Агент](assets/images/visual_agent.jpg)
+
 Almost all “self-learning” is still mechanistic. The agent is given a hard role in advance (“who you are”). If a task fails, it rewrites its own code or a dynamic skill and spins that loop. That agent does not learn in the human sense. It does not understand why it failed — it retunes itself in the hope that a new configuration will work. A person who makes a mistake does not perform a lobotomy.
 
 Barney is built the other way around. Existence precedes essence: an act first, then a line in the Self. The kernel keeps one turn shape — plan, tool, observe, review — and will not let the current task rewrite that shape. Around the kernel a new body grows: skills that already exist, a tool of its own if none fits, recorded failures (Shadow), recorded paths that worked (light).
@@ -42,7 +44,7 @@ The agent also follows four layers of harness around the model.
 
 ## Kernel and body
 
-![Sheme](assets/images/sheme.png)
+![Sheme](assets/images/architecture.jpg)
 
 | Stays in `src/` | Lives in `~/.barney` |
 |---|---|
