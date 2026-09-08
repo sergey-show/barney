@@ -6,6 +6,7 @@ import {
   logoLines,
   renderMarkdown,
   visibleLength,
+  wrap,
   workView,
 } from "./render.ts";
 
@@ -17,13 +18,14 @@ export type Tui = {
   setStatus: (text: string) => void;
   setChat: (items: TranscriptItem[]) => void;
   livePrinter: (runId: () => string | undefined) => { onEvent: (type: string, payload: Record<string, unknown>) => void; finish: () => void };
+  toggleWork: () => void;
   prompt: () => void;
   close: () => void;
 };
 
 type ChatLine = { kind: string; text: string };
 
-export function openTui(header: { agent: string; model?: string }): Tui | null {
+export function openTui(header: { agent: string; model?: string; onInterrupt?: () => void }): Tui | null {
   if (!process.stdout.isTTY || process.env.BARNEY_TUI === "0") return null;
 
   const chat: ChatLine[] = [];
@@ -33,6 +35,7 @@ export function openTui(header: { agent: string; model?: string }): Tui | null {
   let status = "";
   let work = "";
   let working = false;
+  let workOpen = false;
   let closed = false;
 
   const write = (s: string) => process.stdout.write(s);
@@ -49,10 +52,10 @@ export function openTui(header: { agent: string; model?: string }): Tui | null {
 
   function layout() {
     const { cols, rows } = dim();
-    const logo = cols >= 40 && rows >= 22 ? logoLines().length + 1 : 1;
+    const logo = cols >= 64 && rows >= 24 ? logoLines().length + 1 : 1;
     const meta = 3;
     const prompt = 2;
-    const workBody = Math.min(10, Math.max(4, Math.floor(rows * 0.28)));
+    const workBody = working || workOpen ? Math.min(8, Math.max(3, Math.floor(rows * 0.22))) : 1;
     const workBox = workBody + 2;
     const chatH = Math.max(3, rows - logo - meta - workBox - prompt);
     let row = 1;
@@ -78,6 +81,7 @@ export function openTui(header: { agent: string; model?: string }): Tui | null {
     if (kind === "user") return ansi.accent(text);
     if (kind === "assistant") return ansi.text(text);
     if (kind === "error") return ansi.error(text);
+    if (kind === "success") return ansi.cons(text);
     return ansi.muted(text);
   }
 
@@ -85,7 +89,18 @@ export function openTui(header: { agent: string; model?: string }): Tui | null {
     const raw: ChatLine[] = [];
     for (const line of chat) {
       const body = line.kind === "assistant" ? renderMarkdown(line.text) : line.text;
-      for (const row of body.split("\n")) raw.push({ kind: line.kind, text: row });
+      const label = line.kind === "user"
+        ? "YOU"
+        : line.kind === "assistant"
+          ? "BARNEY"
+          : line.kind === "error"
+            ? "ERROR"
+            : "INFO";
+      raw.push({ kind: line.kind, text: ansi.bold(label) });
+      for (const row of wrap(body, Math.max(12, width - 3)).split("\n")) {
+        raw.push({ kind: line.kind, text: row ? `  ${row}` : "" });
+      }
+      raw.push({ kind: line.kind, text: "" });
     }
     return raw.slice(-height).map((line) => paintChat(line.kind, clip(line.text, width)));
   }
@@ -104,15 +119,15 @@ export function openTui(header: { agent: string; model?: string }): Tui | null {
         r += 1;
       }
       move(L.metaRow, 1);
-      write(pad(ansi.muted(`  ${header.agent}${header.model ? ` · ${header.model}` : ""}`), L.cols));
+      write(pad(`  ${ansi.bold(ansi.text(header.agent))}${header.model ? ansi.muted(`  ·  ${header.model}`) : ansi.error("  ·  model not configured")}`, L.cols));
       move(L.metaRow + 1, 1);
-      write(pad(ansi.muted("  /work  /debug  /memory  /agents  /sessions  /form  /allow  /quit"), L.cols));
+      write(pad(ansi.muted("  /help  /new  /sessions  /memory  /work  /status  /quit"), L.cols));
       move(L.metaRow + 2, 1);
       const meta = [
-        session && `session ${session}`,
-        worktree && `worktree ${worktree}`,
-        sessionDir && sessionDir !== worktree && `dir ${sessionDir}`,
-        status,
+        status && statusBadge(status),
+        session && `session ${session.slice(0, 12)}`,
+        worktree && clip(worktree, 44),
+        sessionDir && sessionDir !== worktree && `data ${clip(sessionDir, 32)}`,
       ].filter(Boolean).join("  ·  ");
       write(pad(ansi.muted(meta ? `  ${meta}` : ""), L.cols));
       const shown = chatLines(L.cols - 2, L.chatH);
@@ -126,7 +141,7 @@ export function openTui(header: { agent: string; model?: string }): Tui | null {
   }
 
   function drawWork(L = layout()) {
-    const title = working ? "work · in progress" : "work";
+    const title = working ? "activity · running" : workOpen ? "activity · expanded" : "activity · /work to expand";
     const head = ` ${title} `;
     const fill = Math.max(0, L.cols - 2 - head.length);
     const view = workView(work, Math.max(8, L.cols - 4), L.workBody);
@@ -143,8 +158,11 @@ export function openTui(header: { agent: string; model?: string }): Tui | null {
 
   function drawPrompt(L = layout()) {
     show();
+    move(L.promptRow - 1, 1);
+    const label = session ? " message " : " new task ";
+    write(pad(ansi.line(`─${label}${"─".repeat(Math.max(0, L.cols - label.length - 1))}`), L.cols));
     move(L.promptRow, 1);
-    write(pad(ansi.accent("▸ "), L.cols));
+    write(pad(ansi.accent("› "), L.cols));
     move(L.promptRow, 3);
   }
 
@@ -153,6 +171,12 @@ export function openTui(header: { agent: string; model?: string }): Tui | null {
 
   const onResize = () => render(true);
   const onExit = () => {
+    if (working && header.onInterrupt) {
+      header.onInterrupt();
+      chat.push({ kind: "system", text: "Stopping the active step…" });
+      render(true);
+      return;
+    }
     close();
     process.exit(130);
   };
@@ -176,8 +200,8 @@ export function openTui(header: { agent: string; model?: string }): Tui | null {
     },
     setSession(id, path, dir) {
       session = id;
-      if (path) worktree = path;
-      if (dir) sessionDir = dir;
+      worktree = path ?? "";
+      sessionDir = dir ?? "";
       render(true);
     },
     setStatus(text) {
@@ -234,9 +258,19 @@ export function openTui(header: { agent: string; model?: string }): Tui | null {
         },
       };
     },
+    toggleWork() {
+      workOpen = !workOpen;
+      render(true);
+    },
     prompt() {
       render(true);
     },
     close,
   };
+}
+
+function statusBadge(status: string): string {
+  const value = status.split("·")[0]?.trim() || status;
+  const mark = value === "failed" || value === "parked" ? ansi.error("●") : value === "ready" || value === "done" ? ansi.cons("●") : ansi.accent("●");
+  return `${mark} ${status}`;
 }

@@ -3,7 +3,9 @@ import { cors } from "hono/cors";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { getKernel } from "../../composition/Kernel.ts";
-import type { Run } from "../../domain/run/Run.ts";
+import { KernelAgentSessionApplication } from "../../composition/KernelAgentSessionApplication.ts";
+import type { AgentSessionApplication } from "../../application/surfaces/AgentSessionApplication.ts";
+import type { RunSnapshot } from "../../domain/run/Run.ts";
 import type { DomainEvent } from "../../domain/shared/DomainEvent.ts";
 import { visibleAssistantText } from "../../infrastructure/llm/visibleReply.ts";
 
@@ -12,6 +14,7 @@ const clients = new Set<{ send: (data: string) => void }>();
 export function createApp() {
   const app = new Hono();
   const kernel = getKernel();
+  const sessions = new KernelAgentSessionApplication(kernel);
   app.use("*", cors());
 
   kernel.events.subscribe((event: DomainEvent) => {
@@ -34,8 +37,8 @@ export function createApp() {
     return c.json(agent.snapshot());
   });
 
-  mountSessionRoutes(app, kernel, "/api/sessions");
-  mountSessionRoutes(app, kernel, "/api/runs");
+  mountSessionRoutes(app, kernel, sessions, "/api/sessions");
+  mountSessionRoutes(app, kernel, sessions, "/api/runs");
 
   app.get("/api/providers", async (c) => {
     return c.json(await kernel.providerState());
@@ -206,11 +209,10 @@ function mountPluginRoutes(app: Hono, kernel: ReturnType<typeof getKernel>, pref
   });
 }
 
-function sessionView(kernel: ReturnType<typeof getKernel>, run: Run) {
-  const snap = run.snapshot();
+function sessionView(sessions: AgentSessionApplication, snap: RunSnapshot) {
   return {
     ...snap,
-    running: kernel.stepRunning(run.id.value),
+    running: sessions.isRunning(snap.id),
     transcript: snap.transcript
       .map((item) => (
         item.kind === "assistant" ? { ...item, text: visibleAssistantText(item.text) } : item
@@ -219,29 +221,34 @@ function sessionView(kernel: ReturnType<typeof getKernel>, run: Run) {
   };
 }
 
-function mountSessionRoutes(app: Hono, kernel: ReturnType<typeof getKernel>, prefix: "/api/sessions" | "/api/runs") {
+function mountSessionRoutes(
+  app: Hono,
+  kernel: ReturnType<typeof getKernel>,
+  sessions: AgentSessionApplication,
+  prefix: "/api/sessions" | "/api/runs",
+) {
   app.get(prefix, async (c) => {
-    const runs = await kernel.listRuns();
-    return c.json(runs.map((r) => sessionView(kernel, r)));
+    const runs = await sessions.list();
+    return c.json(runs.map((run) => sessionView(sessions, run)));
   });
 
   app.get(`${prefix}/:id`, async (c) => {
-    const run = await kernel.getRun(c.req.param("id"));
+    const run = await sessions.get(c.req.param("id"));
     if (!run) return c.json({ error: "not found" }, 404);
-    return c.json(sessionView(kernel, run));
+    return c.json(sessionView(sessions, run));
   });
 
   app.post(prefix, async (c) => {
     const body = await c.req.json<{ goal: string; agentId?: string }>();
-    const run = await kernel.createRun(body.goal, body.agentId);
-    return c.json(sessionView(kernel, run));
+    const run = await sessions.create({ goal: body.goal, agentId: body.agentId });
+    return c.json(sessionView(sessions, run));
   });
 
   app.post(`${prefix}/:id/messages`, async (c) => {
     try {
       const body = await c.req.json<{ text: string }>();
-      const run = await kernel.send(c.req.param("id"), body.text);
-      return c.json(sessionView(kernel, run));
+      const run = await sessions.prompt(c.req.param("id"), body.text);
+      return c.json(sessionView(sessions, run));
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 400);
     }
@@ -250,21 +257,21 @@ function mountSessionRoutes(app: Hono, kernel: ReturnType<typeof getKernel>, pre
   app.post(`${prefix}/:id/resume`, async (c) => {
     try {
       const body = await c.req.json<{ mode?: "continue" | "retry" }>().catch(() => ({ mode: "continue" as const }));
-      const run = await kernel.resume(c.req.param("id"), body.mode === "retry" ? "retry" : "continue");
-      return c.json(sessionView(kernel, run));
+      const run = await sessions.resume(c.req.param("id"), body.mode === "retry" ? "retry" : "continue");
+      return c.json(sessionView(sessions, run));
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 400);
     }
   });
 
   app.post(`${prefix}/:id/abort`, async (c) => {
-    return c.json(kernel.abortStep(c.req.param("id")));
+    return c.json(sessions.cancel(c.req.param("id")));
   });
 
   app.post(`${prefix}/:id/close`, async (c) => {
     try {
-      const run = await kernel.closeSession(c.req.param("id"));
-      return c.json(sessionView(kernel, run));
+      const run = await sessions.close(c.req.param("id"));
+      return c.json(sessionView(sessions, run));
     } catch (err) {
       return c.json({ error: String(err) }, 400);
     }
@@ -282,8 +289,8 @@ function mountSessionRoutes(app: Hono, kernel: ReturnType<typeof getKernel>, pre
       const path = String(body.path ?? "").trim();
       if (!path) return c.json({ error: "path required" }, 400);
       const granted = await kernel.grantOutside(c.req.param("id"), path);
-      const run = await kernel.getRun(c.req.param("id"));
-      return c.json({ granted, grants: kernel.listOutsideGrants(c.req.param("id")), session: run ? sessionView(kernel, run) : null });
+      const run = await sessions.get(c.req.param("id"));
+      return c.json({ granted, grants: kernel.listOutsideGrants(c.req.param("id")), session: run ? sessionView(sessions, run) : null });
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 400);
     }

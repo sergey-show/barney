@@ -25,6 +25,8 @@ It runs as a CLI or a WEB portal.
 
 ## Why this shape
 
+![Агент](assets/images/visual_agent.jpg)
+
 Almost all “self-learning” is still mechanistic. The agent is given a hard role in advance (“who you are”). If a task fails, it rewrites its own code or a dynamic skill and spins that loop. That agent does not learn in the human sense. It does not understand why it failed — it retunes itself in the hope that a new configuration will work. A person who makes a mistake does not perform a lobotomy.
 
 Barney is built the other way around. Existence precedes essence: an act first, then a line in the Self. The kernel keeps one turn shape — plan, tool, observe, review — and will not let the current task rewrite that shape. Around the kernel a new body grows: skills that already exist, a tool of its own if none fits, recorded failures (Shadow), recorded paths that worked (light).
@@ -42,7 +44,7 @@ The agent also follows four layers of harness around the model.
 
 ## Kernel and body
 
-![Sheme](assets/images/sheme.png)
+![Sheme](assets/images/architecture.jpg)
 
 | Stays in `src/` | Lives in `~/.barney` |
 |---|---|
@@ -135,6 +137,7 @@ On first boot the instance is not designed yet. Setup is by points, or shortly *
 | | |
 |---|---|
 | `barney web` | web-ui (`--port 7331`, `--host 127.0.0.1`) |
+| `barney acp` | ACP v1 agent over stdio |
 | `barney cli` | Interactive session |
 | `barney run "<goal>"` | One shot |
 | `barney providers ls` | LLM providers |
@@ -142,7 +145,19 @@ On first boot the instance is not designed yet. Setup is by points, or shortly *
 | `barney providers use <id> --model …` | Bind the model (plan, act, review) |
 | `barney agents ls` | Instances |
 
-In `cli`: `/memory`, `/sessions`, `/work`, `/debug`, `/continue`, `/retry`, `/form`, `/quit`.
+The interactive CLI has the same session boundary as Web. Use `/help` inside it;
+key flows include `/new`, `/sessions [query]`, `/open <id>`, `/memory [query]`,
+`/note <key>`, `/work`, `/status`, `/continue`, `/retry`, and Ctrl+C to stop
+the active step without leaving the CLI.
+
+## ACP
+
+Barney exposes the same local session lifecycle to IDEs through stable ACP v1.
+Configure an ACP client to launch `barney-agent`, or run `barney acp` directly.
+The transport is JSON-RPC 2.0 over stdio; no hosted service or network listener
+is started. The first ACP prompt creates the Barney run in the client's `cwd`,
+later prompts reuse it, and cancellation uses the same runtime path as Web and
+CLI.
 
 ## Body
 

@@ -120,6 +120,7 @@ import { runProcessTool } from "../tools/runProcessTool.ts";
 import { runSelfTool } from "../tools/runSelfTool.ts";
 import { runSkillTool } from "../tools/runSkillTool.ts";
 import { runTeamTool } from "../tools/runTeamTool.ts";
+import { RunLearningService } from "../services/RunLearningService.ts";
 
 const MAX_TOOL_ROUNDS = 12;
 const WRITE_TOOLS = FILE_TOOLS.filter((tool) => tool.name === "fs_write" || tool.name === "fs_list");
@@ -131,6 +132,8 @@ type PsycheState = {
 };
 
 export class DriveSolve {
+  private readonly learning: RunLearningService;
+
   constructor(
     private readonly agents: AgentRepository,
     private readonly runs: RunRepository,
@@ -148,7 +151,9 @@ export class DriveSolve {
     private readonly home: HomeRepoPort,
     private readonly processes: ProcessPort,
     private readonly mcpRuntime: McpRuntimePort,
-  ) {}
+  ) {
+    this.learning = new RunLearningService(agents, memory, graph, skills, home, events);
+  }
 
   async execute(input: { runId: string; message: string; signal?: AbortSignal; depth?: number; forceFull?: boolean }): Promise<Run> {
     const run = await this.runs.get(input.runId);
@@ -228,6 +233,7 @@ export class DriveSolve {
     const transferStats = transferNote ? parseTransferStats(transferNote.body) : emptyTransferStats();
     const transferHint = formatTransferHint(transferStats);
     const skillBodyRecs = await this.loadSkillBodies(agent);
+    const quarantinedSkills = await this.loadQuarantinedSkills();
     const bodyHint = formatSkillBodyHint(skillBodyRecs);
     const psyche = await this.loadPsyche(run, agent.id.value);
     psyche.existence = appendExistence(psyche.existence, { kind: "act", text: clipText(input.message, 180) });
@@ -320,7 +326,7 @@ export class DriveSolve {
           worktree: run.worktreePath,
           sessionDir: run.sessionPath,
           depth,
-          skills: skillCatalog(this.skills, `${run.goal}\n${input.message}`),
+          skills: skillCatalog(this.skills, `${run.goal}\n${input.message}`, quarantinedSkills),
           memory: memoryNote,
         }),
       },
@@ -859,20 +865,7 @@ export class DriveSolve {
     agent: Agent,
     review: { summary: string; missing?: string; aborted: boolean; failureKind?: FailureKind },
   ): Promise<void> {
-    const klass = failureClass({
-      kind: review.failureKind,
-      aborted: review.aborted,
-    });
-    const key = slugKey(`backlog/${klass}`);
-    const prev = parseBacklog((await this.memory.get(key))?.body ?? "");
-    const row = bumpBacklog(prev, klass);
-    await this.remember(run, agent.id.value, {
-      key,
-      title: `Backlog ${klass}`,
-      body: formatBacklog(row),
-      tags: ["backlog", klass, "fail"],
-    });
-    await this.graph.link(classKey(klass), key, "failed-as");
+    await this.learning.closeFailureClass(run, agent, review);
   }
 
   private async growBodyFromRecovery(
@@ -881,58 +874,15 @@ export class DriveSolve {
     klass: string,
     lessonTrail: LessonTrail,
   ): Promise<string> {
-    const recovered = Boolean(
-      lessonTrail.failedFamily
-      && lessonTrail.recoveredBy
-      && lessonTrail.recoveredBy !== lessonTrail.failedFamily,
-    );
-    // Persist only after a verified recovery path this run — not from backlog alone.
-    if (!recovered) return "";
-    if (!klass || klass === "general" || klass === "aborted-unfinished") return "";
-    const draft = learnedSkillDraft(klass, {
-      failedFamily: lessonTrail.failedFamily,
-      recoveredBy: lessonTrail.recoveredBy,
-    });
-    if (!draft) return "";
-    const existingBody = await this.memory.get(skillBodyKey(draft.name));
-    const bodyRec = existingBody ? parseSkillBody(existingBody.body, draft.name) : null;
-    if (this.skills.get(draft.name) && !canRewriteSkill(bodyRec)) {
-      return draft.name;
-    }
-    if (!this.skills.get(draft.name)) {
-      this.skills.writeFile(draft.name, "SKILL.md", draft.body);
-    }
-    agent.evolve({ skills: [{ kind: "skill", name: draft.name, version: "1" }] });
-    await this.agents.save(agent);
-    const admitted = bodyRec && !canRewriteSkill(bodyRec)
-      ? bodyRec
-      : admitNewSkill(draft.name, run.taskClass, klass);
-    await this.remember(run, agent.id.value, {
-      key: skillBodyKey(draft.name),
-      title: `Body: ${draft.name}`,
-      body: JSON.stringify(admitted),
-      tags: ["body", "skill", admitted.status, klass],
-    });
-    await this.remember(run, agent.id.value, {
-      key: `plugin/${draft.name}`,
-      title: `Plugin ${draft.name}`,
-      body: draft.body,
-      tags: ["plugin", "learned", admitted.status, klass],
-    });
-    await this.graph.link(classKey(klass), pluginMemoryKey(draft.name), "learned");
-    await this.graph.link(slugKey(`backlog/${klass}`), pluginMemoryKey(draft.name), "recovered-by");
-    await this.become(`become: skill ${draft.name} (${admitted.status})`);
-    return draft.name;
+    return this.learning.growBodyFromRecovery(run, agent, klass, lessonTrail);
   }
 
   private async loadSkillBodies(agent: Agent): Promise<SkillBodyRecord[]> {
-    const out: SkillBodyRecord[] = [];
-    for (const ref of agent.skillsLock.list()) {
-      if (ref.kind !== "skill") continue;
-      const note = await this.memory.get(skillBodyKey(ref.name));
-      if (note) out.push(parseSkillBody(note.body, ref.name));
-    }
-    return out;
+    return this.learning.loadSkillBodies(agent);
+  }
+
+  private async loadQuarantinedSkills(): Promise<Set<string>> {
+    return this.learning.loadQuarantinedSkills();
   }
 
   private async touchSkillBodies(
@@ -941,18 +891,7 @@ export class DriveSolve {
     recs: SkillBodyRecord[],
     input: { success: boolean; transfer: boolean },
   ): Promise<void> {
-    const byName = new Map(recs.map((r) => [r.name, r]));
-    for (const ref of agent.skillsLock.list()) {
-      if (ref.kind !== "skill") continue;
-      const prev = byName.get(ref.name) ?? admitNewSkill(ref.name, run.taskClass, "general");
-      const next = recordSkillOutcome(prev, input);
-      await this.remember(run, agent.id.value, {
-        key: skillBodyKey(ref.name),
-        title: `Body: ${ref.name}`,
-        body: JSON.stringify(next),
-        tags: ["body", "skill", next.status],
-      });
-    }
+    await this.learning.touchSkillBodies(run, agent, recs, input);
   }
 
   private commitAct(run: Run, act: ChatResult): void {
@@ -1181,6 +1120,13 @@ export class DriveSolve {
       });
     }
     if (call.name.startsWith("skill_") || call.name.startsWith("plugin_")) {
+      const name = String(call.arguments?.name ?? "");
+      if (name && call.name !== "skill_write" && call.name !== "plugin_write") {
+        const record = await this.memory.get(skillBodyKey(name));
+        if (record && parseSkillBody(record.body, name).status === "quarantine") {
+          return `BLOCKED: plugin ${name} is quarantined until its capability exam passes.`;
+        }
+      }
       const out = runSkillTool(this.skills, call, {
         runId: run.id.value,
         open: (name, path) => {
@@ -1190,18 +1136,23 @@ export class DriveSolve {
       if (call.name === "skill_write" || call.name === "plugin_write") {
         const name = String(call.arguments?.name ?? "");
         if (name) {
-          const agent = await this.agents.get(run.agentId);
-          if (agent) {
-            agent.evolve({ skills: [{ kind: "skill", name, version: "1" }] });
-            await this.agents.save(agent);
-          }
+          const existing = await this.memory.get(skillBodyKey(name));
+          const body = existing
+            ? parseSkillBody(existing.body, name)
+            : admitNewSkill(name, run.taskClass, "self-authored");
+          await this.remember(run, run.agentId, {
+            key: skillBodyKey(name),
+            title: `Body: ${name}`,
+            body: JSON.stringify(body),
+            tags: ["body", "skill", body.status, "self-authored"],
+          });
           await this.remember(run, run.agentId, {
             key: `plugin/${name}`,
             title: `Plugin ${name}`,
             body: String(call.arguments?.path ?? "plugin.json"),
-            tags: ["plugin", name],
+            tags: ["plugin", name, body.status],
           });
-          await this.become(`become: plugin ${name}`);
+          await this.become(`become: plugin ${name} (${body.status})`);
         }
       }
       return out;
@@ -1457,6 +1408,27 @@ export class DriveSolve {
     }));
     psyche.existence = appendExistence(psyche.existence, { kind: "review", text: "short chat: pass" });
     await this.flushPsyche(run, agent.id.value, psyche);
+    await this.episodes.save(new Episode({
+      agentId: agent.id.value,
+      runId: run.id.value,
+      taskClass: run.taskClass,
+      goal: run.goal,
+      outcome: "success",
+      failureMode: null,
+      capabilitiesUsed: ["chat:short", "review:deterministic"],
+      capabilitiesCreated: [],
+      markers: buildEpisodeMarkers({
+        source: "short",
+        status: run.status,
+        goalHash: goalHash(run.goal),
+        reuse: "fresh",
+        progressScore: 100,
+      }),
+      nextHint: "Short response passed the deterministic review boundary.",
+      worktreeRef: run.worktreePath,
+      tokens: run.budget.tokensUsed,
+      usd: run.budget.usdUsed,
+    }));
     await this.runs.save(run);
     return run;
   }
@@ -1510,26 +1482,16 @@ export class DriveSolve {
   }
 
   private async become(message: string): Promise<void> {
-    try {
-      await this.home.commit(message);
-    } catch {
-      // best-effort biography
-    }
+    await this.learning.commitBiography(message);
   }
 
   private async remember(run: Run, agentId: string, input: { key: string; title: string; body: string; tags: string[] }): Promise<void> {
-    if (!input.body.trim()) return;
-    const saved = await this.memory.save(new MemoryNote({
-      ...input,
-      sourceRunId: run.id.value,
-      sourceAgentId: agentId,
-    }));
-    this.events.publish([event("memory.written", { runId: run.id.value, key: saved.key })]);
+    await this.learning.remember(run, agentId, input);
   }
 }
 
-function skillCatalog(skills: SkillPort, query = ""): string {
-  return renderSkillCatalog(skills.list(), query);
+function skillCatalog(skills: SkillPort, query = "", quarantined = new Set<string>()): string {
+  return renderSkillCatalog(skills.list().filter((skill) => !quarantined.has(skill.name)), query);
 }
 
 function rememberFailKlass(bag: { last: string }, review: { verdict?: string; failureKind?: FailureKind; aborted?: boolean }): void {

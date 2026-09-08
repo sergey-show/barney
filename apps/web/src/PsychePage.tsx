@@ -63,60 +63,100 @@ export function PsychePage(props: { runId?: string }) {
           <h2>{t.characterTitle}</h2>
           <p className="lede">{t.characterLede(state.agent.name, String(state.agent.version), state.designSealed)}</p>
         </div>
-        <button className="primary" type="button" disabled={busy} onClick={() => void save()}>{t.saveCharacter}</button>
+        <button className="primary compact" type="button" disabled={busy} onClick={() => void save()}>{t.saveCharacter}</button>
       </header>
-      <div className="page-body wide">
-        <p className="lede">{t.characterIntro}</p>
-        <div className="grid-2">
+      <div className="page-body psyche-page">
+        <div className="psyche-summary">
+          <div className="agent-avatar">{state.agent.name.slice(0, 1).toUpperCase()}</div>
           <div>
+            <strong>{state.agent.name}</strong>
+            <span>{t.agentProfileMeta(String(state.agent.version), state.agent.taskClass)}</span>
+          </div>
+          <span className={`connection-badge ${state.designSealed ? "connected" : ""}`}>
+            <span className="status-dot" />
+            {state.designSealed ? t.designed : t.notSealed}
+          </span>
+        </div>
+
+        <section className="psyche-section">
+          <div className="section-heading">
+            <div>
+              <span className="section-kicker">{t.identity}</span>
+              <h3>{t.directionAndTraits}</h3>
+              <p>{t.characterIntro}</p>
+            </div>
+          </div>
+          <div className="character-fields">
+            <div className="field-group">
             <label htmlFor="compass">{t.compass}</label>
             <p className="lede">{t.compassHint}</p>
             <textarea id="compass" value={compass} onChange={(e) => setCompass(e.target.value)} rows={4} />
+            </div>
+            <div className="field-group">
             <label htmlFor="character">{t.traits}</label>
             <p className="lede">{t.traitsHint}</p>
             <textarea id="character" value={character} onChange={(e) => setCharacter(e.target.value)} rows={5} />
+            </div>
           </div>
-          <div>
-            <h4>{t.light}</h4>
-            <p className="lede">{t.lightHint}</p>
-            {state.samost.light.length === 0 ? <div className="muted">{t.emptyLight}</div> : (
-              <ul className="psyche-list">
-                {state.samost.light.map((line) => <li key={line}>{line}</li>)}
-              </ul>
-            )}
-            <h4>{t.shadow}</h4>
-            <p className="lede">{t.shadowHint}</p>
-            {state.samost.shadow.length === 0 ? <div className="muted">{t.emptyShadow}</div> : (
-              <ul className="psyche-list shadow">
-                {state.samost.shadow.map((line) => <li key={line}>{line}</li>)}
-              </ul>
-            )}
+        </section>
+
+        <section className="psyche-section">
+          <div className="section-heading">
+            <div>
+              <span className="section-kicker">{t.experience}</span>
+              <h3>{t.patternsTitle}</h3>
+              <p>{t.patternsHint}</p>
+            </div>
           </div>
-        </div>
+          <div className="pattern-grid">
+            <div className="pattern-card light">
+              <div className="pattern-card-head"><span>↑</span><div><strong>{t.light}</strong><small>{t.lightHint}</small></div><b>{state.samost.light.length}</b></div>
+              {state.samost.light.length === 0 ? <div className="section-empty compact">{t.emptyLight}</div> : (
+                <ul className="psyche-list">{state.samost.light.map((line) => <li key={line}>{line}</li>)}</ul>
+              )}
+            </div>
+            <div className="pattern-card shadow">
+              <div className="pattern-card-head"><span>↓</span><div><strong>{t.shadow}</strong><small>{t.shadowHint}</small></div><b>{state.samost.shadow.length}</b></div>
+              {state.samost.shadow.length === 0 ? <div className="section-empty compact">{t.emptyShadow}</div> : (
+                <ul className="psyche-list shadow">{state.samost.shadow.map((line) => <li key={line}>{line}</li>)}</ul>
+              )}
+            </div>
+          </div>
+        </section>
         {error ? <div className="error" role="alert">{error}</div> : null}
 
-        <h3>{t.episodes}</h3>
-        <p className="lede">{t.episodesHint}</p>
-        {state.episodes.length === 0 ? (
-          <div className="muted">{t.noEpisodes}</div>
-        ) : (
-          <>
-            <div className="plain-list">
-              {episodePage.slice.map((episode) => (
-                <div key={episode.id} className="plain-row">
-                  <div className="plain-main">
-                    <div className="plain-title">{episode.goal}</div>
-                    <div className="plain-meta">
-                      {episode.outcome}
-                      {episode.failureMode ? ` · ${episode.failureMode}` : ""}
-                    </div>
-                  </div>
-                </div>
-              ))}
+        <section className="psyche-section">
+          <div className="section-heading">
+            <div>
+              <span className="section-kicker">{t.history}</span>
+              <h3>{t.episodes}</h3>
+              <p>{t.episodesHint}</p>
             </div>
-            <Pager page={episodePage.current} pages={episodePage.pages} onPage={episodePage.setPage} prev={t.prevPage} next={t.nextPage} />
-          </>
-        )}
+            <span className="count-badge">{state.episodes.length}</span>
+          </div>
+          {state.episodes.length === 0 ? (
+            <div className="section-empty">{t.noEpisodes}</div>
+          ) : (
+            <>
+              <div className="episode-list">
+                {episodePage.slice.map((episode) => (
+                  <div key={episode.id} className="episode-row">
+                    <span className={`outcome-mark ${episode.outcome}`} />
+                    <div className="plain-main">
+                      <div className="plain-title">{episode.goal}</div>
+                      <div className="plain-meta">
+                        {episode.outcome}
+                        {episode.failureMode ? ` · ${episode.failureMode}` : ""}
+                      </div>
+                    </div>
+                    <span className="episode-date">{new Date(episode.createdAt).toLocaleDateString()}</span>
+                  </div>
+                ))}
+              </div>
+              <Pager page={episodePage.current} pages={episodePage.pages} onPage={episodePage.setPage} prev={t.prevPage} next={t.nextPage} />
+            </>
+          )}
+        </section>
       </div>
     </section>
   );
