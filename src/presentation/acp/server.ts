@@ -32,7 +32,7 @@ export class BarneyAcpAgent {
           embeddedContext: false,
         },
       },
-      agentInfo: { name: "Barney", version: "0.2.0" },
+      agentInfo: { name: "Barney", version: "0.2.1" },
     };
   }
 
