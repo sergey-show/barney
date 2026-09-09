@@ -1,6 +1,8 @@
-export type Locale = "ru" | "en";
+export type Locale = "en" | "ru";
 
-export const LOCALES: Locale[] = ["ru", "en"];
+export const DEFAULT_LOCALE: Locale = "en";
+export const LOCALES: Locale[] = ["en", "ru"];
+export const LOCALE_STORAGE_KEY = "barney.ui-locale";
 
 const ru = {
   navChat: "Разговор",
@@ -492,14 +494,14 @@ type Widen<T> = {
     : string;
 };
 
-export type Messages = Widen<typeof ru>;
+export type Messages = Widen<typeof en>;
 
-export const catalog: Record<Locale, Messages> = { ru, en };
+export const catalog: Record<Locale, Messages> = { en, ru };
 
 export function detectLocale(): Locale {
-  const stored = localStorage.getItem("barney.locale");
-  if (stored === "ru" || stored === "en") return stored;
-  return navigator.language.toLowerCase().startsWith("ru") ? "ru" : "en";
+  const stored = localStorage.getItem(LOCALE_STORAGE_KEY);
+  if (stored === "en" || stored === "ru") return stored;
+  return DEFAULT_LOCALE;
 }
 
 export function alertTitle(locale: Locale, title: string): string {

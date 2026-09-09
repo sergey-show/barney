@@ -171,6 +171,19 @@ CLI.
   worktrees/         # per-run checkouts
 ```
 
+## Docs
+
+How the body grows — tools, plugins, MCP. English and Russian.
+
+| | |
+|---|---|
+| [Docs](docs/README.md) | Index |
+| [Tools](docs/tools.md) | Kernel tool protocol |
+| [Plugins](docs/plugins.md) | Skills and UI in `~/.barney` |
+| [MCP](docs/mcp.md) | Local stdio servers the agent can start itself |
+
+[Русский](docs/README.ru.md)
+
 ## License
 
 MIT. Copyright (c) 2026 Sergey Chugay.
