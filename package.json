@@ -1,6 +1,6 @@
 {
   "name": "@encsch/barney",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "An AI agent with developing capabilities. The kernel is immutable; the body lives in ~/.barney.",
   "license": "MIT",
   "type": "module",
