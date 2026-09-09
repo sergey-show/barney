@@ -13,7 +13,7 @@ A self-developing agent.
 
 This is an experimental agent project. Its core idea comes from Carl Jung — the [Self](https://en.wikipedia.org/wiki/Self_in_Jungian_psychology).
 
-![Self diagram](assets/images/image.png)
+![Self diagram](assets/images/image.jpg)
 
 The name **Barney** is in memory of my dog.
 
