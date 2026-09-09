@@ -404,8 +404,8 @@ export function App() {
             </span>
           </button>
           <div className="lang-compact" role="group" aria-label={t.language}>
-            <button type="button" className={locale === "ru" ? "active" : ""} onClick={() => setLocale("ru")}>RU</button>
             <button type="button" className={locale === "en" ? "active" : ""} onClick={() => setLocale("en")}>EN</button>
+            <button type="button" className={locale === "ru" ? "active" : ""} onClick={() => setLocale("ru")}>RU</button>
           </div>
         </div>
       </aside>
@@ -1111,8 +1111,8 @@ function ModelsEditor(props: {
           <div className="preference-row">
             <div><strong>{t.language}</strong><span>{t.languageHint}</span></div>
             <div className="segmented" id="ui-lang">
-              <button type="button" className={locale === "ru" ? "active" : ""} onClick={() => setLocale("ru")}>RU</button>
               <button type="button" className={locale === "en" ? "active" : ""} onClick={() => setLocale("en")}>EN</button>
+              <button type="button" className={locale === "ru" ? "active" : ""} onClick={() => setLocale("ru")}>RU</button>
             </div>
           </div>
           <label className="preference-row toggle-row">

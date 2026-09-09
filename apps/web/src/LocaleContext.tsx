@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
-import { catalog, detectLocale, type Locale, type Messages } from "./i18n.ts";
+import { catalog, detectLocale, LOCALE_STORAGE_KEY, type Locale, type Messages } from "./i18n.ts";
 
 type LocaleContextValue = {
   locale: Locale;
@@ -15,7 +15,7 @@ export function LocaleProvider(props: { children: ReactNode }) {
 
   useEffect(() => {
     document.documentElement.lang = locale;
-    localStorage.setItem("barney.locale", locale);
+    localStorage.setItem(LOCALE_STORAGE_KEY, locale);
   }, [locale]);
 
   const value = useMemo<LocaleContextValue>(() => ({

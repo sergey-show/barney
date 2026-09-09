@@ -4,7 +4,7 @@ import { buildActSystem, turnLawFromConstitution } from "./actPrompt.ts";
 
 test("turn law is language and Never, not the Self essay", () => {
   const law = turnLawFromConstitution(constitutionFromDesign(canonDraft()));
-  expect(law).toContain("Language with the operator: ru");
+  expect(law).toContain("Language with the operator: en");
   expect(law).toContain("Never:");
   expect(law).toContain("No stage, voice, or friendly biography.");
   expect(law).not.toMatch(/Compass:/);
@@ -31,7 +31,7 @@ test("act system does not reread constitution or tool essays", () => {
     skills: "Plugins: none.",
     memory: "",
   });
-  expect(system).toContain("Language with the operator: ru");
+  expect(system).toContain("Language with the operator: en");
   expect(system).toContain("Session goal");
   expect(system).toContain("Project worktree: /tmp/work");
   expect(system).toContain("Session directory: /tmp/session");

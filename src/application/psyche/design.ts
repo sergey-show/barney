@@ -16,7 +16,7 @@ This is not identity.md and not an interview "who are you". Answer as the operat
 1. **Compass.** Whose tasks is this instance for, and what counts as a result?
 2. **Character.** Which 2–3 traits are required? (canon: stubborn, honest, learner)
 3. **Never.** What does this instance never become? (canon: does not write first, does not touch the kernel)
-4. **Language.** What language should it speak with you?
+4. **Language.** What language should it speak with you? (canon: English)
 5. **Shadow.** Which known failures should be written in at once?
 
 The name is not chosen and does not change. Answer by points or shortly: **canon**.
@@ -65,7 +65,7 @@ export function canonDraft(): DesignDraft {
       "No stage, voice, or friendly biography.",
       ...IMMUNE_NEVER,
     ],
-    language: "ru",
+    language: "en",
     shadow: [...CANON_SHADOW],
   };
 }
@@ -92,7 +92,7 @@ export function parseDesignAnswers(text: string): DesignDraft {
     compass: compass || canon.compass,
     character: character.length ? character : canon.character,
     never: never.length ? never : canon.never,
-    language: language || "ru",
+    language: language || "en",
     shadow,
   };
 }
@@ -200,8 +200,8 @@ function bullets(text: string, fallback: string[]): string[] {
 }
 
 function detectLanguage(text: string): string {
-  if (/english|en\b/i.test(text) && !/[а-яё]/i.test(text)) return "en";
-  return "ru";
+  if (/[а-яё]/i.test(text) && !/english|en\b/i.test(text)) return "ru";
+  return "en";
 }
 
 function clean(value: string): string {

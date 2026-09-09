@@ -3,7 +3,7 @@ import { cycleStrategy, familyKey, familySaturated, frustrationScore, stopAfterF
 import { draftPlan, formatPlan } from "../context/draftPlan.ts";
 import { bindToolArgs, goalAnchors } from "../context/bindAnchor.ts";
 import { bumpBacklog, failureClass, formatBacklog, learnedSkillDraft, parseBacklog } from "../context/failureClass.ts";
-import { emptyTrail, formatLessonLine, lessonRule, noteTrail, pickRuleNotes, isRecapLesson, type LessonTrail } from "../context/lessonRule.ts";
+import { emptyTrail, formatLessonLine, lessonRule, noteTrail, isRecapLesson, type LessonTrail } from "../context/lessonRule.ts";
 import {
   classifyReuse,
   emptyTransferStats,
@@ -121,6 +121,11 @@ import { runSelfTool } from "../tools/runSelfTool.ts";
 import { runSkillTool } from "../tools/runSkillTool.ts";
 import { runTeamTool } from "../tools/runTeamTool.ts";
 import { RunLearningService } from "../services/RunLearningService.ts";
+import {
+  renderConversationalRecall,
+  TurnRecallService,
+  type TurnRecallContext,
+} from "../services/TurnRecallService.ts";
 
 const MAX_TOOL_ROUNDS = 12;
 const WRITE_TOOLS = FILE_TOOLS.filter((tool) => tool.name === "fs_write" || tool.name === "fs_list");
@@ -133,6 +138,7 @@ type PsycheState = {
 
 export class DriveSolve {
   private readonly learning: RunLearningService;
+  private readonly recall: TurnRecallService;
 
   constructor(
     private readonly agents: AgentRepository,
@@ -153,6 +159,7 @@ export class DriveSolve {
     private readonly mcpRuntime: McpRuntimePort,
   ) {
     this.learning = new RunLearningService(agents, memory, graph, skills, home, events);
+    this.recall = new TurnRecallService(episodes, memory, graph);
   }
 
   async execute(input: { runId: string; message: string; signal?: AbortSignal; depth?: number; forceFull?: boolean }): Promise<Run> {
@@ -170,11 +177,17 @@ export class DriveSolve {
     if (isDesignGoal(run.goal) && depth === 0) {
       return this.sealDesign(run, agent, input.message);
     }
+    const recall = await this.recall.load({
+      agentId: agent.id.value,
+      runId: run.id.value,
+      taskClass: run.taskClass,
+      query: `${run.goal}\n${input.message}`,
+    });
     let routed: TurnRoute | undefined;
     if (depth === 0) {
       routed = await this.routeTurn(run, throwIfAborted, input.signal);
       if (!input.forceFull && routed.short) {
-        const short = await this.executeShort(run, agent, input.message, throwIfAborted, input.signal);
+        const short = await this.executeShort(run, agent, input.message, recall, throwIfAborted, input.signal);
         if (short !== "full") return short;
       }
     }
@@ -185,43 +198,19 @@ export class DriveSolve {
       body: redactSecrets(packed.digest),
       tags: ["session", "digest", run.taskClass],
     });
-    const past = await this.episodes.findForAgent(agent.id.value, run.taskClass);
-    const recentAll = await this.episodes.findRecent(30);
-    const priorHashes = extractGoalHashes([...past, ...recentAll]);
-    const digestKey = slugKey(`session/${run.id.value}/digest`);
-    const shared = (await this.memory.search(input.message, 3)).filter((note) =>
-      note.key !== digestKey
-      && !note.key.startsWith("plan/")
-      && !note.key.startsWith("session/")
-      && !isPsycheKey(note.key)
-      && !note.tags.includes("rule")
-      && !note.tags.includes("samost")
-      && !note.tags.includes("digest"),
-    );
-    const recentMemories = await this.memory.recent(40);
-    const modeHints = [
-      ...past.slice(0, 8).map((e) => e.failureMode).filter((m): m is string => Boolean(m)),
-      ...recentAll.slice(0, 12).map((e) => e.failureMode).filter((m): m is string => Boolean(m)),
-    ];
-    const uniqueModes = [...new Set(modeHints)].slice(0, 4);
-    const modeEpisodes = (
-      await Promise.all(uniqueModes.map((mode) => this.episodes.findByFailureMode(mode, 6)))
-    ).flat();
-    const relatedKeys = await this.graph.neighborhood([
-      classKey(run.taskClass),
-      ...uniqueModes.map((mode) => classKey(mode)),
-      ...past.slice(0, 6).flatMap((episode) => episode.failureMode ? [classKey(episode.failureMode)] : []),
-    ], 2);
-    const hopNotes = (await Promise.all(relatedKeys.map((key) => this.memory.get(key)))).filter(
-      (note): note is NonNullable<typeof note> => Boolean(note),
-    );
-    const pickedRules = pickRuleNotes(
-      [...recentMemories, ...hopNotes],
-      run.taskClass,
-      5,
+    const {
+      past,
+      recentAll,
+      modeEpisodes,
+      recentMemories,
+      shared,
+      life,
       relatedKeys,
-      uniqueModes,
-    );
+      hopNotes,
+      pickedRules,
+      relevantEpisodes,
+    } = recall;
+    const priorHashes = extractGoalHashes([...past, ...recentAll]);
     const rules = pickedRules.map((r) => r.line);
     const recalledMeta = pickedRules;
     const statsNote = await this.memory.get(statsMemoryKey(run.taskClass));
@@ -281,12 +270,13 @@ export class DriveSolve {
         : "",
       shadowWarnings,
       packed.digest ? `Session so far (compressed; full chat stays in the portal):\n${packed.digest}` : "",
-      ...shared.map((note) => `[${note.key}] ${note.title}: ${note.body.slice(0, 160)}`),
-      ...past.slice(0, 3).map((e) => `[${e.outcome}] ${e.goal} → ${e.nextHint}`),
-      ...modeEpisodes
-        .filter((e) => e.taskClass !== run.taskClass)
-        .slice(0, 2)
-        .map((e) => `[transfer-seed ${e.failureMode}] ${e.taskClass}: ${e.nextHint}`),
+      renderConversationalRecall({
+        ...recall,
+        shared,
+        life,
+        relevantEpisodes,
+        modeEpisodes,
+      }, { includeRules: false }),
     ].filter(Boolean).join("\n\n");
     const failedCalls = new Set<string>();
     const familyFails = new Map<string, number>();
@@ -1358,6 +1348,7 @@ export class DriveSolve {
     run: Run,
     agent: Agent,
     message: string,
+    recall: TurnRecallContext,
     throwIfAborted: () => void,
     signal?: AbortSignal,
   ): Promise<Run | "full"> {
@@ -1371,6 +1362,8 @@ export class DriveSolve {
           SHORT_CHAT_RULES,
           turnLawFromConstitution(agent.constitution),
           renderSamostPrompt(psyche.samost, message),
+          renderExistencePrompt(psyche.existence),
+          renderConversationalRecall(recall),
           `Session goal: ${run.goal}`,
           workspaceLines(run.worktreePath, run.sessionPath),
         ].filter(Boolean).join("\n\n"),
@@ -1408,11 +1401,21 @@ export class DriveSolve {
     }));
     psyche.existence = appendExistence(psyche.existence, { kind: "review", text: "short chat: pass" });
     await this.flushPsyche(run, agent.id.value, psyche);
+    const shortHash = goalHash(message);
+    const shortReuse = classifyReuse({
+      goalHash: shortHash,
+      priorGoalHashes: extractGoalHashes([...recall.past, ...recall.recentAll]),
+      currentClass: run.taskClass,
+      recalledFromClasses: [
+        ...recall.pickedRules.map((rule) => rule.sourceClass),
+        ...recall.relevantEpisodes.map((episode) => episode.taskClass),
+      ],
+    });
     await this.episodes.save(new Episode({
       agentId: agent.id.value,
       runId: run.id.value,
       taskClass: run.taskClass,
-      goal: run.goal,
+      goal: message,
       outcome: "success",
       failureMode: null,
       capabilitiesUsed: ["chat:short", "review:deterministic"],
@@ -1420,11 +1423,12 @@ export class DriveSolve {
       markers: buildEpisodeMarkers({
         source: "short",
         status: run.status,
-        goalHash: goalHash(run.goal),
-        reuse: "fresh",
+        goalHash: shortHash,
+        reuse: shortReuse,
+        rulesRecalled: recall.pickedRules.map((rule) => rule.key),
         progressScore: 100,
       }),
-      nextHint: "Short response passed the deterministic review boundary.",
+      nextHint: redactSecrets(`Short exchange: ${clipText(act.text, 240)}`),
       worktreeRef: run.worktreePath,
       tokens: run.budget.tokensUsed,
       usd: run.budget.usdUsed,

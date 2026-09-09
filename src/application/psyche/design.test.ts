@@ -12,6 +12,7 @@ import {
 
 test("canon shortcut and numbered answers form an instance, not a persona", () => {
   const canon = parseDesignAnswers("канон");
+  expect(canon.language).toBe("en");
   expect(canon.compass).toContain("Do not change the kernel");
   expect(constitutionFromDesign(canon)).not.toMatch(/^you are/i);
   expect(isDesignSealed("# Instance designed\n")).toBe(true);
