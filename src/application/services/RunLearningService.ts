@@ -68,6 +68,8 @@ export class RunLearningService {
     klass: string,
     lessonTrail: LessonTrail,
   ): Promise<string> {
+    // Experience law: only recovery (failed path → different path → success)
+    // may mint a quarantine skill. Callers must already gate via decideExperienceWrite.
     const recovered = Boolean(
       lessonTrail.failedFamily
       && lessonTrail.recoveredBy

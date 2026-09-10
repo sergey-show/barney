@@ -126,6 +126,16 @@ import {
   TurnRecallService,
   type TurnRecallContext,
 } from "../services/TurnRecallService.ts";
+import {
+  buildExperienceBags,
+  finalizeRecallSignal,
+  formatBagsCount,
+  renderExperienceRecall,
+} from "../experience/experienceRecall.ts";
+import {
+  decideExperienceWrite,
+  STRUCTURAL_FAIL_CLASSES,
+} from "../experience/experienceLayers.ts";
 
 const MAX_TOOL_ROUNDS = 12;
 const WRITE_TOOLS = FILE_TOOLS.filter((tool) => tool.name === "fs_write" || tool.name === "fs_list");
@@ -260,6 +270,12 @@ export class DriveSolve {
       psyche.samost.shadow,
       input.signal,
     );
+    const skillHints = [
+      ...skillBodyRecs.filter((r) => r.status === "frozen" || r.status === "quarantine")
+        .map((r) => `[skill:${r.name}] status=${r.status} class=${r.bornFromClass || run.taskClass}`),
+    ];
+    const experienceBags = buildExperienceBags(recall, { shadowWarnings, skillHints });
+    const experienceBlock = renderExperienceRecall(experienceBags);
     const memoryNote = [
       immuneBoundaryNote(agent.constitution),
       transferHint,
@@ -268,7 +284,7 @@ export class DriveSolve {
       rules.length
         ? `Rules from past runs (task class + shared failure modes — obey these):\n${rules.map((line) => `- ${line}`).join("\n")}`
         : "",
-      shadowWarnings,
+      experienceBlock,
       packed.digest ? `Session so far (compressed; full chat stays in the portal):\n${packed.digest}` : "",
       renderConversationalRecall({
         ...recall,
@@ -278,6 +294,9 @@ export class DriveSolve {
         modeEpisodes,
       }, { includeRules: false }),
     ].filter(Boolean).join("\n\n");
+    if (experienceBags.shadow.length || experienceBags.rules.length || experienceBags.skills.length) {
+      run.append("system", `experience_recall_ready · ${formatBagsCount(experienceBags)}`);
+    }
     const failedCalls = new Set<string>();
     const familyFails = new Map<string, number>();
     const extra = { n: 0 };
@@ -505,6 +524,28 @@ export class DriveSolve {
     await this.flushPsyche(run, agent.id.value, psyche);
     const lastStrategy = run.usedStrategies.at(-1) || "retry_with_error";
     const outcomeOk = review.verdict === "pass" && !corrected;
+    const toolEvidence = artifactEvidence(run);
+    const recallSignal = finalizeRecallSignal({
+      bags: experienceBags,
+      actText: act.text,
+      planText,
+      toolEvidence,
+      outcomeOk,
+    });
+    run.append("system", recallSignal.line);
+    const writeDecision = decideExperienceWrite({
+      outcomeOk,
+      recovered: Boolean(
+        lessonTrail.failedFamily
+        && lessonTrail.recoveredBy
+        && lessonTrail.recoveredBy !== lessonTrail.failedFamily,
+      ),
+      failClass: klass,
+      structuralFail: STRUCTURAL_FAIL_CLASSES.has(String(review.failureKind ?? "")),
+      modeRepeatCount: klass !== "general" ? Math.max(1, run.sameFailureCount) : 0,
+      hasConcreteDirective: Boolean(learned.body && /do not|don't|prefer|instead|first|avoid/i.test(learned.body)),
+    });
+    run.append("system", `experience_write: ${writeDecision.kind} · ${writeDecision.reason}`);
     const nextStats = recordStrategyOutcome(
       classStats,
       lastStrategy,
@@ -544,17 +585,22 @@ export class DriveSolve {
       ...(klass !== "general" && klass !== "aborted-unfinished" ? [klass] : []),
     ];
     if (outcomeOk) {
-      await this.remember(run, agent.id.value, {
-        key: learned.key,
-        title: learned.title,
-        body: formatLessonLine(learned),
-        tags: [...ruleTags, "lesson"],
-      });
-      await this.graph.link(classKey(run.taskClass), learned.key, "learned");
-      if (klass !== "general" && klass !== "aborted-unfinished") {
-        await this.graph.link(classKey(klass), learned.key, "learned");
+      // Experience law: episode_only → episode save only (no rule pin, no skill pin).
+      if (writeDecision.kind !== "episode_only") {
+        await this.remember(run, agent.id.value, {
+          key: learned.key,
+          title: learned.title,
+          body: formatLessonLine(learned),
+          tags: [...ruleTags, "lesson", writeDecision.kind],
+        });
+        await this.graph.link(classKey(run.taskClass), learned.key, "learned");
+        if (klass !== "general" && klass !== "aborted-unfinished") {
+          await this.graph.link(classKey(klass), learned.key, "learned");
+        }
       }
-      const created = await this.growBodyFromRecovery(run, agent, failKlass.last || klass, lessonTrail);
+      const created = writeDecision.kind === "skill_candidate"
+        ? await this.growBodyFromRecovery(run, agent, failKlass.last || klass, lessonTrail)
+        : "";
       await this.episodes.save(
         new Episode({
           agentId: agent.id.value,
@@ -573,13 +619,15 @@ export class DriveSolve {
         }),
       );
     } else {
-      await this.remember(run, agent.id.value, {
-        key: learned.key,
-        title: learned.title,
-        body: formatLessonLine(learned),
-        tags: [...ruleTags, "fail", "experience", review.verdict],
-      });
-      await this.graph.link(classKey(klass), learned.key, "failed-as");
+      if (writeDecision.kind === "failure_rule") {
+        await this.remember(run, agent.id.value, {
+          key: learned.key,
+          title: learned.title,
+          body: formatLessonLine(learned),
+          tags: [...ruleTags, "fail", "experience", "rule", review.verdict],
+        });
+        await this.graph.link(classKey(klass), learned.key, "failed-as");
+      }
       await this.episodes.save(
         new Episode({
           agentId: agent.id.value,
