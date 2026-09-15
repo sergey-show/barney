@@ -31,7 +31,7 @@ Idle item: `plastic_sleep` (after dream, before absorb / self-run / study).
 3. [Autonomy](autonomy.md) — agenda  
 4. **Plasticity** — strengthen / forget / consolidate  
 
-Without experience lift, pruning is unsafe. With lift, plasticity stops “crutch pile-up”.
+Without transfer lift, pruning is risky — it can drop weight that never got a chance to prove itself.
 
 ## Fayr alignment
 

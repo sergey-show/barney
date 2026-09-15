@@ -71,15 +71,18 @@ barney eval experience --out ./tmp/fourhand-proof
 
 ### Измеренный прогон (2026-09-15, `qwen3.8:latest`)
 
-| Кейс | kernel-test | no-kernel | kernel-fresh | lift | recall_helped |
-|---|---|---|---|---|---|
-| `house-redact` | PASS | FAIL | FAIL | 1 | 1 |
-| `house-merge` | PASS | FAIL | FAIL | 1 | 1 |
+| Кейс | kernel-test | no-kernel | kernel-fresh | lift | recall_helped | kernelLift |
+|---|---|---|---|---|---|---|
+| `house-redact` | PASS | FAIL | FAIL | 1 | 1 | 0 |
+| `house-merge` | PASS | FAIL | FAIL | 1 | 1 | 0 |
 
-Вердикт: опыт помогает · средний прирост переноса **1.00**. Отчёт: `tmp/fourhand-proof/fourhand-report.json`.
+Вердикт `experience_helps` · средний lift **1.00**.  
+`kernelLift = 0`. Spaced: только immediate. `skillReuseRate: 0`.
 
-Проверка удержания во времени (сразу / через сутки / через неделю): `spacedTransfer.ts`.  
-Мгновенный замер уже в four-hand отчёте; отложенные — `barney eval spaced <observations.json>`.
+Отчёт: [`docs/proof/2026-09-15-fourhand-qwen38`](./proof/2026-09-15-fourhand-qwen38/).
+
+Удержание во времени (сразу / +1d / +7d): `spacedTransfer.ts`.  
+Immediate уже в four-hand; позже — `barney eval spaced <observations.json>`.
 
 ## Сжатие во сне
 

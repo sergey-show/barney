@@ -30,7 +30,7 @@ Code: `src/application/autonomy/agenda.ts`, idle wiring in `idleTick.ts` / `Kern
 
 ## Relation to experience
 
-Autonomy on decorative memory is harmful. Prefer this order:
+Autonomy without working experience is useless. Order:
 
 1. Hard transfer lift — see [Experience](experience.md)  
 2. Agenda from real gaps  

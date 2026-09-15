@@ -72,15 +72,18 @@ barney eval experience --out ./tmp/fourhand-proof
 
 ### Measured run (2026-09-15, `qwen3.8:latest`)
 
-| Case | kernel-test | no-kernel | kernel-fresh | lift | recall_helped |
-|---|---|---|---|---|---|
-| `house-redact` | PASS | FAIL | FAIL | 1 | 1 |
-| `house-merge` | PASS | FAIL | FAIL | 1 | 1 |
+| Case | kernel-test | no-kernel | kernel-fresh | lift | recall_helped | kernelLift |
+|---|---|---|---|---|---|---|
+| `house-redact` | PASS | FAIL | FAIL | 1 | 1 | 0 |
+| `house-merge` | PASS | FAIL | FAIL | 1 | 1 | 0 |
 
-Verdict: experience helps · mean transfer lift **1.00**. Report: `tmp/fourhand-proof/fourhand-report.json`.
+Verdict `experience_helps` · mean lift **1.00**.  
+`kernelLift = 0`. Spaced: immediate only. `skillReuseRate: 0`.
 
-Spaced retention (immediate / +1 day / +7 days): `spacedTransfer.ts`.  
-The immediate probe is already in the four-hand report; later delays: `barney eval spaced <observations.json>`.
+Report: [`docs/proof/2026-09-15-fourhand-qwen38`](./proof/2026-09-15-fourhand-qwen38/).
+
+Spaced schedule (immediate / +1d / +7d): `spacedTransfer.ts`.  
+Immediate is in the four-hand report; later: `barney eval spaced <observations.json>`.
 
 ## Dream consolidation
 

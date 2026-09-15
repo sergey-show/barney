@@ -72,19 +72,18 @@ Barney собран иначе. Существование предшеству�
 
 ## Доказательство
 
-Абсолютный балл бенчмарка — ещё не опыт. Опыт каузален:
-
 `transfer_success_lift = pass(kernel-test) − pass(kernel-fresh)`
 
-Жёсткий перенос «четыре руки» (`barney eval experience`), модель `qwen3.8:latest`, 2026-09-15:
+На `house-redact` / `house-merge` (`qwen3.8:latest`, 2026-09-15):
 
 | Кейс | train | kernel-test | no-kernel | kernel-fresh | lift | recall_helped |
 |---|---|---|---|---|---|---|
 | `house-redact` | PASS | PASS | FAIL | FAIL | **1** | **1** |
 | `house-merge` | PASS | PASS | FAIL | FAIL | **1** | **1** |
 
-Вердикт: **опыт помогает** · средний прирост **1.00** · вспоминание нашлось и использовалось в **100%** шагов.  
-Свежие экземпляры выдумывают чужую конвенцию; обученное тело вспоминает «домашние» токены / байты merge и проходит. Протокол: [docs/experience.ru.md](docs/experience.ru.md).
+`kernelLift = 0` (оба контроля падают). Spaced дальше immediate не гоняли.
+
+Отчёт: [docs/proof/2026-09-15-fourhand-qwen38](docs/proof/2026-09-15-fourhand-qwen38/). Повтор: [docs/evals.ru.md](docs/evals.ru.md). Закон: [docs/experience.ru.md](docs/experience.ru.md).
 
 ## Установка
 
@@ -193,6 +192,7 @@ Barney даёт IDE тот же локальный жизненный цикл �
 | | |
 |---|---|
 | [Документация](docs/README.ru.md) | Оглавление |
+| [Eval](docs/evals.ru.md) | Как запускать four-hand, Harbor, юнит-тесты |
 | [Опыт](docs/experience.ru.md) | Доказательство жёсткого переноса (`transfer_success_lift`) |
 | [Инструменты](docs/tools.ru.md) | Протокол инструментов ядра |
 | [Плагины](docs/plugins.ru.md) | Навыки и UI в `~/.barney` |

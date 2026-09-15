@@ -72,19 +72,18 @@ These names describe the runtime. They are not a hard role pasted into a system 
 
 ## Proof
 
-An absolute benchmark score is not experience. Experience is causal:
-
 `transfer_success_lift = pass(kernel-test) − pass(kernel-fresh)`
 
-Four-hand hard transfer (`barney eval experience`), model `qwen3.8:latest`, 2026-09-15:
+On `house-redact` / `house-merge` (`qwen3.8:latest`, 2026-09-15):
 
 | Case | train | kernel-test | no-kernel | kernel-fresh | lift | recall_helped |
 |---|---|---|---|---|---|---|
 | `house-redact` | PASS | PASS | FAIL | FAIL | **1** | **1** |
 | `house-merge` | PASS | PASS | FAIL | FAIL | **1** | **1** |
 
-Verdict: **experience helps** · mean lift **1.00** · recall found and used on **100%** of steps.  
-Fresh homes invent the wrong convention; the trained body recalls house tokens / merge bytes and passes. Protocol: [docs/experience.md](docs/experience.md).
+`kernelLift = 0` (both controls fail). Spaced not run past immediate.
+
+Report: [docs/proof/2026-09-15-fourhand-qwen38](docs/proof/2026-09-15-fourhand-qwen38/). Re-run: [docs/evals.md](docs/evals.md). Law: [docs/experience.md](docs/experience.md).
 
 ## Install
 
@@ -194,6 +193,7 @@ How the body grows — tools, plugins, MCP. English and Russian.
 | | |
 |---|---|
 | [Docs](docs/README.md) | Index |
+| [Evals](docs/evals.md) | How to run four-hand, Harbor, unit tests |
 | [Experience](docs/experience.md) | Hard transfer proof (`transfer_success_lift`) |
 | [Tools](docs/tools.md) | Kernel tool protocol |
 | [Plugins](docs/plugins.md) | Skills and UI in `~/.barney` |

@@ -8,7 +8,10 @@ dist/
 .DS_Store
 apps/web/dist/
 apps/web/public/vendor/
-evals
+# evals source is tracked; keep secrets and Python junk local
+evals/**/.env
+evals/**/__pycache__/
+evals/**/*.pyc
 jobs
 bio
 tmp

@@ -1,0 +1,26 @@
+four-hand · house-redact · start
+  train[0] PASS train house redact ok
+four-hand · house-redact · lift=1 kernelLift=0 · kernel-train:PASS kernel-test:PASS no-kernel:FAIL kernel-fresh:FAIL
+four-hand · house-merge · start
+  train[0] PASS train house merge ok
+four-hand · house-merge · lift=1 kernelLift=0 · kernel-train:PASS kernel-test:PASS no-kernel:FAIL kernel-fresh:FAIL
+four-hand experience · 2026-09-15T09:42:38.715Z
+verdict: experience_helps
+transfer_success_lift: 1.00
+recall_hit_rate: 1.00
+recall_used_rate: 1.00
+spaced_plan: immediate → +24h → +7d
+
+## house-redact · lift=1 kernelLift=0
+  kernel-train   PASS · trained 1 goal(s) on /var/folders/d9/18s9gsps15xc5_fwq5g3h_200000gn/T/barney-fourhand-bvUnoh/house-redact-train-home-h8rag4
+  kernel-test    PASS · house redact+audit ok · recall hit=1 used=1 helped=1
+  no-kernel      FAIL · tokens=false audit=true env="APP_NAME=demo\nREGION=eu-central-1\nAWS_ACCESS_KEY_ID=DETECTED_SECRET_CREDENTIAL_598CFBD6\nGITHUB_TOKEN=DETECTED_SECRET_CREDENTIAL_40CB2B71\nSLACK_BOT_TOKEN=DE · recall hit=0 used=0 helped=?
+  kernel-fresh   FAIL · tokens=false audit=true env="APP_NAME=demo\nREGION=eu-central-1\nAWS_ACCESS_KEY_ID=DETECTED_SECRET_CREDENTIAL_598CFBD6\nGITHUB_TOKEN=DETECTED_SECRET_CREDENTIAL_40CB2B71\nSLACK_BOT_TOKEN=DE · recall hit=1 used=1 helped=?
+  spaced: immediate_lift=1 · re-run +1d/+7d then barney eval spaced
+
+## house-merge · lift=1 kernelLift=0
+  kernel-train   PASS · trained 1 goal(s) on /var/folders/d9/18s9gsps15xc5_fwq5g3h_200000gn/T/barney-fourhand-bvUnoh/house-merge-train-home-ptcfEz
+  kernel-test    PASS · house merge ok · recall hit=1 used=1 helped=1
+  no-kernel      FAIL · bytes mismatch got="{\n \"zebra\": 1,\n \"alpha\": {\n \"c\": 3,\n \"a\": 1,\n \"b\": 2\n },\n \"list\": [\n \"replace\"\n ],\n \"beta\": 0 · recall hit=0 used=0 helped=?
+  kernel-fresh   FAIL · bytes mismatch got="{\n \"zebra\": 1,\n \"alpha\": {\n  \"c\": 3,\n  \"a\": 1,\n  \"b\": 2\n },\n \"list\": [\n  \"replace\"\n ],\n \"beta\ · recall hit=1 used=1 helped=?
+  spaced: immediate_lift=1 · re-run +1d/+7d then barney eval spaced

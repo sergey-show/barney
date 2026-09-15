@@ -12,6 +12,8 @@ The kernel in `src/` does not change for a task. New capability lives in `~/.bar
 | [Plugins](plugins.md) | Skills, UI, and recipes in `~/.barney/plugins` |
 | [MCP](mcp.md) | Local stdio servers the agent can save, start, and call |
 | [Experience](experience.md) | Memory law: rare writes, mandatory recall, hard transfer |
+| [Evals](evals.md) | How to run four-hand, Harbor, unit tests |
+| [Proof](proof/README.md) | Four-hand reports |
 | [Autonomy](autonomy.md) | Agenda law: gaps → idle self-run → drill |
 | [Wake](wake.md) | Deferred work: process watch, wall clock; no background reasoning |
 | [Plasticity](plasticity.md) | Cortical plasticity: reconsolidation, prune, sleep, duel |
