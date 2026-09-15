@@ -43,5 +43,6 @@ Without experience lift, pruning is unsafe. With lift, plasticity stops “crutc
 | Dream merge | `mergeFailureRules` in dream compress |
 | Causal `recall_helped` | four-hand annotate; never pass-alone |
 | Spaced retention | `spacedTransfer.ts` schedule + summary |
+| Sanitize law | find masks → `<your-…>` writes → tree-wide `grep -r DETECTED_SECRET_` verify (`secretSanitize.ts`) |
 
 Back to [docs index](README.md).

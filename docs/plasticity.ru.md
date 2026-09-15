@@ -43,5 +43,6 @@ Idle: `plastic_sleep` (после dream, до absorb/self_run/study).
 | Dream merge | `mergeFailureRules` |
 | Causal `recall_helped` | four-hand; не pass-alone |
 | Spaced retention | `spacedTransfer.ts` |
+| Sanitize law | маски → `<your-…>` → tree-wide verify (`secretSanitize.ts`) |
 
 К [оглавлению](README.ru.md).

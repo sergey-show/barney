@@ -27,6 +27,7 @@ import { buildEpisodeMarkers } from "../context/episodeMarkers.ts";
 import { formatShadowWarnings, rankByEmbeddings, rankBySimilarity, type RecallItem } from "../context/semanticRecall.ts";
 import { sealReply } from "../context/sealReply.ts";
 import { judgeReview, artifactPins, missingIsLocalArtifact, requestedArtifacts, stillMissingArtifacts, unwrittenArtifacts } from "../context/reviewJudge.ts";
+import { askedToReplaceSecrets, secretSanitizePersistNudge } from "../context/secretSanitize.ts";
 import { measureProgress, type ProgressSnapshot } from "../context/progressSignal.ts";
 import { pickTactic } from "../context/tacticPick.ts";
 import { immuneBoundaryNote, selfGateTool, selfViolationNote } from "../context/selfGate.ts";
@@ -815,6 +816,8 @@ export class DriveSolve {
         ...run.transcript.filter((item) => item.kind === "console").map((item) => item.text),
       );
       const leftoverNow = leftoverWork(run.goal, artifactEvidence(run));
+      const sanitizeGoal = askedToReplaceSecrets(run.goal)
+        || askedToReplaceSecrets(latestUserText(run));
       for (const rawCall of last.toolCalls) {
         const bound = bindToolArgs(rawCall.name, rawCall.arguments ?? {}, anchors);
         const call = {
@@ -825,6 +828,7 @@ export class DriveSolve {
         const observeBase = {
           leftoverUnwritten: leftoverNow.unwritten,
           restorePaths: pathsWithRestore(run.id.value),
+          secretSanitize: sanitizeGoal,
         };
         if (isFsMutate(call.name)) {
           await snapshotBeforeMutate(run.id.value, ws, String(call.arguments?.path ?? ""));
@@ -1819,6 +1823,7 @@ Fail when:
 - the agent truncated, guessed, or altered a fact that was already in tool or research evidence
 
 DETECTED_SECRET_<KIND>_<HASH> in tool output is a guard mask of a live secret still on disk — not a replacement the agent made. If the user asked for placeholders such as <your-aws-access-key-id>, those exact strings must appear as writes; the mask tokens are evidence the secret is still present.
+Fail sanitize when the agent only inventories secrets, waits for go-ahead, or sed's without a tree-wide grep -r DETECTED_SECRET_ verify that comes back empty.
 Fail when a newly written deliverable contains DETECTED_SECRET_* and the user asked for a live computed value. The mask is not that value.
 Fail when a requested file was written by a redirect with a non-zero exit, or its contents are clearly tool failure output. Existence of that file is not a pass — overwrite it from successful output.
 If evidence lists files already on disk with good content, do not claim they are missing. Fail only for what is still absent or wrong.
@@ -1914,7 +1919,10 @@ function persistNudge(
   const keep = pins ? `\n${pins}` : "";
   const progressPin = progress ? `\n${progress.pinLine}` : "";
   const tactic = tacticLine ? `\nTactic: ${tacticLine}` : "";
-  const common = `Session goal: ${goal}${keep}${progressPin}${tactic}\nStill missing: ${missing}\nDo not give up. Copy URLs/IPs from Session facts exactly. Do not ask the user to repeat them.${research}`;
+  const sanitize = askedToReplaceSecrets(latest) || askedToReplaceSecrets(goal)
+    ? `\n${secretSanitizePersistNudge(latest || goal, evidence)}`
+    : "";
+  const common = `Session goal: ${goal}${keep}${progressPin}${tactic}${sanitize}\nStill missing: ${missing}\nDo not give up. Copy URLs/IPs from Session facts exactly. Do not ask the user to repeat them.${research}`;
   if (strategy === "research") {
     return `${common}\nLook up the vendor API/docs, then execute with tools.`;
   }
@@ -1931,6 +1939,14 @@ function persistNudge(
     return `${common}\nChange approach completely (browser vs shell vs API vs plugin). Do not repeat the failed guess.`;
   }
   return `${common}\nKeep files that already exist. Only create what is still missing. Follow the working plan in order. Do not stop at identification — apply the edits.`;
+}
+
+function latestUserText(run: { transcript: Array<{ kind: string; text: string }> }): string {
+  for (let i = run.transcript.length - 1; i >= 0; i--) {
+    const item = run.transcript[i];
+    if (item?.kind === "user") return item.text;
+  }
+  return "";
 }
 
 function regulationOf(call: ToolCall, goal: string): "task" | "competence" | "wander" {

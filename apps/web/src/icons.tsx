@@ -24,6 +24,14 @@ export function IconMemory(props: IconProps) {
   );
 }
 
+export function IconLinks(props: IconProps) {
+  return (
+    <svg className={props.className} viewBox="0 0 24 24" aria-hidden="true">
+      <path fill="currentColor" d="M8.5 9.5a2.5 2.5 0 1 1 0-5 2.5 2.5 0 0 1 0 5zm7 10a2.5 2.5 0 1 1 0-5 2.5 2.5 0 0 1 0 5zM7.2 10.8l8.5 5.4.8-1.3-8.5-5.4-.8 1.3zm1.1-1.6 8.2-4.7.8 1.4-8.2 4.7-.8-1.4z" />
+    </svg>
+  );
+}
+
 export function IconPsyche(props: IconProps) {
   return (
     <svg className={props.className} viewBox="0 0 24 24" aria-hidden="true">

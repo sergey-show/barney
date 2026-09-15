@@ -2,21 +2,19 @@ import { memoryShelf } from "@domain/memory/experienceGraph.ts";
 import { useEffect, useMemo, useState } from "react";
 import { api, jsonBody } from "./api.ts";
 import { MarkdownEditor } from "./MarkdownEditor.tsx";
-import { ExperienceGraphView } from "./ExperienceGraph.tsx";
 import { useLocale } from "./LocaleContext.tsx";
 import { plainPreview } from "./mdPreview.ts";
-import type { ExperienceGraph, MemoryNote } from "./types.ts";
+import type { MemoryNote } from "./types.ts";
 
-type Shelf = "yours" | "learned" | "graph";
+type Shelf = "yours" | "learned";
 
 function shelfOf(note: MemoryNote) {
   return memoryShelf({ key: note.key, tags: note.tags ?? [] });
 }
 
-export function MemoryPage() {
+export function MemoryPage(props: { focusKey?: string; onFocusConsumed?: () => void }) {
   const [query, setQuery] = useState("");
   const [notes, setNotes] = useState<MemoryNote[]>([]);
-  const [graph, setGraph] = useState<ExperienceGraph>({ nodes: [], edges: [] });
   const [selected, setSelected] = useState<MemoryNote | null>(null);
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
@@ -32,19 +30,34 @@ export function MemoryPage() {
     return listed;
   }
 
-  async function loadGraph() {
-    setGraph(await api<ExperienceGraph>("/api/memory/graph?limit=80"));
-  }
-
   useEffect(() => {
     void load().catch((err) => setError(String(err)));
-    void loadGraph().catch((err) => setError(String(err)));
   }, []);
 
-  const visible = useMemo(() => {
-    if (shelf === "graph") return [];
-    return notes.filter((note) => shelfOf(note) === shelf);
-  }, [notes, shelf]);
+  useEffect(() => {
+    if (!props.focusKey) return;
+    const key = props.focusKey;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const listed = notes.find((note) => note.key === key);
+        const note = listed ?? await api<MemoryNote>(`/api/memory/${encodeURIComponent(key)}`);
+        if (!cancelled) open(note);
+      } catch {
+        if (!cancelled) setCreating(false);
+      } finally {
+        if (!cancelled) props.onFocusConsumed?.();
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [props.focusKey]);
+
+  const visible = useMemo(
+    () => notes.filter((note) => shelfOf(note) === shelf),
+    [notes, shelf],
+  );
   const yoursCount = useMemo(() => notes.filter((note) => shelfOf(note) === "yours").length, [notes]);
   const learnedCount = useMemo(() => notes.filter((note) => shelfOf(note) === "learned").length, [notes]);
 
@@ -58,28 +71,10 @@ export function MemoryPage() {
     if (next === "learned" || next === "yours") setShelf(next);
   }
 
-  async function openKey(key: string) {
-    const listed = notes.find((note) => note.key === key);
-    if (listed) {
-      open(listed);
-      return;
-    }
-    try {
-      const note = await api<MemoryNote>(`/api/memory/${encodeURIComponent(key)}`);
-      open(note);
-    } catch {
-      setCreating(false);
-    }
-  }
-
   function pickShelf(next: Shelf) {
     setShelf(next);
     setCreating(false);
     setError("");
-    if (next === "graph") {
-      void loadGraph().catch((err) => setError(String(err)));
-      return;
-    }
     if (selected && shelfOf(selected) !== next) {
       setSelected(null);
       setTitle("");
@@ -148,12 +143,11 @@ export function MemoryPage() {
           <div className="memory-summary">
             <span>{yoursCount} {t.notesYours.toLowerCase()}</span>
             <span>{learnedCount} {t.notesLearned.toLowerCase()}</span>
-            <span>{graph.edges.length} {t.graphConnections.toLowerCase()}</span>
           </div>
         </div>
         <button className="primary" type="button" onClick={beginNew}>{t.newNote}</button>
       </header>
-      <div className={`split-body ${shelf === "graph" ? "graph-full" : ""}`}>
+      <div className="split-body">
         <aside className="list-pane">
           <div className="memory-tabs" role="tablist" aria-label={t.notesTitle}>
             <button type="button" className={shelf === "yours" ? "active" : ""} onClick={() => pickShelf("yours")}>
@@ -166,81 +160,45 @@ export function MemoryPage() {
               <span><strong>{t.notesLearned}</strong><small>{t.notesLearnedHint}</small></span>
               <b>{learnedCount}</b>
             </button>
-            <button
-              type="button"
-              className={shelf === "graph" ? "active" : ""}
-              onClick={() => pickShelf("graph")}
-            >
-              <span className="memory-tab-icon graph" />
-              <span><strong>{t.notesGraph}</strong><small>{t.notesGraphHint}</small></span>
-              <b>{graph.edges.length}</b>
-            </button>
           </div>
-          {shelf !== "graph" ? (
-            <>
-              <label className="memory-search" htmlFor="memory-search">
-                <span aria-hidden="true">⌕</span>
-                <input
-                  id="memory-search"
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") void load(query).catch((err) => setError(String(err)));
-                  }}
-                  placeholder={t.searchNotesPh}
-                />
-              </label>
-              <div className="memory-list">
-                {visible.length === 0 ? <div className="memory-list-empty">{t.noNotes}</div> : visible.map((note) => (
-                  <button
-                    key={note.id}
-                    type="button"
-                    className={`memory-note-row ${selected?.id === note.id ? "current" : ""}`}
-                    onClick={() => open(note)}
-                  >
-                    <span className={`memory-note-mark ${shelfOf(note)}`} />
-                    <span className="memory-note-copy">
-                      <strong>{note.title}</strong>
-                      <span>{plainPreview(note.body)}</span>
-                      <small>
-                        <time>{formatNoteDate(note.updatedAt)}</time>
-                        {(note.tags ?? []).filter((tag) => !["operator", "lesson", "rule"].includes(tag)).slice(0, 2).map((tag) => (
-                          <i key={tag}>{tag}</i>
-                        ))}
-                      </small>
-                    </span>
-                    <span className="memory-note-arrow">›</span>
-                  </button>
-                ))}
-              </div>
-            </>
-          ) : (
-            <div className="memory-graph-guide">
-              <strong>{t.graphGuideTitle}</strong>
-              <p>{t.graphGuideHint}</p>
-            </div>
-          )}
-        </aside>
-        <div className={`detail-pane ${shelf === "graph" ? "graph-stage" : ""}`}>
-          {shelf === "graph" ? (
-            <ExperienceGraphView
-              graph={graph}
-              selected={selected?.key}
-              onSelect={(id) => void openKey(id)}
-              empty={t.graphEmpty}
-              kinds={{ class: t.graphClass, rule: t.graphRule, plugin: t.graphPlugin, note: t.graphNote }}
-              edgeKinds={{ "failed-as": t.graphFailedAs, learned: t.graphLearnedEdge, "recovered-by": t.graphRecovered }}
-              labels={{
-                overview: t.graphOverview,
-                nodes: t.graphNodes,
-                connections: t.graphConnections,
-                selectHint: t.graphSelectHint,
-                connectedTo: t.graphConnectedTo,
-                openDetails: t.graphOpenDetails,
-                noConnections: t.graphNoConnections,
+          <label className="memory-search" htmlFor="memory-search">
+            <span aria-hidden="true">⌕</span>
+            <input
+              id="memory-search"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void load(query).catch((err) => setError(String(err)));
               }}
+              placeholder={t.searchNotesPh}
             />
-          ) : creating || selected ? (
+          </label>
+          <div className="memory-list">
+            {visible.length === 0 ? <div className="memory-list-empty">{t.noNotes}</div> : visible.map((note) => (
+              <button
+                key={note.id}
+                type="button"
+                className={`memory-note-row ${selected?.id === note.id ? "current" : ""}`}
+                onClick={() => open(note)}
+              >
+                <span className={`memory-note-mark ${shelfOf(note)}`} />
+                <span className="memory-note-copy">
+                  <strong>{note.title}</strong>
+                  <span>{plainPreview(note.body)}</span>
+                  <small>
+                    <time>{formatNoteDate(note.updatedAt)}</time>
+                    {(note.tags ?? []).filter((tag) => !["operator", "lesson", "rule"].includes(tag)).slice(0, 2).map((tag) => (
+                      <i key={tag}>{tag}</i>
+                    ))}
+                  </small>
+                </span>
+                <span className="memory-note-arrow">›</span>
+              </button>
+            ))}
+          </div>
+        </aside>
+        <div className="detail-pane">
+          {creating || selected ? (
             <div className="memory-editor">
               <div className="memory-editor-head">
                 <div>

@@ -46,6 +46,7 @@ export function buildActSystem(input: ActPromptInput): string {
       : "",
     tools,
     "Secrets in tool output are DETECTED_SECRET_<KIND>_<HASH>. Use that token in edits; do not ask for the value.",
+    "Sanitize law: replace every mask with the user's exact <your-…> placeholders (not house/barney-redact tokens), then tree-verify with grep -r DETECTED_SECRET_ . — do not stop at inventory or wait for go-ahead.",
     "Visible reply: Markdown. mermaid or canvas fences when they help.",
     input.skills,
     input.memory ? `Shared memory and past episodes:\n${input.memory}` : "",

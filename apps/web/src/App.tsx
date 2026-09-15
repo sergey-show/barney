@@ -5,7 +5,8 @@ import { api, jsonBody } from "./api.ts";
 import { FilesPage } from "./FilesPage.tsx";
 import { useLocale } from "./LocaleContext.tsx";
 import { alertTitle, type Messages } from "./i18n.ts";
-import { IconChat, IconMemory, IconPsyche, IconSessions, IconSettings } from "./icons.tsx";
+import { IconChat, IconLinks, IconMemory, IconPsyche, IconSessions, IconSettings } from "./icons.tsx";
+import { LinksPage } from "./LinksPage.tsx";
 import { MemoryPage } from "./MemoryPage.tsx";
 import { PsychePage } from "./PsychePage.tsx";
 import { SessionsPage } from "./SessionsPage.tsx";
@@ -17,6 +18,7 @@ type Pane =
   | { kind: "chat" }
   | { kind: "sessions" }
   | { kind: "memory" }
+  | { kind: "links" }
   | { kind: "psyche" }
   | { kind: "settings" }
   | { kind: "provider"; id: string }
@@ -44,6 +46,7 @@ export function App() {
   const [chatTab, setChatTab] = useState<"talk" | "files">("talk");
   const [filePath, setFilePath] = useState<string>();
   const [moreOpen, setMoreOpen] = useState(false);
+  const [memoryFocusKey, setMemoryFocusKey] = useState<string>();
   const { locale, t, setLocale } = useLocale();
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const streamRef = useRef<HTMLDivElement>(null);
@@ -384,6 +387,7 @@ export function App() {
           <NavBtn active={pane.kind === "chat"} onClick={() => { setPane({ kind: "chat" }); setChatTab("talk"); }} icon={<IconChat />} label={t.navChat} hint={run ? run.goal : t.navChatHint} />
           <NavBtn active={pane.kind === "sessions"} onClick={() => setPane({ kind: "sessions" })} icon={<IconSessions />} label={t.navHistory} hint={t.navHistoryHint(runs.filter((item) => item.status !== "done").length)} />
           <NavBtn active={pane.kind === "memory"} onClick={() => setPane({ kind: "memory" })} icon={<IconMemory />} label={t.navNotes} hint={t.navNotesHint} />
+          <NavBtn active={pane.kind === "links"} onClick={() => setPane({ kind: "links" })} icon={<IconLinks />} label={t.navLinks} hint={t.navLinksHint} />
           <NavBtn active={pane.kind === "psyche"} onClick={() => setPane({ kind: "psyche" })} icon={<IconPsyche />} label={t.navCharacter} hint={t.navCharacterHint} />
           <NavBtn active={pane.kind === "settings" || pane.kind === "provider" || pane.kind === "new-provider"} onClick={() => setPane({ kind: "settings" })} icon={<IconSettings />} label={t.navSettings} hint={t.navSettingsHint} />
         </nav>
@@ -586,7 +590,17 @@ export function App() {
           onCloseSession={(id) => void closeSession(id)}
         />
       ) : pane.kind === "memory" ? (
-        <MemoryPage />
+        <MemoryPage
+          focusKey={memoryFocusKey}
+          onFocusConsumed={() => setMemoryFocusKey(undefined)}
+        />
+      ) : pane.kind === "links" ? (
+        <LinksPage
+          onOpenNote={(key) => {
+            setMemoryFocusKey(key);
+            setPane({ kind: "memory" });
+          }}
+        />
       ) : pane.kind === "psyche" ? (
         <PsychePage runId={runId} />
       ) : pane.kind === "settings" || pane.kind === "provider" || pane.kind === "new-provider" ? (
