@@ -1,5 +1,6 @@
 import { familyKey, familySaturated } from "./controlLoop.ts";
 import type { ToolCall } from "../../domain/tools/FileTools.ts";
+import { isSecretSanitizeProgressCall, postSecretMutateObserve } from "./secretSanitize.ts";
 
 export function toolSignature(call: Pick<ToolCall, "name" | "arguments">): string {
   const args = call.arguments ?? {};
@@ -84,6 +85,8 @@ export function applyToolObserve(
     restorePaths?: string[];
     failedEditPaths?: string[];
     checkFailedPaths?: string[];
+    /** Sanitize goals: sed/tree-grep progress may pass wanting saturation. */
+    secretSanitize?: boolean;
   },
 ): { out: string; skip: boolean } {
   const sig = toolSignature(call);
@@ -102,12 +105,14 @@ export function applyToolObserve(
   const landExempt = stillLanding && (isFsTool(call.name) || call.name === "shell");
   // Always allow fs_read through saturation — edits miss context without a re-read.
   const readExempt = call.name === "fs_read";
+  const sanitizeExempt = Boolean(opts?.secretSanitize) && isSecretSanitizeProgressCall(call);
   if (
     familyFails
     && familySaturated(familyFails.get(family) ?? 0)
     && !FAMILY_EXEMPT.has(call.name)
     && !landExempt
     && !readExempt
+    && !sanitizeExempt
   ) {
     return {
       skip: true,
@@ -143,7 +148,10 @@ export function applyToolObserve(
   const grepHint = secretGrepHint(call);
   const editHint = fsEditRecoveryHint(call, opts?.failedEditPaths, opts?.restorePaths);
   const checkHint = checkFailedHint(call, opts?.checkFailedPaths, opts?.restorePaths);
-  if (grepHint || editHint || checkHint) return { skip: false, out: withObserve(rawOut, grepHint, editHint, checkHint) };
+  const sanitizeHint = opts?.secretSanitize ? postSecretMutateObserve(call, rawOut) : undefined;
+  if (grepHint || editHint || checkHint || sanitizeHint) {
+    return { skip: false, out: withObserve(rawOut, grepHint, editHint, checkHint, sanitizeHint) };
+  }
   return { skip: false, out: rawOut };
 }
 

@@ -17,14 +17,28 @@ export function classifyClientError(err: unknown): Alert {
   return { level: "error", title: "Request failed", detail };
 }
 
-export function interruptedNotice(transcript: Array<{ kind: string; text: string }>): Alert | null {
-  const lastSys = [...transcript].reverse().find((item) => item.kind === "system");
-  if (!lastSys) return null;
-  if (/interrupted|portal restarted/i.test(lastSys.text)) {
-    return { level: "warning", title: "Last step did not finish", detail: lastSys.text };
-  }
-  if (/^error:/i.test(lastSys.text)) {
-    return { level: "error", title: "Agent error", detail: lastSys.text };
+/**
+ * Surface an interrupt/error only when it is still the latest event.
+ * Later user/agent activity means the step was already continued.
+ */
+export function interruptedNotice(
+  transcript: Array<{ kind: string; text: string }>,
+  status?: string,
+): Alert | null {
+  if (status === "done" || status === "parked") return null;
+  for (let i = transcript.length - 1; i >= 0; i--) {
+    const item = transcript[i];
+    if (item.kind !== "system") return null;
+    if (/interrupted|portal restarted/i.test(item.text)) {
+      return { level: "warning", title: "Last step did not finish", detail: item.text };
+    }
+    if (/^error:/i.test(item.text)) {
+      return { level: "error", title: "Agent error", detail: item.text };
+    }
   }
   return null;
+}
+
+export function alertDismissKey(runId: string, alert: Pick<Alert, "detail">): string {
+  return `${runId}:${alert.detail}`;
 }

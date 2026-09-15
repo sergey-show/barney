@@ -25,7 +25,7 @@ export async function runProcessTool(
           command: launched.command,
           args: launched.args,
         });
-        return `started ${started.id} pid=${started.pid}\nUse process_logs id=${started.id} (no 30s wall). process_kill to stop.`;
+        return `started ${started.id} pid=${started.pid}\nUse process_logs id=${started.id}. To resume when it finishes: wake_when_process processId=${started.id} on=exit reason=…`;
       }
       case "process_list": {
         const listed = await processes.list(ctx.runId);

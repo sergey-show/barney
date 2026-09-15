@@ -11,6 +11,10 @@ The kernel in `src/` does not change for a task. New capability lives in `~/.bar
 | [Tools](tools.md) | Built-in tool protocol the kernel exposes every turn |
 | [Plugins](plugins.md) | Skills, UI, and recipes in `~/.barney/plugins` |
 | [MCP](mcp.md) | Local stdio servers the agent can save, start, and call |
+| [Experience](experience.md) | Memory law: rare writes, mandatory recall, hard transfer proof |
+| [Autonomy](autonomy.md) | Agenda law: gaps → idle self-run → proven drill |
+| [Wake](wake.md) | Deferred work: process watch, at/defer, no background reasoning |
+| [Plasticity](plasticity.md) | Cortical plasticity: reconsolidation, prune, sleep, duel |
 
 Prefer a **plugin/skill** for a new ability. Use **MCP** when the work needs an external stdio server.
 

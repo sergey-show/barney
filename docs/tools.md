@@ -15,6 +15,7 @@ On a full turn the agent has these groups:
 | Files | `fs_list`, `fs_stat`, `fs_read`, `fs_write`, `fs_edit`, `fs_append`, `fs_mkdir`, `fs_search`, `fs_remove`, `fs_restore` | Worktree files. Prefer these over shell for edits. |
 | Shell | `shell` | One command in the worktree, up to 120s. |
 | Process | `process_spawn`, `process_list`, `process_logs`, `process_kill` | Long-running builds and servers. |
+| Wake | `wake_when_process`, `wake_at`, `wake_list`, `wake_cancel` | Defer the turn: process exit/log or wall clock. See [Wake](wake.md). |
 | Search | `web_search` | Public web. Then open sources in the browser. |
 | Browser | `browser_open`, `browser_read`, `browser_screenshot`, `browser_show`, `browser_click`, `browser_fill`, `browser_press`, `browser_scroll` | Headless page. `browser_show` only if the operator asked to see it. |
 | Plugins | `plugin_list`, `plugin_read`, `plugin_write`, `plugin_open` | Body skills and UI. See [Plugins](plugins.md). |

@@ -28,8 +28,8 @@ export function turnLawFromConstitution(constitution: string): string {
 export function buildActSystem(input: ActPromptInput): string {
   const tools =
     input.depth > 0
-      ? "Tools this turn: fs_*, shell, process_*, web_search, plugin_*, browser_*, memory_*, board_read/write, mcp_list/start/call/stop/write, agent_list, self_status/log/commit."
-      : "Tools this turn: fs_*, shell, process_spawn/list/logs/kill, web_search, plugin_list/read/write/open, browser_*, memory_search/write/read, board_read/write, plan_set, agent_list/spawn/delegate, mcp_list/write/start/call/stop, self_status/log/commit/rollback.";
+      ? "Tools this turn: fs_*, shell, process_*, wake_*, web_search, plugin_*, browser_*, memory_*, board_read/write, mcp_list/start/call/stop/write, agent_list, self_status/log/commit."
+      : "Tools this turn: fs_*, shell, process_spawn/list/logs/kill, wake_when_process/at/list/cancel, web_search, plugin_list/read/write/open, browser_*, memory_search/write/read, board_read/write, plan_set, agent_list/spawn/delegate, mcp_list/write/start/call/stop, self_status/log/commit/rollback.";
   return [
     turnLawFromConstitution(input.constitution),
     input.samost,
@@ -46,6 +46,7 @@ export function buildActSystem(input: ActPromptInput): string {
       : "",
     tools,
     "Secrets in tool output are DETECTED_SECRET_<KIND>_<HASH>. Use that token in edits; do not ask for the value.",
+    "Sanitize law: replace every mask with the user's exact <your-…> placeholders (not house/barney-redact tokens), then tree-verify with grep -r DETECTED_SECRET_ . — do not stop at inventory or wait for go-ahead.",
     "Visible reply: Markdown. mermaid or canvas fences when they help.",
     input.skills,
     input.memory ? `Shared memory and past episodes:\n${input.memory}` : "",

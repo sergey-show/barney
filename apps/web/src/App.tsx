@@ -1,11 +1,12 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { MarkdownBody } from "./MarkdownBody.tsx";
-import { classifyClientError, interruptedNotice, type Alert } from "./alerts.ts";
+import { alertDismissKey, classifyClientError, interruptedNotice, type Alert } from "./alerts.ts";
 import { api, jsonBody } from "./api.ts";
 import { FilesPage } from "./FilesPage.tsx";
 import { useLocale } from "./LocaleContext.tsx";
 import { alertTitle, type Messages } from "./i18n.ts";
-import { IconChat, IconMemory, IconPsyche, IconSessions, IconSettings } from "./icons.tsx";
+import { IconChat, IconLinks, IconMemory, IconPsyche, IconSessions, IconSettings } from "./icons.tsx";
+import { LinksPage } from "./LinksPage.tsx";
 import { MemoryPage } from "./MemoryPage.tsx";
 import { PsychePage } from "./PsychePage.tsx";
 import { SessionsPage } from "./SessionsPage.tsx";
@@ -17,6 +18,7 @@ type Pane =
   | { kind: "chat" }
   | { kind: "sessions" }
   | { kind: "memory" }
+  | { kind: "links" }
   | { kind: "psyche" }
   | { kind: "settings" }
   | { kind: "provider"; id: string }
@@ -35,6 +37,7 @@ export function App() {
   const [runId, setRunId] = useState<string>();
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
+  const [allowing, setAllowing] = useState(false);
   const [alert, setAlert] = useState<Alert | null>(null);
   const [pending, setPending] = useState<string | null>(null);
   const [debug, setDebug] = useState(() => localStorage.getItem("barney.debug") === "1");
@@ -43,6 +46,7 @@ export function App() {
   const [chatTab, setChatTab] = useState<"talk" | "files">("talk");
   const [filePath, setFilePath] = useState<string>();
   const [moreOpen, setMoreOpen] = useState(false);
+  const [memoryFocusKey, setMemoryFocusKey] = useState<string>();
   const { locale, t, setLocale } = useLocale();
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const streamRef = useRef<HTMLDivElement>(null);
@@ -107,8 +111,13 @@ export function App() {
       setFiles(nextFiles);
       setProcs(processes);
       const session = r.find((item) => item.id === nextRunId);
-      const notice = session ? interruptedNotice(session.transcript) : null;
-      if (notice && dismissedAlert.current !== notice.detail) setAlert(notice);
+      const notice = session ? interruptedNotice(session.transcript, session.status) : null;
+      const key = notice ? alertDismissKey(nextRunId, notice) : "";
+      if (notice && dismissedAlert.current !== key) {
+        setAlert(notice);
+      } else {
+        setAlert((prev) => (prev?.allowPrefix ? prev : null));
+      }
     }
   }
 
@@ -287,6 +296,7 @@ export function App() {
 
   async function resume(mode: "continue" | "retry") {
     if (!runId || run?.status === "done") return;
+    if (alert) dismissedAlert.current = alertDismissKey(runId, alert);
     setAlert(null);
     setBusy(true);
     setLiveThink("");
@@ -309,8 +319,8 @@ export function App() {
   }
 
   async function allowOutside(prefix: string) {
-    if (!runId || !prefix.trim()) return;
-    setBusy(true);
+    if (!runId || !prefix.trim() || allowing) return;
+    setAllowing(true);
     try {
       await api<{ granted: string }>(`/api/sessions/${runId}/permissions`, {
         method: "POST",
@@ -318,10 +328,17 @@ export function App() {
       });
       setAlert(null);
       await refresh(runId);
-      await resume("continue");
+      // Mid-flight grant: the current step can use the prefix on the next fs_* call.
+      // Resume only when nothing is already running (step finished waiting for /continue).
+      const stepLive = busy || Boolean(run?.running)
+        || ["acting", "reviewing", "researching"].includes(run?.status ?? "");
+      if (!stepLive) {
+        await resume("continue");
+      }
     } catch (err) {
       setAlert(classifyClientError(err));
-      setBusy(false);
+    } finally {
+      setAllowing(false);
     }
   }
 
@@ -353,6 +370,7 @@ export function App() {
 
   function openSession(id: string) {
     setLiveThink("");
+    setAlert((prev) => (prev?.allowPrefix ? prev : null));
     setRunId(id);
     setPane({ kind: "chat" });
     setChatTab("talk");
@@ -376,6 +394,7 @@ export function App() {
           <NavBtn active={pane.kind === "chat"} onClick={() => { setPane({ kind: "chat" }); setChatTab("talk"); }} icon={<IconChat />} label={t.navChat} hint={run ? run.goal : t.navChatHint} />
           <NavBtn active={pane.kind === "sessions"} onClick={() => setPane({ kind: "sessions" })} icon={<IconSessions />} label={t.navHistory} hint={t.navHistoryHint(runs.filter((item) => item.status !== "done").length)} />
           <NavBtn active={pane.kind === "memory"} onClick={() => setPane({ kind: "memory" })} icon={<IconMemory />} label={t.navNotes} hint={t.navNotesHint} />
+          <NavBtn active={pane.kind === "links"} onClick={() => setPane({ kind: "links" })} icon={<IconLinks />} label={t.navLinks} hint={t.navLinksHint} />
           <NavBtn active={pane.kind === "psyche"} onClick={() => setPane({ kind: "psyche" })} icon={<IconPsyche />} label={t.navCharacter} hint={t.navCharacterHint} />
           <NavBtn active={pane.kind === "settings" || pane.kind === "provider" || pane.kind === "new-provider"} onClick={() => setPane({ kind: "settings" })} icon={<IconSettings />} label={t.navSettings} hint={t.navSettingsHint} />
         </nav>
@@ -511,12 +530,13 @@ export function App() {
             <AlertBanner
               alert={alert}
               busy={busy}
+              allowing={allowing}
               canResume={Boolean(runId) && run?.status !== "done"}
               onContinue={() => void resume("continue")}
               onRetry={() => void resume("retry")}
               onAllow={alert.allowPrefix && runId ? () => void allowOutside(alert.allowPrefix!) : undefined}
               onDismiss={() => {
-                dismissedAlert.current = alert.detail;
+                if (runId) dismissedAlert.current = alertDismissKey(runId, alert);
                 setAlert(null);
               }}
             />
@@ -577,7 +597,17 @@ export function App() {
           onCloseSession={(id) => void closeSession(id)}
         />
       ) : pane.kind === "memory" ? (
-        <MemoryPage />
+        <MemoryPage
+          focusKey={memoryFocusKey}
+          onFocusConsumed={() => setMemoryFocusKey(undefined)}
+        />
+      ) : pane.kind === "links" ? (
+        <LinksPage
+          onOpenNote={(key) => {
+            setMemoryFocusKey(key);
+            setPane({ kind: "memory" });
+          }}
+        />
       ) : pane.kind === "psyche" ? (
         <PsychePage runId={runId} />
       ) : pane.kind === "settings" || pane.kind === "provider" || pane.kind === "new-provider" ? (
@@ -685,6 +715,7 @@ function NavBtn(props: {
 function AlertBanner(props: {
   alert: Alert;
   busy: boolean;
+  allowing?: boolean;
   canResume: boolean;
   onContinue: () => void;
   onRetry: () => void;
@@ -698,7 +729,14 @@ function AlertBanner(props: {
       <div className="muted">{props.alert.detail}</div>
       <div className="alert-actions">
         {props.onAllow ? (
-          <button type="button" className="primary" disabled={props.busy} onClick={props.onAllow}>{t.allowPath}</button>
+          <button
+            type="button"
+            className="primary"
+            disabled={Boolean(props.allowing)}
+            onClick={props.onAllow}
+          >
+            {t.allowPath}
+          </button>
         ) : null}
         {props.canResume && !props.onAllow ? (
           <>
@@ -707,9 +745,9 @@ function AlertBanner(props: {
           </>
         ) : null}
         {props.canResume && props.onAllow ? (
-          <button type="button" className="item" disabled={props.busy} onClick={props.onContinue}>{t.continue}</button>
+          <button type="button" className="item" disabled={props.busy || props.allowing} onClick={props.onContinue}>{t.continue}</button>
         ) : null}
-        <button type="button" className="item" disabled={props.busy} onClick={props.onDismiss}>{t.dismiss}</button>
+        <button type="button" className="item" disabled={props.busy || props.allowing} onClick={props.onDismiss}>{t.dismiss}</button>
       </div>
     </div>
   );

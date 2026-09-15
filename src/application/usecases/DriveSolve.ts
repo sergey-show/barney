@@ -27,6 +27,7 @@ import { buildEpisodeMarkers } from "../context/episodeMarkers.ts";
 import { formatShadowWarnings, rankByEmbeddings, rankBySimilarity, type RecallItem } from "../context/semanticRecall.ts";
 import { sealReply } from "../context/sealReply.ts";
 import { judgeReview, artifactPins, missingIsLocalArtifact, requestedArtifacts, stillMissingArtifacts, unwrittenArtifacts } from "../context/reviewJudge.ts";
+import { askedToReplaceSecrets, secretSanitizePersistNudge } from "../context/secretSanitize.ts";
 import { measureProgress, type ProgressSnapshot } from "../context/progressSignal.ts";
 import { pickTactic } from "../context/tacticPick.ts";
 import { immuneBoundaryNote, selfGateTool, selfViolationNote } from "../context/selfGate.ts";
@@ -117,6 +118,7 @@ import { runFileTool } from "../tools/runFileTool.ts";
 import { runMcpTool } from "../tools/runMcpTool.ts";
 import { runMemoryTool } from "../tools/runMemoryTool.ts";
 import { runProcessTool } from "../tools/runProcessTool.ts";
+import { runWakeTool } from "../tools/runWakeTool.ts";
 import { runSelfTool } from "../tools/runSelfTool.ts";
 import { runSkillTool } from "../tools/runSkillTool.ts";
 import { runTeamTool } from "../tools/runTeamTool.ts";
@@ -126,6 +128,34 @@ import {
   TurnRecallService,
   type TurnRecallContext,
 } from "../services/TurnRecallService.ts";
+import {
+  buildExperienceBags,
+  finalizeRecallSignal,
+  formatBagsCount,
+  renderExperienceRecall,
+} from "../experience/experienceRecall.ts";
+import {
+  decideExperienceWrite,
+  STRUCTURAL_FAIL_CLASSES,
+} from "../experience/experienceLayers.ts";
+import { currentKernelAblation } from "../evaluation/kernelAblation.ts";
+import {
+  captureHostEnv,
+  extractRecalledRuleKeys,
+  extractRecalledSkillNames,
+  filterSkillsForRecall,
+  formatSynapse,
+  parseSynapse,
+  plasticWritePressure,
+  reconsolidateSkill,
+  reconsolidateSynapse,
+  synapseKey,
+} from "../plasticity/plasticity.ts";
+import {
+  computePredictionError,
+  formatPredictionErrorLine,
+} from "../experience/predictionError.ts";
+import type { ExperienceRecallBags, ExperienceRecallSignal } from "../experience/experienceRecall.ts";
 
 const MAX_TOOL_ROUNDS = 12;
 const WRITE_TOOLS = FILE_TOOLS.filter((tool) => tool.name === "fs_write" || tool.name === "fs_list");
@@ -254,30 +284,64 @@ export class DriveSolve {
       body: planText,
       tags: ["plan", run.taskClass],
     });
-    const shadowWarnings = await this.recallShadowWarnings(
-      `${run.goal}\n${input.message}`,
-      [...recentMemories, ...hopNotes],
-      psyche.samost.shadow,
-      input.signal,
-    );
+    const ablation = currentKernelAblation();
+    const shadowWarnings = ablation.recallExperience
+      ? await this.recallShadowWarnings(
+        `${run.goal}\n${input.message}`,
+        [...recentMemories, ...hopNotes],
+        psyche.samost.shadow,
+        input.signal,
+      )
+      : "";
+    const hostEnv = captureHostEnv();
+    const recallWeights: Record<string, number> = {};
+    for (const rec of skillBodyRecs) recallWeights[rec.name] = rec.strength ?? 0.4;
+    for (const rule of recall.pickedRules) {
+      // soft default; reconsolidation synapses bump later when present
+      recallWeights[rule.key] = recallWeights[rule.key] ?? 0.45;
+    }
+    const skillHints = ablation.recallExperience
+      ? filterSkillsForRecall(
+        skillBodyRecs.filter((r) => r.status === "frozen" || r.status === "quarantine" || r.status === "verified"),
+        hostEnv,
+      ).map((r) => {
+        const proc = r.procedure?.length ? ` procedure=${r.procedure.join("→")}` : "";
+        return `[skill:${r.name}] status=${r.status} class=${r.bornFromClass || run.taskClass} strength=${(r.strength ?? 0.4).toFixed(2)}${proc}`;
+      })
+      : [];
+    const experienceBags = ablation.recallExperience
+      ? buildExperienceBags(recall, {
+        shadowWarnings,
+        skillHints,
+        query: `${run.goal}\n${input.message}`,
+        weights: recallWeights,
+        topK: 5,
+      })
+      : { shadow: [], rules: [], skills: [], episodeLines: [] };
+    const experienceBlock = ablation.recallExperience ? renderExperienceRecall(experienceBags) : "";
     const memoryNote = [
       immuneBoundaryNote(agent.constitution),
-      transferHint,
-      bodyHint,
-      statsHint,
-      rules.length
+      ablation.recallExperience ? transferHint : "",
+      ablation.recallExperience ? bodyHint : "",
+      ablation.recallExperience ? statsHint : "",
+      ablation.recallExperience && rules.length
         ? `Rules from past runs (task class + shared failure modes — obey these):\n${rules.map((line) => `- ${line}`).join("\n")}`
         : "",
-      shadowWarnings,
+      experienceBlock,
       packed.digest ? `Session so far (compressed; full chat stays in the portal):\n${packed.digest}` : "",
-      renderConversationalRecall({
-        ...recall,
-        shared,
-        life,
-        relevantEpisodes,
-        modeEpisodes,
-      }, { includeRules: false }),
+      ablation.recallExperience
+        ? renderConversationalRecall({
+          ...recall,
+          shared,
+          life,
+          relevantEpisodes,
+          modeEpisodes,
+        }, { includeRules: false })
+        : "",
     ].filter(Boolean).join("\n\n");
+    if (ablation.recallExperience && (experienceBags.shadow.length || experienceBags.rules.length || experienceBags.skills.length)) {
+      run.append("system", `experience_recall_ready · ${formatBagsCount(experienceBags)}`);
+    }
     const failedCalls = new Set<string>();
     const familyFails = new Map<string, number>();
     const extra = { n: 0 };
@@ -505,6 +569,54 @@ export class DriveSolve {
     await this.flushPsyche(run, agent.id.value, psyche);
     const lastStrategy = run.usedStrategies.at(-1) || "retry_with_error";
     const outcomeOk = review.verdict === "pass" && !corrected;
+    const toolEvidence = artifactEvidence(run);
+    const recallSignal = finalizeRecallSignal({
+      bags: experienceBags,
+      actText: act.text,
+      planText,
+      toolEvidence,
+      outcomeOk,
+    });
+    run.append("system", recallSignal.line);
+    const pinConvention = /<barney-redact-|house (?:JSON )?canon|house redaction tokens/i
+      .test(`${run.goal}\n${learned.body}`);
+    const pe = computePredictionError({
+      reviewFail: review.verdict !== "pass" || Boolean(corrected),
+      hadFailedFamily: Boolean(lessonTrail.failedFamily),
+      structuralFail: STRUCTURAL_FAIL_CLASSES.has(String(review.failureKind ?? "")),
+      operatorCorrected: corrected,
+    });
+    run.append("system", formatPredictionErrorLine(pe));
+    const pressure = plasticWritePressure({
+      frustration: frustrationScore({
+        extraApproaches: extra.n,
+        sameFailureCount: run.sameFailureCount,
+      }),
+      gapCount: run.sameFailureCount,
+      sameFailureCount: run.sameFailureCount,
+    });
+    run.append("system", `plastic_pressure: ${pressure.pressure.toFixed(2)} · ${pressure.reason}`);
+    if (ablation.learnBody && ablation.recallExperience) {
+      await this.reconsolidateExperience(run, agent.id.value, experienceBags, recallSignal, outcomeOk);
+    }
+    const writeDecision = ablation.learnBody
+      ? decideExperienceWrite({
+        outcomeOk,
+        recovered: Boolean(
+          lessonTrail.failedFamily
+          && lessonTrail.recoveredBy
+          && lessonTrail.recoveredBy !== lessonTrail.failedFamily,
+        ),
+        failClass: klass,
+        structuralFail: STRUCTURAL_FAIL_CLASSES.has(String(review.failureKind ?? "")),
+        modeRepeatCount: klass !== "general" ? Math.max(1, run.sameFailureCount) : 0,
+        hasConcreteDirective: Boolean(learned.body && /do not|don't|prefer|instead|first|avoid/i.test(learned.body)),
+        pinConvention,
+        plasticPressure: pressure.pressure,
+        predictionError: pe.error,
+      })
+      : { kind: "episode_only" as const, reason: "learnBody=0 · ablation" };
+    run.append("system", `experience_write: ${writeDecision.kind} · ${writeDecision.reason}`);
     const nextStats = recordStrategyOutcome(
       classStats,
       lastStrategy,
@@ -544,17 +656,22 @@ export class DriveSolve {
       ...(klass !== "general" && klass !== "aborted-unfinished" ? [klass] : []),
     ];
     if (outcomeOk) {
-      await this.remember(run, agent.id.value, {
-        key: learned.key,
-        title: learned.title,
-        body: formatLessonLine(learned),
-        tags: [...ruleTags, "lesson"],
-      });
-      await this.graph.link(classKey(run.taskClass), learned.key, "learned");
-      if (klass !== "general" && klass !== "aborted-unfinished") {
-        await this.graph.link(classKey(klass), learned.key, "learned");
+      // Experience law: episode_only → episode save only (no rule pin, no skill pin).
+      if (ablation.learnBody && writeDecision.kind !== "episode_only") {
+        await this.remember(run, agent.id.value, {
+          key: learned.key,
+          title: learned.title,
+          body: formatLessonLine(learned),
+          tags: [...ruleTags, "lesson", writeDecision.kind],
+        });
+        await this.graph.link(classKey(run.taskClass), learned.key, "learned");
+        if (klass !== "general" && klass !== "aborted-unfinished") {
+          await this.graph.link(classKey(klass), learned.key, "learned");
+        }
       }
-      const created = await this.growBodyFromRecovery(run, agent, failKlass.last || klass, lessonTrail);
+      const created = ablation.learnBody && writeDecision.kind === "skill_candidate"
+        ? await this.growBodyFromRecovery(run, agent, failKlass.last || klass, lessonTrail)
+        : "";
       await this.episodes.save(
         new Episode({
           agentId: agent.id.value,
@@ -573,13 +690,15 @@ export class DriveSolve {
         }),
       );
     } else {
-      await this.remember(run, agent.id.value, {
-        key: learned.key,
-        title: learned.title,
-        body: formatLessonLine(learned),
-        tags: [...ruleTags, "fail", "experience", review.verdict],
-      });
-      await this.graph.link(classKey(klass), learned.key, "failed-as");
+      if (ablation.learnBody && writeDecision.kind === "failure_rule") {
+        await this.remember(run, agent.id.value, {
+          key: learned.key,
+          title: learned.title,
+          body: formatLessonLine(learned),
+          tags: [...ruleTags, "fail", "experience", "rule", review.verdict],
+        });
+        await this.graph.link(classKey(klass), learned.key, "failed-as");
+      }
       await this.episodes.save(
         new Episode({
           agentId: agent.id.value,
@@ -597,11 +716,13 @@ export class DriveSolve {
           usd: run.budget.usdUsed,
         }),
       );
-      await this.closeFailureClass(run, agent, {
-        summary: review.summary,
-        missing: review.missing,
-        aborted: false,
-      });
+      if (ablation.learnBody) {
+        await this.closeFailureClass(run, agent, {
+          summary: review.summary,
+          missing: review.missing,
+          aborted: false,
+        });
+      }
     }
 
     await this.runs.save(run);
@@ -696,6 +817,8 @@ export class DriveSolve {
         ...run.transcript.filter((item) => item.kind === "console").map((item) => item.text),
       );
       const leftoverNow = leftoverWork(run.goal, artifactEvidence(run));
+      const sanitizeGoal = askedToReplaceSecrets(run.goal)
+        || askedToReplaceSecrets(latestUserText(run));
       for (const rawCall of last.toolCalls) {
         const bound = bindToolArgs(rawCall.name, rawCall.arguments ?? {}, anchors);
         const call = {
@@ -706,6 +829,7 @@ export class DriveSolve {
         const observeBase = {
           leftoverUnwritten: leftoverNow.unwritten,
           restorePaths: pathsWithRestore(run.id.value),
+          secretSanitize: sanitizeGoal,
         };
         if (isFsMutate(call.name)) {
           await snapshotBeforeMutate(run.id.value, ws, String(call.arguments?.path ?? ""));
@@ -848,6 +972,54 @@ export class DriveSolve {
         goal: run.goal,
       }),
     };
+  }
+
+  private async reconsolidateExperience(
+    run: Run,
+    agentId: string,
+    bags: ExperienceRecallBags,
+    signal: ExperienceRecallSignal,
+    outcomeOk: boolean,
+  ): Promise<void> {
+    const skillNames = extractRecalledSkillNames(bags);
+    for (const name of skillNames) {
+      const note = await this.memory.get(skillBodyKey(name));
+      if (!note) continue;
+      const prev = parseSkillBody(note.body, name);
+      const next = reconsolidateSkill(prev, {
+        recalled: signal.recallHit,
+        used: signal.recallUsed,
+        outcomeOk,
+      });
+      await this.remember(run, agentId, {
+        key: skillBodyKey(name),
+        title: `Body: ${name}`,
+        body: JSON.stringify(next),
+        tags: ["body", "skill", next.status, "plasticity"],
+      });
+    }
+    for (const key of extractRecalledRuleKeys(bags)) {
+      const synKey = synapseKey("rule", key);
+      const note = await this.memory.get(synKey);
+      const prev = parseSynapse(note?.body ?? "", "rule", key);
+      const next = reconsolidateSynapse(prev, {
+        recalled: signal.recallHit,
+        used: signal.recallUsed,
+        outcomeOk,
+      });
+      await this.remember(run, agentId, {
+        key: synKey,
+        title: `Synapse rule ${key}`,
+        body: formatSynapse(next),
+        tags: ["plasticity", "synapse", "rule", next.status],
+      });
+    }
+    if (skillNames.length || bags.rules.length) {
+      run.append(
+        "system",
+        `reconsolidation: skills=${skillNames.length} rules=${extractRecalledRuleKeys(bags).length} used=${signal.recallUsed ? 1 : 0} ok=${outcomeOk ? 1 : 0}`,
+      );
+    }
   }
 
   private async closeFailureClass(
@@ -1090,6 +1262,9 @@ export class DriveSolve {
     }
     if (call.name.startsWith("process_")) {
       return runProcessTool(this.processes, call, { runId: run.id.value, cwd: run.worktreePath });
+    }
+    if (call.name.startsWith("wake_")) {
+      return runWakeTool(this.memory, this.processes, call, { runId: run.id.value, agentId: run.agentId });
     }
     if (call.name === "web_search") {
       const query = String(call.arguments?.query ?? "").trim();
@@ -1652,6 +1827,7 @@ Fail when:
 - the agent truncated, guessed, or altered a fact that was already in tool or research evidence
 
 DETECTED_SECRET_<KIND>_<HASH> in tool output is a guard mask of a live secret still on disk — not a replacement the agent made. If the user asked for placeholders such as <your-aws-access-key-id>, those exact strings must appear as writes; the mask tokens are evidence the secret is still present.
+Fail sanitize when the agent only inventories secrets, waits for go-ahead, or sed's without a tree-wide grep -r DETECTED_SECRET_ verify that comes back empty.
 Fail when a newly written deliverable contains DETECTED_SECRET_* and the user asked for a live computed value. The mask is not that value.
 Fail when a requested file was written by a redirect with a non-zero exit, or its contents are clearly tool failure output. Existence of that file is not a pass — overwrite it from successful output.
 If evidence lists files already on disk with good content, do not claim they are missing. Fail only for what is still absent or wrong.
@@ -1747,7 +1923,10 @@ function persistNudge(
   const keep = pins ? `\n${pins}` : "";
   const progressPin = progress ? `\n${progress.pinLine}` : "";
   const tactic = tacticLine ? `\nTactic: ${tacticLine}` : "";
-  const common = `Session goal: ${goal}${keep}${progressPin}${tactic}\nStill missing: ${missing}\nDo not give up. Copy URLs/IPs from Session facts exactly. Do not ask the user to repeat them.${research}`;
+  const sanitize = askedToReplaceSecrets(latest) || askedToReplaceSecrets(goal)
+    ? `\n${secretSanitizePersistNudge(latest || goal, evidence)}`
+    : "";
+  const common = `Session goal: ${goal}${keep}${progressPin}${tactic}${sanitize}\nStill missing: ${missing}\nDo not give up. Copy URLs/IPs from Session facts exactly. Do not ask the user to repeat them.${research}`;
   if (strategy === "research") {
     return `${common}\nLook up the vendor API/docs, then execute with tools.`;
   }
@@ -1764,6 +1943,14 @@ function persistNudge(
     return `${common}\nChange approach completely (browser vs shell vs API vs plugin). Do not repeat the failed guess.`;
   }
   return `${common}\nKeep files that already exist. Only create what is still missing. Follow the working plan in order. Do not stop at identification — apply the edits.`;
+}
+
+function latestUserText(run: { transcript: Array<{ kind: string; text: string }> }): string {
+  for (let i = run.transcript.length - 1; i >= 0; i--) {
+    const item = run.transcript[i];
+    if (item?.kind === "user") return item.text;
+  }
+  return "";
 }
 
 function regulationOf(call: ToolCall, goal: string): "task" | "competence" | "wander" {

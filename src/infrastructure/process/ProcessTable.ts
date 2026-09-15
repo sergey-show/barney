@@ -14,6 +14,11 @@ type Entry = {
 
 export class ProcessTable implements ProcessPort {
   private readonly items = new Map<string, Entry>();
+  private settledHandler: ((event: { id: string; runId: string; status: string }) => void) | null = null;
+
+  onSettled(handler: (event: { id: string; runId: string; status: string }) => void): void {
+    this.settledHandler = handler;
+  }
 
   async spawn(input: { runId: string; cwd: string; command: string; args: string[] }): Promise<{ id: string; pid: number }> {
     const proc = Bun.spawn([input.command, ...input.args], {
@@ -43,6 +48,12 @@ export class ProcessTable implements ProcessPort {
       .map((e) => ({ id: e.id, pid: e.pid, command: e.command, status: e.status }));
   }
 
+  async get(id: string): Promise<{ id: string; runId: string; pid: number; command: string; status: string } | null> {
+    const entry = this.items.get(id);
+    if (!entry) return null;
+    return { id: entry.id, runId: entry.runId, pid: entry.pid, command: entry.command, status: entry.status };
+  }
+
   async logs(id: string): Promise<string> {
     return this.items.get(id)?.logs ?? "";
   }
@@ -55,7 +66,10 @@ export class ProcessTable implements ProcessPort {
     } catch {
       /* already gone */
     }
-    if (entry.status === "running") entry.status = "killed";
+    if (entry.status === "running") {
+      entry.status = "killed";
+      this.settledHandler?.({ id: entry.id, runId: entry.runId, status: entry.status });
+    }
   }
 
   async killRun(runId: string): Promise<void> {
@@ -72,6 +86,7 @@ export class ProcessTable implements ProcessPort {
     const code = await entry.proc.exited;
     if (entry.status === "killed") return;
     entry.status = code === 0 ? "exited" : `exit_${code}`;
+    this.settledHandler?.({ id: entry.id, runId: entry.runId, status: entry.status });
   }
 
   private async pump(entry: Entry, stream: ReadableStream<Uint8Array> | number | undefined): Promise<void> {
