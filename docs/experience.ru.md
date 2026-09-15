@@ -2,86 +2,104 @@
 
 **Русский** · [English](experience.md)
 
-Закон петли у Барни уже измерим. Опыт реален только когда он **узкий, принудительно вспоминается и проверяется на новой задаче**.
+У Barney закон петли уже можно измерить. Опыт считается настоящим только когда он **узкий, обязательно вспоминается и проверяется на новой задаче**.
 
-> Урок пишется редко, поднимается обязательно, проверяется на сдвинутой задаче, иначе выкидывается.
+> Урок пишут редко, поднимают обязательно, проверяют на сдвинутой задаче — иначе выбрасывают.
 
-Marker lift доказывает **петлю**.  
-`transfer_success_lift = pass(kernel-test) − pass(kernel-fresh)` доказывает **опыт**.
+Рост маркеров петли доказывает саму **петлю**.  
+Разница `transfer_success_lift = pass(kernel-test) − pass(kernel-fresh)` доказывает **опыт**.
 
 ## Три слоя (мерить отдельно)
 
 | Слой | Что это | Когда помогает |
 |---|---|---|
-| **Episode fact** | «на этой задаче сработало X» | тот же goal |
-| **Failure rule** | «при ошибке F не делай A, делай B» | похожий failure-mode |
-| **Skill** | переиспользуемый путь действия | другой task class (transfer) |
+| **Факт эпизода** | «на этой задаче сработало X» | та же цель |
+| **Правило ошибки** | «при сбое F не делай A — делай B» | похожий тип ошибки |
+| **Навык** | путь действия, который можно повторить | другой класс задач (перенос) |
 
-Не каждый PASS пишет skill. Не каждый FAIL пишет rule. Pin предпочитает **prediction error**.
+Не каждый успех пишет навык. Не каждая неудача пишет правило. Закрепление предпочитает **ошибку прогноза** (ожидали одно — вышло другое).
 
-| Исход | Запись |
+| Исход | Что записываем |
 |---|---|
-| PASS + failed path → другой path → success + PE | `skill_candidate` (quarantine; может нести `procedure`) |
-| FAIL + PE + повтор/structural + конкретная директива | `failure_rule` |
-| PASS + house convention pin | `lesson_pin` |
-| Иначе | `episode_only` (без pin в body) |
+| Успех после смены пути + ошибка прогноза | кандидат в навык (карантин; может нести `procedure`) |
+| Провал + ошибка прогноза + повтор/структура + конкретная директива | правило ошибки |
+| Успех + закрепление «домашней» конвенции | закреплённый урок |
+| Иначе | только эпизод (в тело правил и навыков не пишется) |
 
 Код: `experienceLayers.ts`, `predictionError.ts`.
 
-## Обязательный pre-act recall
+## Обязательное вспоминание перед актом
 
-Перед act — корзины, ранжированные **weight × similarity**:
+Перед актом подставляются корзины, ранжированные по **весу × сходству**:
 
-1. **Shadow** — похожие fails  
-2. **Rules** — директивы по failure-mode  
-3. **Skills** — quarantine / verified / frozen (в т.ч. procedure)  
+1. **Тень** — похожие прошлые провалы  
+2. **Правила** — директивы по типу ошибки  
+3. **Навыки** — из карантина, проверенные и замороженные (в том числе процедуры)  
 
-И лог:
+В лог пишется:
 
 ```text
-recall_hit: 0/1
-recall_used: 0/1   # plan/act/tools оставили отпечаток урока
-recall_helped: 0/1/?  # только каузально (four-hand); не из pass alone
+recall_hit: 0/1      # урок нашёлся
+recall_used: 0/1     # план/акт/инструменты реально оставили отпечаток урока
+recall_helped: 0/1/? # помог ли каузально (только four-hand); из одного pass не выводят
 ```
 
 Код: `experienceRecall.ts`, `weightedRecall.ts` (проводка в `DriveSolve`).
 
-## Четыре руки (hard transfer)
+## Четыре руки (жёсткий перенос)
 
-Дружелюбный suite, где оба armа 100%, **не измеряет** опыт.
+Если набор задач слишком лёгкий и обе руки сдают на 100%, опыт **не измеряется** — там нечему отличаться.
 
 Протокол:
 
-1. sterile home  
-2. **kernel-train** (писать уроки)  
-3. **kernel-test** (то же body)  
-4. **no-kernel** (та же модель, без body)  
-5. **kernel-fresh** (полное ядро, пустое body)
+1. чистый домашний каталог экземпляра  
+2. **kernel-train** — пишем уроки  
+3. **kernel-test** — та же модель, то же обученное тело  
+4. **no-kernel** — та же модель, без тела  
+5. **kernel-fresh** — полное ядро, но пустое тело  
 
-Критерий опыта: **kernel-test > kernel-fresh** на сдвинутом тесте.  
-Каузальный `recall_helped` на kernel-test: **pass ∧ fresh fail ∧ recall_used**.
+Критерий опыта: на сдвинутом тесте **обученное тело проходит лучше свежего**.  
+Каузальный «вспомнил и помогло» на kernel-test: **прошёл ∧ свежий провалился ∧ урок реально использовали**.
 
-Сиды: `HARD_TRANSFER_CASES` (`house-redact`, `house-merge`).
+Заготовки кейсов: `HARD_TRANSFER_CASES` (`house-redact`, `house-merge` — «домашние» конвенции учат только на train).
 
-Spaced retention (immediate / +1d / +7d): `spacedTransfer.ts`.  
-Immediate — в four-hand отчёте; позже: `barney eval spaced <observations.json>`.
+```bash
+BARNEY_ABLATION_HOST=http://127.0.0.1:11434/v1 \
+BARNEY_ABLATION_MODEL=qwen3.8:latest \
+barney eval experience --out ./tmp/fourhand-proof
+```
 
-## Dream consolidation
+### Измеренный прогон (2026-09-15, `qwen3.8:latest`)
 
-Idle dream compress мержит похожие failure rules (`mergeFailureRules`).
+| Кейс | kernel-test | no-kernel | kernel-fresh | lift | recall_helped | kernelLift |
+|---|---|---|---|---|---|---|
+| `house-redact` | PASS | FAIL | FAIL | 1 | 1 | 0 |
+| `house-merge` | PASS | FAIL | FAIL | 1 | 1 | 0 |
+
+Вердикт `experience_helps` · средний lift **1.00**.  
+`kernelLift = 0`. Spaced: только immediate. `skillReuseRate: 0`.
+
+Отчёт: [`docs/proof/2026-09-15-fourhand-qwen38`](./proof/2026-09-15-fourhand-qwen38/).
+
+Удержание во времени (сразу / +1d / +7d): `spacedTransfer.ts`.  
+Immediate уже в four-hand; позже — `barney eval spaced <observations.json>`.
+
+## Сжатие во сне
+
+В простое сон сжимает похожие правила ошибок (`mergeFailureRules`) — закрепляются провалы, а не только переход тени в эвристики.
 
 ## Метрики
 
 | Метрика | Смысл |
 |---|---|
-| `transfer_success_lift` | pass rate test: kernel-with-train − kernel-fresh |
-| `recall_hit_rate` | доля шагов с релевантным recall |
-| `recall_used_rate` | доля, где plan/act реально откликнулся |
-| `recall_helped` | только каузально (four-hand) |
-| `spaced retention` | lift по задержкам (`retains` / `fades`) |
-| `skill_reuse_rate` | verified skill на новой задаче |
-| `false_skill_rate` | pinned skill, который не помог / мешал |
-| `shadow_to_rule` | fails → rules, которые потом сработали |
+| `transfer_success_lift` | доля успехов на тесте: обученное тело минус свежее |
+| `recall_hit_rate` | доля шагов, где нашлась релевантная память |
+| `recall_used_rate` | доля шагов, где план/акт реально откликнулся на память |
+| `recall_helped` | помогло ли каузально (только four-hand) |
+| удержание во времени | прирост по задержкам (держится / забывается) |
+| `skill_reuse_rate` | проверенный навык сработал на новой задаче |
+| `false_skill_rate` | закреплённый навык не помог или мешал |
+| `shadow_to_rule` | провалы → правила, которые потом сработали |
 
 ## Стык с fayr
 

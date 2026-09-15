@@ -4,7 +4,7 @@
 
 A plugin is a capability in the **body**, not in the kernel. Barney can read it, open its UI, or grow a new one after a recovery that worked.
 
-Prefer a plugin/skill over a new MCP server. See [MCP](mcp.md) only when an external stdio process is required.
+Prefer a plugin or skill over a new MCP server. See [MCP](mcp.md) only when an external stdio process is required.
 
 ## Where they live
 
@@ -56,7 +56,7 @@ On a full turn Barney can:
 |---|---|
 | `plugin_list` | Catalog in `~/.barney` and overlays |
 | `plugin_read` | Skill body or a file inside the plugin |
-| `plugin_write` | Create/update a file under `~/.barney/plugins/<name>/` |
+| `plugin_write` | Create or update a file under `~/.barney/plugins/<name>/` |
 | `plugin_open` | Open `ui.html` in the portal (or the markdown if there is no UI) |
 
 Typical growth:
@@ -66,6 +66,6 @@ Typical growth:
 3. If nothing fits and a recovery actually worked — write a small skill, not a new MCP.
 4. `plugin_open` when the operator should see a panel.
 
-`plugin_write` is for the body. It cannot patch `src/`. Self-authored plugins are admitted as quarantine until they prove themselves.
+`plugin_write` writes to the body. It cannot patch `src/`. Self-authored plugins stay in quarantine until they prove themselves.
 
 Index: [Docs](README.md) · [Tools](tools.md).

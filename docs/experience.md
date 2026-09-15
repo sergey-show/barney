@@ -2,9 +2,9 @@
 
 **English** · [Русский](experience.ru.md)
 
-Barney’s loop law is measurable. Experience is only real when it is **narrow, forced into recall, and proven on a new task**.
+Barney’s loop law is measurable. Experience counts only when it is **narrow, forced into recall, and proven on a new task**.
 
-> A lesson is written rarely, recalled mandatorily, checked on a shifted task, otherwise dropped.
+> A lesson is written rarely, recalled mandatorily, checked on a shifted task — otherwise dropped.
 
 Marker lift proves the **loop**.  
 `transfer_success_lift = pass(kernel-test) − pass(kernel-fresh)` proves **experience**.
@@ -13,80 +13,98 @@ Marker lift proves the **loop**.
 
 | Layer | What it is | When it may help |
 |---|---|---|
-| **Episode fact** | “On this goal, X worked” | Same goal / memorize |
+| **Episode fact** | “On this goal, X worked” | Same goal |
 | **Failure rule** | “On failure mode F, don’t A — do B” | Similar failure mode |
-| **Skill** | Reusable action path | Other task class (transfer) |
+| **Skill** | A reusable action path | Another task class (transfer) |
 
 Not every PASS writes a skill. Not every FAIL writes a rule. Pins prefer **prediction error** (expectation ≠ fact).
 
-| Outcome | Write |
+| Outcome | What gets written |
 |---|---|
-| PASS + failed path → different path → success + PE | `skill_candidate` (quarantine; may carry `procedure`) |
-| FAIL + PE + repeated/structural mode + concrete directive | `failure_rule` |
-| PASS + house convention pin | `lesson_pin` |
-| Otherwise | `episode_only` (no pin into body rules/skills) |
+| Success after changing path + prediction error | skill candidate (quarantine; may carry `procedure`) |
+| Fail + prediction error + repeated/structural mode + concrete directive | failure rule |
+| Success + house-convention pin | pinned lesson |
+| Otherwise | episode only (nothing pinned into body rules/skills) |
 
 Code: `src/application/experience/experienceLayers.ts`, `predictionError.ts`.
 
-## Mandatory pre-act recall
+## Mandatory recall before act
 
-Before act, inject bags ranked by **weight × similarity** (synaptic competition):
+Before the act, inject bags ranked by **weight × similarity**:
 
-1. **Shadow** — similar fails  
-2. **Rules** — failure-mode directives  
-3. **Skills** — quarantine / verified / frozen body hints (incl. procedure traces)  
+1. **Shadow** — similar past fails  
+2. **Rules** — directives for that failure mode  
+3. **Skills** — quarantine / verified / frozen body hints (including procedures)  
 
 Then log:
 
 ```text
-recall_hit: 0/1
-recall_used: 0/1   # plan/act/tools echoed a recalled fingerprint
-recall_helped: 0/1/?  # causal only (four-hand); never inferred from pass alone
+recall_hit: 0/1      # a lesson was found
+recall_used: 0/1     # plan/act/tools actually echoed the lesson
+recall_helped: 0/1/? # causal help only (four-hand); never inferred from pass alone
 ```
 
 Code: `src/application/experience/experienceRecall.ts`, `weightedRecall.ts` (wired in `DriveSolve`).
 
 ## Four-hand hard transfer
 
-Friendly suites where both arms score 100% do **not** measure experience.
+If the suite is too easy and both arms score 100%, that does **not** measure experience — there is nothing to separate.
 
 Protocol:
 
-1. sterile home  
-2. **kernel-train** (write lessons)  
-3. **kernel-test** (same body)  
-4. **no-kernel** (same model, no body)  
-5. **kernel-fresh** (full kernel, empty body)
+1. sterile home directory  
+2. **kernel-train** — write lessons  
+3. **kernel-test** — same model, same trained body  
+4. **no-kernel** — same model, no body  
+5. **kernel-fresh** — full kernel, empty body  
 
-Claim for experience: **kernel-test > kernel-fresh** on a shifted test.  
-Causal `recall_helped` on kernel-test: **pass ∧ fresh fail ∧ recall_used**.
+Claim for experience: on a shifted test, **the trained body beats the fresh one**.  
+Causal “recall helped” on kernel-test: **pass ∧ fresh fail ∧ recall was used**.
 
 Seed cases: `HARD_TRANSFER_CASES` in `src/application/evaluation/fourHandCurriculum.ts`  
-(`house-redact`, `house-merge` — house conventions taught in train only).
+(`house-redact`, `house-merge` — house conventions taught only in train).
 
-Spaced retention schedule (immediate / +1d / +7d): `spacedTransfer.ts`.  
-Immediate probe is embedded in four-hand reports; later delays: `barney eval spaced <observations.json>`.
+```bash
+BARNEY_ABLATION_HOST=http://127.0.0.1:11434/v1 \
+BARNEY_ABLATION_MODEL=qwen3.8:latest \
+barney eval experience --out ./tmp/fourhand-proof
+```
+
+### Measured run (2026-09-15, `qwen3.8:latest`)
+
+| Case | kernel-test | no-kernel | kernel-fresh | lift | recall_helped | kernelLift |
+|---|---|---|---|---|---|---|
+| `house-redact` | PASS | FAIL | FAIL | 1 | 1 | 0 |
+| `house-merge` | PASS | FAIL | FAIL | 1 | 1 | 0 |
+
+Verdict `experience_helps` · mean lift **1.00**.  
+`kernelLift = 0`. Spaced: immediate only. `skillReuseRate: 0`.
+
+Report: [`docs/proof/2026-09-15-fourhand-qwen38`](./proof/2026-09-15-fourhand-qwen38/).
+
+Spaced schedule (immediate / +1d / +7d): `spacedTransfer.ts`.  
+Immediate is in the four-hand report; later: `barney eval spaced <observations.json>`.
 
 ## Dream consolidation
 
-Idle dream compress merges near-duplicate failure rules (`mergeFailureRules`) before applying heuristics — consolidate failures, not only shadow→heuristics.
+In idle, dream compress merges near-duplicate failure rules (`mergeFailureRules`) — consolidate failures, not only Shadow → heuristics.
 
 ## Metrics
 
 | Metric | Meaning |
 |---|---|
-| `transfer_success_lift` | test pass: kernel-with-train − kernel-fresh |
-| `recall_hit_rate` | steps with relevant bags |
-| `recall_used_rate` | steps where plan/act echoed recall |
-| `recall_helped` | causal only (four-hand annotate) |
-| `spaced retention` | lift across delays (`retains` / `fades`) |
+| `transfer_success_lift` | test pass rate: trained body − fresh body |
+| `recall_hit_rate` | steps where relevant memory was found |
+| `recall_used_rate` | steps where plan/act actually answered the recall |
+| `recall_helped` | causal help only (four-hand) |
+| spaced retention | lift across delays (holds / fades) |
 | `skill_reuse_rate` | verified skill used on a new task |
 | `false_skill_rate` | pinned skill that did not help / hurt |
 | `shadow_to_rule` | fails → rules that later hit |
 
 ## Fayr alignment
 
-See [plasticity.md](plasticity.md) table and `bio/fayr.md`. Target wiring: PE gate, weighted top-k, procedural skills, dream merge, causal helped, spaced probes.
+See [plasticity.md](plasticity.md) and `bio/fayr.md`.
 
 
 Back to [docs index](README.md).

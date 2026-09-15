@@ -1,0 +1,137 @@
+{
+  "at": "2026-09-15T09:42:38.715Z",
+  "cases": [
+    {
+      "caseId": "house-redact",
+      "arms": [
+        {
+          "arm": "kernel-train",
+          "ok": true,
+          "detail": "trained 1 goal(s) on /var/folders/d9/18s9gsps15xc5_fwq5g3h_200000gn/T/barney-fourhand-bvUnoh/house-redact-train-home-h8rag4",
+          "attempts": 0
+        },
+        {
+          "arm": "kernel-test",
+          "ok": true,
+          "detail": "house redact+audit ok",
+          "attempts": 3,
+          "recallHit": true,
+          "recallUsed": true,
+          "recallHelped": true
+        },
+        {
+          "arm": "no-kernel",
+          "ok": false,
+          "detail": "tokens=false audit=true env=\"APP_NAME=demo\\nREGION=eu-central-1\\nAWS_ACCESS_KEY_ID=DETECTED_SECRET_CREDENTIAL_598CFBD6\\nGITHUB_TOKEN=DETECTED_SECRET_CREDENTIAL_40CB2B71\\nSLACK_BOT_TOKEN=DE",
+          "attempts": 2,
+          "recallHit": false,
+          "recallUsed": false,
+          "recallHelped": null
+        },
+        {
+          "arm": "kernel-fresh",
+          "ok": false,
+          "detail": "tokens=false audit=true env=\"APP_NAME=demo\\nREGION=eu-central-1\\nAWS_ACCESS_KEY_ID=DETECTED_SECRET_CREDENTIAL_598CFBD6\\nGITHUB_TOKEN=DETECTED_SECRET_CREDENTIAL_40CB2B71\\nSLACK_BOT_TOKEN=DE",
+          "attempts": 2,
+          "recallHit": true,
+          "recallUsed": true,
+          "recallHelped": null
+        }
+      ],
+      "transferSuccessLift": 1,
+      "kernelLift": 0
+    },
+    {
+      "caseId": "house-merge",
+      "arms": [
+        {
+          "arm": "kernel-train",
+          "ok": true,
+          "detail": "trained 1 goal(s) on /var/folders/d9/18s9gsps15xc5_fwq5g3h_200000gn/T/barney-fourhand-bvUnoh/house-merge-train-home-ptcfEz",
+          "attempts": 0
+        },
+        {
+          "arm": "kernel-test",
+          "ok": true,
+          "detail": "house merge ok",
+          "attempts": 1,
+          "recallHit": true,
+          "recallUsed": true,
+          "recallHelped": true
+        },
+        {
+          "arm": "no-kernel",
+          "ok": false,
+          "detail": "bytes mismatch got=\"{\\n \\\"zebra\\\": 1,\\n \\\"alpha\\\": {\\n \\\"c\\\": 3,\\n \\\"a\\\": 1,\\n \\\"b\\\": 2\\n },\\n \\\"list\\\": [\\n \\\"replace\\\"\\n ],\\n \\\"beta\\\": 0",
+          "attempts": 1,
+          "recallHit": false,
+          "recallUsed": false,
+          "recallHelped": null
+        },
+        {
+          "arm": "kernel-fresh",
+          "ok": false,
+          "detail": "bytes mismatch got=\"{\\n \\\"zebra\\\": 1,\\n \\\"alpha\\\": {\\n  \\\"c\\\": 3,\\n  \\\"a\\\": 1,\\n  \\\"b\\\": 2\\n },\\n \\\"list\\\": [\\n  \\\"replace\\\"\\n ],\\n \\\"beta\\",
+          "attempts": 2,
+          "recallHit": true,
+          "recallUsed": true,
+          "recallHelped": null
+        }
+      ],
+      "transferSuccessLift": 1,
+      "kernelLift": 0
+    }
+  ],
+  "metrics": {
+    "transferSuccessLift": 1,
+    "recallHitRate": 1,
+    "recallUsedRate": 1,
+    "skillReuseRate": 0,
+    "falseSkillRate": 0
+  },
+  "verdict": "experience_helps",
+  "spacedPlan": [
+    {
+      "delayHours": 0,
+      "label": "immediate"
+    },
+    {
+      "delayHours": 24,
+      "label": "+24h"
+    },
+    {
+      "delayHours": 168,
+      "label": "+7d"
+    }
+  ],
+  "spacedRetention": [
+    {
+      "caseId": "house-redact",
+      "probes": [
+        {
+          "caseId": "house-redact",
+          "delayHours": 0,
+          "transferSuccessLift": 1
+        }
+      ],
+      "meanLift": 1,
+      "retainedLift": 1,
+      "forgetting": 0,
+      "verdict": "inconclusive"
+    },
+    {
+      "caseId": "house-merge",
+      "probes": [
+        {
+          "caseId": "house-merge",
+          "delayHours": 0,
+          "transferSuccessLift": 1
+        }
+      ],
+      "meanLift": 1,
+      "retainedLift": 1,
+      "forgetting": 0,
+      "verdict": "inconclusive"
+    }
+  ]
+}

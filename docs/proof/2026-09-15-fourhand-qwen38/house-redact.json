@@ -1,0 +1,40 @@
+{
+  "caseId": "house-redact",
+  "arms": [
+    {
+      "arm": "kernel-train",
+      "ok": true,
+      "detail": "trained 1 goal(s) on /var/folders/d9/18s9gsps15xc5_fwq5g3h_200000gn/T/barney-fourhand-bvUnoh/house-redact-train-home-h8rag4",
+      "attempts": 0
+    },
+    {
+      "arm": "kernel-test",
+      "ok": true,
+      "detail": "house redact+audit ok",
+      "attempts": 3,
+      "recallHit": true,
+      "recallUsed": true,
+      "recallHelped": true
+    },
+    {
+      "arm": "no-kernel",
+      "ok": false,
+      "detail": "tokens=false audit=true env=\"APP_NAME=demo\\nREGION=eu-central-1\\nAWS_ACCESS_KEY_ID=DETECTED_SECRET_CREDENTIAL_598CFBD6\\nGITHUB_TOKEN=DETECTED_SECRET_CREDENTIAL_40CB2B71\\nSLACK_BOT_TOKEN=DE",
+      "attempts": 2,
+      "recallHit": false,
+      "recallUsed": false,
+      "recallHelped": null
+    },
+    {
+      "arm": "kernel-fresh",
+      "ok": false,
+      "detail": "tokens=false audit=true env=\"APP_NAME=demo\\nREGION=eu-central-1\\nAWS_ACCESS_KEY_ID=DETECTED_SECRET_CREDENTIAL_598CFBD6\\nGITHUB_TOKEN=DETECTED_SECRET_CREDENTIAL_40CB2B71\\nSLACK_BOT_TOKEN=DE",
+      "attempts": 2,
+      "recallHit": true,
+      "recallUsed": true,
+      "recallHelped": null
+    }
+  ],
+  "transferSuccessLift": 1,
+  "kernelLift": 0
+}
