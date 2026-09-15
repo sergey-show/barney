@@ -21,7 +21,7 @@ The agent learns from its own experience — tasks that worked and tasks that fa
 
 It remembers that experience, can reuse it, and can draw connections.
 
-It runs as a CLI or a WEB portal.
+It runs as a CLI or a web portal.
 
 ## Why this shape
 
@@ -31,7 +31,7 @@ Almost all “self-learning” is still mechanistic. The agent is given a hard r
 
 Barney is built the other way around. Existence precedes essence: an act first, then a line in the Self. The kernel keeps one turn shape — plan, tool, observe, review — and will not let the current task rewrite that shape. Around the kernel a new body grows: skills that already exist, a tool of its own if none fits, recorded failures (Shadow), recorded paths that worked (light).
 
-Review looks at whether the **requested result** happened, not how confident the prose sounded. Persistence (wanting) is not the same as satisfaction (liking).
+Review looks at whether the **requested result** happened, not how confident the prose sounded. Persistence (wanting to continue) is not the same as satisfaction (liking the result).
 
 The agent also follows four layers of harness around the model.
 
@@ -44,7 +44,7 @@ The agent also follows four layers of harness around the model.
 
 ## Kernel and body
 
-![Sheme](assets/images/architecture.jpg)
+![Scheme](assets/images/architecture.jpg)
 
 | Stays in `src/` | Lives in `~/.barney` |
 |---|---|
@@ -69,6 +69,22 @@ These names describe the runtime. They are not a hard role pasted into a system 
 | **Shadow recall** | Similar past fails surface before the act (embeddings when the host supports them). |
 | **Verified skill** | A skill is pinned only after a recovery that worked — not invented mid-miss. |
 | **Analyze then plan** | Same model: what must be true, then the steps, then the act and review. |
+
+## Proof
+
+An absolute benchmark score is not experience. Experience is causal:
+
+`transfer_success_lift = pass(kernel-test) − pass(kernel-fresh)`
+
+Four-hand hard transfer (`barney eval experience`), model `qwen3.8:latest`, 2026-09-15:
+
+| Case | train | kernel-test | no-kernel | kernel-fresh | lift | recall_helped |
+|---|---|---|---|---|---|---|
+| `house-redact` | PASS | PASS | FAIL | FAIL | **1** | **1** |
+| `house-merge` | PASS | PASS | FAIL | FAIL | **1** | **1** |
+
+Verdict: **experience helps** · mean lift **1.00** · recall found and used on **100%** of steps.  
+Fresh homes invent the wrong convention; the trained body recalls house tokens / merge bytes and passes. Protocol: [docs/experience.md](docs/experience.md).
 
 ## Install
 
@@ -136,7 +152,7 @@ On first boot the instance is not designed yet. Setup is by points, or shortly *
 
 | | |
 |---|---|
-| `barney web` | web-ui (`--port 7331`, `--host 127.0.0.1`) |
+| `barney web` | web portal (`--port 7331`, `--host 127.0.0.1`) |
 | `barney acp` | ACP v1 agent over stdio |
 | `barney cli` | Interactive session |
 | `barney run "<goal>"` | One shot |
@@ -178,6 +194,7 @@ How the body grows — tools, plugins, MCP. English and Russian.
 | | |
 |---|---|
 | [Docs](docs/README.md) | Index |
+| [Experience](docs/experience.md) | Hard transfer proof (`transfer_success_lift`) |
 | [Tools](docs/tools.md) | Kernel tool protocol |
 | [Plugins](docs/plugins.md) | Skills and UI in `~/.barney` |
 | [MCP](docs/mcp.md) | Local stdio servers the agent can start itself |

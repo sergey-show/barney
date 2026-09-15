@@ -2,9 +2,9 @@
 
 **English** · [Русский](mcp.ru.md)
 
-MCP here is a **local stdio server** in the body, not a hosted connector and not a settings cloud.
+MCP here is a **local stdio server in the body**, not a hosted connector and not a settings cloud.
 
-Barney speaks MCP protocol `2024-11-05` over stdio: `initialize` → `tools/list` → `tools/call`. There is no autostart on boot. A server lives until `mcp_stop` or until Barney exits.
+Barney speaks MCP protocol `2024-11-05` over stdio: `initialize` → `tools/list` → `tools/call`. Servers do not autostart on boot. A process lives until `mcp_stop` or until Barney exits.
 
 Prefer a [plugin](plugins.md) if a skill or UI is enough. MCP is for an external process the kernel does not ship.
 
@@ -41,7 +41,7 @@ The Web plugin list shows an **MCP** badge. There is no separate “Add MCP serv
 
 ## Operator
 
-Drop the folder above, or ask Barney to connect it. Then in a session the agent can `mcp_start` and `mcp_call`.
+Drop the folder above, or ask Barney to connect it. In a session the agent can `mcp_start` and `mcp_call`.
 
 Name is kebab-case (`github-docs`, `context7`).
 
@@ -55,7 +55,7 @@ Barney can attach MCP **itself** on a full turn:
 | `mcp_write` | Save `~/.barney/plugins/<name>/mcp.json` |
 | `mcp_start` | Spawn the process, handshake, list tools |
 | `mcp_call` | Call a tool on a running server |
-| `mcp_stop` | Kill the process; the recipe stays |
+| `mcp_stop` | Kill the process; the recipe stays on disk |
 
 Typical loop:
 
@@ -65,14 +65,14 @@ Typical loop:
 4. `mcp_call` with `server`, `tool`, and JSON `arguments`.
 5. `mcp_stop` when done.
 
-After `mcp_write`, the MCP is pinned on the instance (`kind: mcp`) and the body git records `become: mcp <name>`.
+After `mcp_write`, the MCP is pinned on the instance (`kind: mcp`) and body git records `become: mcp <name>`.
 
 If a turn is stuck, do **not** invent an MCP from the miss. Change tool family and still deliver the result. A new MCP is a body decision, not a workaround.
 
 ## Limits
 
 - Timeout per MCP request: 20s.
-- Nested specialists may start/call MCP, but should not grow the kernel.
+- Nested specialists may start and call MCP, but should not grow the kernel.
 - `mcp_write` is not the same as skill quarantine: a recipe can be saved immediately. Still prefer a verified skill when the recovery is “after this family failed, that family delivered”.
 
 Index: [Docs](README.md) · [Plugins](plugins.md) · [Tools](tools.md).

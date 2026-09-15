@@ -2,45 +2,45 @@
 
 **Русский** · [English](wake.md)
 
-Агент **не** думает в фоне. Он ставит **wake**; ядро доставляет; обычный ход продолжается.
+Агент **не** думает в фоне. Он ставит **пробуждение**; ядро его доставляет; дальше идёт обычный ход.
 
-> Ставится редко → tick / exit процесса будит → observe → act → review.
+> Ставят редко → срабатывает таймер или выход процесса → сверка → акт → ревью.
 
 ## Зачем
 
-`process_spawn` уже гоняет долгие команды, но модель должна поллить. Не было прочного «продолжи позже» для exit, паттерна в логах или wall-clock.
+`process_spawn` уже умеет долгие команды, но модель вынуждена их поллить. Не хватало надёжного «продолжи позже» — по выходу процесса, по строке в логах или по часам.
 
 ## Виды
 
-| Kind | Инструмент | Когда срабатывает |
+| Вид | Инструмент | Когда срабатывает |
 |---|---|---|
-| `process_exit` | `wake_when_process on=exit` | процесс вышел из `running` |
-| `process_log` | `wake_when_process on=log` | логи содержат match / `/regex/i` |
-| `defer` / `at` | `wake_at afterMs` / `at` | время |
-| `interval` | `wake_at everyMs` | повтор (мин. 5м); перезаряжается |
+| выход процесса | `wake_when_process on=exit` | процесс перестал быть `running` |
+| лог процесса | `wake_when_process on=log` | в логах есть match или `/regex/i` |
+| отложить / в момент | `wake_at afterMs` / `at` | по времени |
+| интервал | `wake_at everyMs` | повтор (не чаще раза в 5 минут); после срабатывания ставится снова |
 
-Хранение в теле: `wake/<agentId>` (JSON). Лимиты: 8 armed, `afterMs ≥ 15s`, `everyMs ∈ [5m, 24h]`.
+Хранение в теле: `wake/<agentId>` (JSON). Лимиты: не больше 8 активных, отложить не меньше чем на 15 с, интервал от 5 минут до суток.
 
-## Tools
+## Инструменты
 
-- `wake_when_process` — следить за id из `process_spawn`  
-- `wake_at` — `afterMs` | `at` (ISO) | `everyMs`  
+- `wake_when_process` — следить за id из `process_spawn`
+- `wake_at` — через `afterMs`, в момент `at` (ISO) или каждые `everyMs`
 - `wake_list` / `wake_cancel`
 
-## Доставка
+## Как доставляется
 
-1. `ProcessTable.onSettled` и таймер 15с → `Kernel.deliverWakes`  
-2. Due wake пишет system в run  
-3. Если шаг не идёт — `SessionService.prompt` с `wakePrompt(...)`  
-4. Interval перезаряжается; остальные → `fired`
+1. Выход процесса (`ProcessTable.onSettled`) или таймер раз в 15 с → `Kernel.deliverWakes`
+2. Наступившее пробуждение пишет system-сообщение в run
+3. Если шаг сейчас не идёт — `SessionService.prompt` с текстом `wakePrompt(...)`
+4. Интервал ставится снова; остальные помечаются как `fired`
 
-Idle psyche / agenda отдельно: wake — **отложение сессии**, не drill автономии.
+Психика в простое и повестка автономии — отдельно: wake это **отложенная сессия**, а не учебный drill.
 
-## Не делаем
+## Чего нет
 
-- Вечный LLM-цикл в фоне  
-- Свободный cron DSL  
-- Смешение agenda gaps с расписанием оператора  
+- Вечного LLM-цикла в фоне
+- Свободного cron-языка
+- Смешения дыр повестки с расписанием оператора
 
 Код: `src/application/autonomy/wake.ts`, `runWakeTool.ts`, `Kernel.deliverWakes`.
 

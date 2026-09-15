@@ -30,7 +30,7 @@ Delegated specialists get the same set **except** `agent_spawn`, `agent_delegate
 
 ## Worktree and outside paths
 
-`fs_*` and `shell` run in the session worktree (the operator project, or a folder under `~/.barney/worktrees`).
+`fs_*` and `shell` run in the session worktree (the operator’s project, or a folder under `~/.barney/worktrees`).
 
 A path outside the worktree is denied until the operator grants a prefix:
 
@@ -44,7 +44,7 @@ Kernel sources (`src/`, `DriveSolve.ts`, `Kernel.ts`) cannot be rewritten. That 
 
 Secrets in tool output become `DETECTED_SECRET_<KIND>_<HASH>`. Use the **full token** in `fs_edit` / `sed`. A grep for the letters `DETECTED_SECRET` will miss live secrets on disk.
 
-The same exact failed call is blocked. A tool family that fails twice is saturated: the agent must change family, not hammer the same tool.
+The same exact failed call is blocked. A tool family that fails twice is saturated: change family, do not hammer the same tool.
 
 `fs_restore` brings back the last good session version of a file after a bad write.
 
