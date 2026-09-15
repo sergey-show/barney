@@ -383,6 +383,9 @@ export async function startWeb(opts: { port: number; host: string; open: boolean
   setInterval(() => {
     kernel.tick().catch((err) => console.error("psyche tick", err));
   }, 60_000);
+  setInterval(() => {
+    kernel.deliverWakes().catch((err) => console.error("wake deliver", err));
+  }, 15_000);
 
   const url = `http://${opts.host}:${opts.port}`;
   console.log(`barney web at ${url}`);

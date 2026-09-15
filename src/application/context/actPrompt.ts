@@ -28,8 +28,8 @@ export function turnLawFromConstitution(constitution: string): string {
 export function buildActSystem(input: ActPromptInput): string {
   const tools =
     input.depth > 0
-      ? "Tools this turn: fs_*, shell, process_*, web_search, plugin_*, browser_*, memory_*, board_read/write, mcp_list/start/call/stop/write, agent_list, self_status/log/commit."
-      : "Tools this turn: fs_*, shell, process_spawn/list/logs/kill, web_search, plugin_list/read/write/open, browser_*, memory_search/write/read, board_read/write, plan_set, agent_list/spawn/delegate, mcp_list/write/start/call/stop, self_status/log/commit/rollback.";
+      ? "Tools this turn: fs_*, shell, process_*, wake_*, web_search, plugin_*, browser_*, memory_*, board_read/write, mcp_list/start/call/stop/write, agent_list, self_status/log/commit."
+      : "Tools this turn: fs_*, shell, process_spawn/list/logs/kill, wake_when_process/at/list/cancel, web_search, plugin_list/read/write/open, browser_*, memory_search/write/read, board_read/write, plan_set, agent_list/spawn/delegate, mcp_list/write/start/call/stop, self_status/log/commit/rollback.";
   return [
     turnLawFromConstitution(input.constitution),
     input.samost,

@@ -104,9 +104,12 @@ export interface McpRuntimePort {
 export interface ProcessPort {
   spawn(input: { runId: string; cwd: string; command: string; args: string[] }): Promise<{ id: string; pid: number }>;
   list(runId: string): Promise<Array<{ id: string; pid: number; command: string; status: string }>>;
+  get(id: string): Promise<{ id: string; runId: string; pid: number; command: string; status: string } | null>;
   logs(id: string): Promise<string>;
   kill(id: string): Promise<void>;
   killRun(runId: string): Promise<void>;
+  /** Notify when a process leaves "running" (exit/kill). */
+  onSettled(handler: (event: { id: string; runId: string; status: string }) => void): void;
 }
 
 export interface WorkspacePort {

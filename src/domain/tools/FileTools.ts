@@ -367,7 +367,7 @@ export const TEAM_TOOLS: ToolSpec[] = [
 export const PROCESS_TOOLS: ToolSpec[] = [
   {
     name: "process_spawn",
-    description: "Start a long-running command in the worktree without the shell timeout. Then process_logs / process_kill. Same deny list as shell.",
+    description: "Start a long-running command in the worktree without the shell timeout. Then process_logs / process_kill. Same deny list as shell. For auto-resume when it exits, arm wake_when_process.",
     parameters: {
       type: "object",
       properties: { command: { type: "string", description: "Command line to run in the worktree" } },
@@ -394,6 +394,50 @@ export const PROCESS_TOOLS: ToolSpec[] = [
     parameters: {
       type: "object",
       properties: { id: { type: "string", description: "Id from process_spawn" } },
+      required: ["id"],
+    },
+  },
+];
+
+export const WAKE_TOOLS: ToolSpec[] = [
+  {
+    name: "wake_when_process",
+    description: "Arm a deferred wake for a process_spawn id. Kernel tick resumes this session when the process exits (on=exit) or logs match (on=log). Does not background-reason.",
+    parameters: {
+      type: "object",
+      properties: {
+        processId: { type: "string", description: "Id from process_spawn" },
+        on: { type: "string", description: "exit (default) or log" },
+        match: { type: "string", description: "Substring or /regex/i when on=log" },
+        reason: { type: "string", description: "Why resume — shown in the wake prompt" },
+      },
+      required: ["processId"],
+    },
+  },
+  {
+    name: "wake_at",
+    description: "Arm a time wake for this session: afterMs, at (ISO), or everyMs (min 5m). Tick delivers; no background LLM loop.",
+    parameters: {
+      type: "object",
+      properties: {
+        afterMs: { type: "string", description: "Delay in ms from now (min 15000)" },
+        at: { type: "string", description: "ISO timestamp" },
+        everyMs: { type: "string", description: "Repeat interval ms (min 300000)" },
+        reason: { type: "string", description: "Why resume" },
+      },
+    },
+  },
+  {
+    name: "wake_list",
+    description: "List armed/recent wakes for this agent.",
+    parameters: { type: "object", properties: {} },
+  },
+  {
+    name: "wake_cancel",
+    description: "Cancel an armed wake by id.",
+    parameters: {
+      type: "object",
+      properties: { id: { type: "string", description: "Wake id from wake_list" } },
       required: ["id"],
     },
   },
@@ -485,5 +529,5 @@ export const SELF_TOOLS: ToolSpec[] = [
   },
 ];
 
-export const AGENT_TOOLS: ToolSpec[] = [...FILE_TOOLS, SHELL_TOOL, WEB_SEARCH_TOOL, ...PLUGIN_TOOLS, ...BROWSER_TOOLS, ...MEMORY_TOOLS, ...TEAM_TOOLS, ...PROCESS_TOOLS, ...MCP_TOOLS, ...SELF_TOOLS];
+export const AGENT_TOOLS: ToolSpec[] = [...FILE_TOOLS, SHELL_TOOL, WEB_SEARCH_TOOL, ...PLUGIN_TOOLS, ...BROWSER_TOOLS, ...MEMORY_TOOLS, ...TEAM_TOOLS, ...PROCESS_TOOLS, ...WAKE_TOOLS, ...MCP_TOOLS, ...SELF_TOOLS];
 export const CHILD_TOOLS: ToolSpec[] = AGENT_TOOLS.filter((tool) => !["agent_spawn", "agent_delegate", "plan_set", "self_rollback"].includes(tool.name));

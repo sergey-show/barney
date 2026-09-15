@@ -118,6 +118,7 @@ import { runFileTool } from "../tools/runFileTool.ts";
 import { runMcpTool } from "../tools/runMcpTool.ts";
 import { runMemoryTool } from "../tools/runMemoryTool.ts";
 import { runProcessTool } from "../tools/runProcessTool.ts";
+import { runWakeTool } from "../tools/runWakeTool.ts";
 import { runSelfTool } from "../tools/runSelfTool.ts";
 import { runSkillTool } from "../tools/runSkillTool.ts";
 import { runTeamTool } from "../tools/runTeamTool.ts";
@@ -1261,6 +1262,9 @@ export class DriveSolve {
     }
     if (call.name.startsWith("process_")) {
       return runProcessTool(this.processes, call, { runId: run.id.value, cwd: run.worktreePath });
+    }
+    if (call.name.startsWith("wake_")) {
+      return runWakeTool(this.memory, this.processes, call, { runId: run.id.value, agentId: run.agentId });
     }
     if (call.name === "web_search") {
       const query = String(call.arguments?.query ?? "").trim();

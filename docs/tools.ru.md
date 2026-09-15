@@ -15,6 +15,7 @@ Tools — это протокол ядра. Модель их не выдумы�
 | Файлы | `fs_list`, `fs_stat`, `fs_read`, `fs_write`, `fs_edit`, `fs_append`, `fs_mkdir`, `fs_search`, `fs_remove`, `fs_restore` | Файлы worktree. Для правок лучше это, а не shell. |
 | Shell | `shell` | Одна команда в worktree, до 120 с. |
 | Процесс | `process_spawn`, `process_list`, `process_logs`, `process_kill` | Долгие сборки и серверы. |
+| Wake | `wake_when_process`, `wake_at`, `wake_list`, `wake_cancel` | Отложить ход: exit/log процесса или время. См. [Wake](wake.ru.md). |
 | Поиск | `web_search` | Публичный веб. Затем открыть источники в браузере. |
 | Браузер | `browser_open`, `browser_read`, `browser_screenshot`, `browser_show`, `browser_click`, `browser_fill`, `browser_press`, `browser_scroll` | Скрытая страница. `browser_show` только если оператор просил показать. |
 | Плагины | `plugin_list`, `plugin_read`, `plugin_write`, `plugin_open` | Навыки и UI тела. См. [Плагины](plugins.ru.md). |

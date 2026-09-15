@@ -21,6 +21,15 @@ import {
   proposeAgendaItem,
   type AgendaItem,
 } from "../application/autonomy/agenda.ts";
+import {
+  cancelWakesForRun,
+  dueWakes,
+  formatWakes,
+  markWakeFired,
+  parseWakes,
+  wakeMemoryKey,
+  wakePrompt,
+} from "../application/autonomy/wake.ts";
 import { parseBacklog } from "../application/context/failureClass.ts";
 import {
   needsPlasticSleep,
@@ -136,6 +145,9 @@ export class Kernel {
     this.experience = new SqliteExperienceGraph(db);
     this.providers = new SqliteProviderCatalog(db);
     this.processes = new ProcessTable();
+    this.processes.onSettled(() => {
+      void this.deliverWakes().catch((err) => console.error("wake deliver", err));
+    });
     this.vault = new MemoryVault();
     this.scanner = new RegexSecretScanner(new GuardPolicy(), this.vault);
     this.plugins = new FsPluginStore(join(home, "plugins"), {
@@ -229,6 +241,7 @@ export class Kernel {
   }
 
   async tick(): Promise<string | null> {
+    await this.deliverWakes();
     if (this.sessionService.isBusy()) return null;
     if (Date.now() - this.lastIdleAt < 45_000) return null;
     this.lastIdleAt = Date.now();
@@ -359,6 +372,61 @@ export class Kernel {
     }
     this.events.publish([event("psyche.tick", { item: work.item })]);
     return work.item;
+  }
+
+  /** Deliver due wakes; may resume at most one free session per call. */
+  async deliverWakes(): Promise<string | null> {
+    const agent = (await this.agents.list())[0];
+    if (!agent) return null;
+    const key = wakeMemoryKey(agent.id.value);
+    let items = parseWakes((await this.memories.get(key))?.body ?? "");
+    if (!items.some((item) => item.status === "armed")) return null;
+
+    const processStatus = new Map<string, string>();
+    const processLogs = new Map<string, string>();
+    for (const item of items) {
+      if (!item.processId || processStatus.has(item.processId)) continue;
+      const proc = await this.processes.get(item.processId);
+      processStatus.set(item.processId, proc?.status ?? "missing");
+      processLogs.set(item.processId, await this.processes.logs(item.processId));
+    }
+
+    const due = dueWakes(items, Date.now(), processStatus, processLogs);
+    if (!due.length) return null;
+
+    let resumed: string | null = null;
+    for (const wake of due) {
+      const run = await this.runs.get(wake.runId);
+      if (!run || run.status === "done" || run.status === "parked" || run.status === "failed") {
+        items = cancelWakesForRun(items, wake.runId);
+        continue;
+      }
+      const extra = wake.processId
+        ? `Process status: ${processStatus.get(wake.processId) ?? "unknown"}`
+        : "";
+      run.append("system", `Wake fired: ${wake.id} (${wake.kind}) — ${wake.reason}${extra ? `\n${extra}` : ""}`);
+      await this.runs.save(run);
+      items = markWakeFired(items, wake.id);
+      this.events.publish([event("wake.fired", { wakeId: wake.id, runId: wake.runId, kind: wake.kind })]);
+
+      if (!resumed && !this.sessionService.isBusy() && !this.sessionService.isRunning(wake.runId)) {
+        try {
+          await this.sessionService.prompt(wake.runId, wakePrompt(wake, extra));
+          resumed = wake.id;
+        } catch (err) {
+          console.error("wake resume", err);
+        }
+      }
+    }
+
+    await this.memories.save(new MemoryNote({
+      key,
+      title: "Wakes",
+      body: formatWakes(items.slice(-80)),
+      tags: ["wake", "autonomy"],
+      sourceAgentId: agent.id.value,
+    }));
+    return resumed;
   }
 
   private async refreshAgenda(
