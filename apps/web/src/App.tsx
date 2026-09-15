@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { MarkdownBody } from "./MarkdownBody.tsx";
-import { classifyClientError, interruptedNotice, type Alert } from "./alerts.ts";
+import { alertDismissKey, classifyClientError, interruptedNotice, type Alert } from "./alerts.ts";
 import { api, jsonBody } from "./api.ts";
 import { FilesPage } from "./FilesPage.tsx";
 import { useLocale } from "./LocaleContext.tsx";
@@ -111,8 +111,13 @@ export function App() {
       setFiles(nextFiles);
       setProcs(processes);
       const session = r.find((item) => item.id === nextRunId);
-      const notice = session ? interruptedNotice(session.transcript) : null;
-      if (notice && dismissedAlert.current !== notice.detail) setAlert(notice);
+      const notice = session ? interruptedNotice(session.transcript, session.status) : null;
+      const key = notice ? alertDismissKey(nextRunId, notice) : "";
+      if (notice && dismissedAlert.current !== key) {
+        setAlert(notice);
+      } else {
+        setAlert((prev) => (prev?.allowPrefix ? prev : null));
+      }
     }
   }
 
@@ -291,6 +296,7 @@ export function App() {
 
   async function resume(mode: "continue" | "retry") {
     if (!runId || run?.status === "done") return;
+    if (alert) dismissedAlert.current = alertDismissKey(runId, alert);
     setAlert(null);
     setBusy(true);
     setLiveThink("");
@@ -364,6 +370,7 @@ export function App() {
 
   function openSession(id: string) {
     setLiveThink("");
+    setAlert((prev) => (prev?.allowPrefix ? prev : null));
     setRunId(id);
     setPane({ kind: "chat" });
     setChatTab("talk");
@@ -529,7 +536,7 @@ export function App() {
               onRetry={() => void resume("retry")}
               onAllow={alert.allowPrefix && runId ? () => void allowOutside(alert.allowPrefix!) : undefined}
               onDismiss={() => {
-                dismissedAlert.current = alert.detail;
+                if (runId) dismissedAlert.current = alertDismissKey(runId, alert);
                 setAlert(null);
               }}
             />
