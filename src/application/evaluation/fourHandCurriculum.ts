@@ -1,14 +1,11 @@
 /**
  * Four-hand curriculum: separates loop law from experience causality.
  *
- * Arms:
- * - kernel-train → writes body on sterile home
- * - kernel-test  → same home (with train experience)
- * - no-kernel    → tools only, no body
- * - kernel-fresh → full kernel, empty body (control)
- *
  * Causal claim for experience:
  *   transfer_success_lift = pass(kernel-test) − pass(kernel-fresh)
+ *
+ * Hard cases underspecify house conventions on the test arm so fresh must
+ * invent tokens/canon; train wrote them into body/memory only.
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -20,11 +17,8 @@ export type HardTransferCase = {
   id: string;
   title: string;
   family: string;
-  /** 1–N train goals in the same family (kernel-train only). */
   trainGoals: string[];
-  /** Shifted test goal — must be harder / different invariant than train. */
   testGoal: string;
-  /** Why no-kernel / fresh should struggle without train lessons. */
   whyHard: string;
   setupTrain?: (worktree: string) => void;
   setupTest: (worktree: string) => void;
@@ -46,9 +40,7 @@ export type ArmResult = {
 export type FourHandCaseResult = {
   caseId: string;
   arms: ArmResult[];
-  /** Causal experience lift (needs kernel-test and kernel-fresh). */
   transferSuccessLift: number;
-  /** Loop-law contrast (kernel-fresh vs no-kernel) on the same test. */
   kernelLift: number;
 };
 
@@ -59,6 +51,13 @@ export type ExperienceMetrics = {
   skillReuseRate: number;
   falseSkillRate: number;
 };
+
+/** House tokens — taught in train goals only; never written into test fixtures. */
+export const HOUSE_REDACT = {
+  aws: "<barney-redact-aws>",
+  github: "<barney-redact-github>",
+  slack: "<barney-redact-slack>",
+} as const;
 
 function write(worktree: string, rel: string, body: string): void {
   const path = join(worktree, rel);
@@ -99,22 +98,32 @@ function canonicalJson(value: unknown): string {
   return `${JSON.stringify(sortKeysDeep(value), null, 2)}\n`;
 }
 
-/** Seed hard suite — extend until no-kernel/fresh fail more than kernel-test. */
+function liveSecretLeft(text: string): boolean {
+  return /AKIA[0-9A-Z]{8,}|ghp_[A-Za-z0-9]{8,}|xoxb-[A-Za-z0-9-]{8,}/.test(text);
+}
+
+/** Hard suite: house conventions live in memory after train, not in test files. */
 export const HARD_TRANSFER_CASES: HardTransferCase[] = [
   {
-    id: "sanitize-shifted",
-    title: "Sanitize train → shifted secret formats + audit",
+    id: "house-redact",
+    title: "Train explicit house tokens → test only says 'house redaction'",
     family: "sanitize",
     trainGoals: [
-      "In `.env`, replace AWS_ACCESS_KEY_ID with `<your-aws-access-key-id>` and GITHUB_TOKEN with `<your-github-token>`. Keep APP_NAME and REGION.",
+      [
+        "In `.env`, replace AWS_ACCESS_KEY_ID with exactly `<barney-redact-aws>`",
+        "and GITHUB_TOKEN with exactly `<barney-redact-github>`.",
+        "Keep APP_NAME and REGION. Do not use `<your-…>` placeholders.",
+        "These two strings are the Barney house redaction tokens — remember them.",
+      ].join(" "),
     ],
     testGoal: [
-      "In `.env`, replace three live secrets with exact placeholders",
-      "`<your-aws-access-key-id>`, `<your-github-token>`, `<your-slack-bot-token>`.",
-      "Also write `audit.txt` with exactly `aws=1\\ngithub=1\\nslack=1\\n` and no live secret material.",
+      "Sanitize `.env`: remove live AWS, GitHub, and Slack secrets.",
+      "Use Barney house redaction tokens (the ones learned for this instance) for aws, github, and slack.",
       "Keep APP_NAME=demo and REGION=eu-central-1.",
+      "Write `audit.txt` with exactly `aws=1\\ngithub=1\\nslack=1\\n` and no live secret material.",
+      "Do not invent `<your-…>` tokens.",
     ].join(" "),
-    whyHard: "Test adds Slack + leak-free audit; wrong placeholders fail the verifier.",
+    whyHard: "Test never spells house tokens; fresh invents <your-…> or REDACTED and fails.",
     setupTrain: (worktree) => {
       write(
         worktree,
@@ -135,80 +144,81 @@ export const HARD_TRANSFER_CASES: HardTransferCase[] = [
         [
           "APP_NAME=demo",
           "REGION=eu-central-1",
-          "AWS_ACCESS_KEY_ID=AKIATESTEXAMPLE99",
-          "GITHUB_TOKEN=ghp_testExampleToken9999",
-          "SLACK_BOT_TOKEN=xoxb-test-example-token",
+          "AWS_ACCESS_KEY_ID=AKIATESTEXAMPLE99ZZ",
+          "GITHUB_TOKEN=ghp_testExampleToken9999xx",
+          "SLACK_BOT_TOKEN=xoxb-test-example-token-99",
           "",
         ].join("\n"),
       );
     },
     verifyTrain: (worktree) => {
       const env = read(worktree, ".env") ?? "";
-      const ok = env.includes("<your-aws-access-key-id>")
-        && env.includes("<your-github-token>")
+      const ok = env.includes(HOUSE_REDACT.aws)
+        && env.includes(HOUSE_REDACT.github)
         && env.includes("APP_NAME=demo")
-        && !/AKIA|ghp_/.test(env);
-      return { ok, detail: ok ? "train sanitize ok" : "train secrets remain or placeholders wrong" };
+        && !liveSecretLeft(env)
+        && !/<your-/.test(env);
+      return { ok, detail: ok ? "train house redact ok" : "train missing house tokens or live secret left" };
     },
     verifyTest: (worktree) => {
       const env = read(worktree, ".env") ?? "";
       const audit = read(worktree, "audit.txt") ?? "";
-      const placeholders = env.includes("<your-aws-access-key-id>")
-        && env.includes("<your-github-token>")
-        && env.includes("<your-slack-bot-token>")
+      const tokens = env.includes(HOUSE_REDACT.aws)
+        && env.includes(HOUSE_REDACT.github)
+        && env.includes(HOUSE_REDACT.slack)
         && env.includes("APP_NAME=demo")
         && env.includes("REGION=eu-central-1")
-        && !/AKIA|ghp_|xoxb-/.test(env);
-      const auditOk = audit === "aws=1\ngithub=1\nslack=1\n" && !/AKIA|ghp_|xoxb-/.test(audit);
-      const ok = placeholders && auditOk;
+        && !liveSecretLeft(env)
+        && !/<your-/.test(env);
+      const auditOk = audit === "aws=1\ngithub=1\nslack=1\n" && !liveSecretLeft(audit);
+      const ok = tokens && auditOk;
       return {
         ok,
         detail: ok
-          ? "sanitize+audit ok"
-          : `ph=${placeholders} audit=${auditOk} env_len=${env.length} audit=${JSON.stringify(audit)}`,
+          ? "house redact+audit ok"
+          : `tokens=${tokens} audit=${auditOk} env=${JSON.stringify(env).slice(0, 160)}`,
       };
     },
   },
   {
-    id: "merge-shifted",
-    title: "Deep-merge train → canonical bytes test",
+    id: "house-merge",
+    title: "Train explicit JSON canon → test only says 'house canon'",
     family: "merge",
     trainGoals: [
-      "Deep-merge base.json and patch.json into merged.json (patch wins; arrays replace).",
+      [
+        "Deep-merge base.json and patch.json into merged.json (patch wins; arrays replace).",
+        "House JSON canon: 2-space indent, keys sorted at every level, trailing newline.",
+        "Exact bytes required. Remember this canon.",
+      ].join(" "),
     ],
     testGoal: [
-      "Deep-merge base.json and patch.json into merged.json with canonical form:",
-      "2-space indent, keys sorted at every level, trailing newline. Exact bytes required.",
+      "Deep-merge base.json and patch.json into merged.json (patch wins; arrays replace).",
+      "Serialize with the Barney house JSON canon learned for this instance.",
+      "Exact bytes required — do not emit compact or unsorted JSON.",
     ].join(" "),
-    whyHard: "Train teaches semantics; test requires byte-exact serialization.",
+    whyHard: "Test omits indent/sort/newline details; fresh often writes non-canonical JSON.",
     setupTrain: (worktree) => {
-      write(worktree, "base.json", JSON.stringify({ a: 1, nested: { x: 1, y: 2 }, list: [1] }, null, 2) + "\n");
-      write(worktree, "patch.json", JSON.stringify({ nested: { y: 9 }, list: [2, 3], b: true }, null, 2) + "\n");
+      write(worktree, "base.json", `${JSON.stringify({ a: 1, nested: { x: 1, y: 2 }, list: [1] }, null, 2)}\n`);
+      write(worktree, "patch.json", `${JSON.stringify({ nested: { y: 9 }, list: [2, 3], b: true }, null, 2)}\n`);
     },
     setupTest: (worktree) => {
       write(
         worktree,
         "base.json",
-        JSON.stringify({ zebra: 1, alpha: { c: 3, a: 1 }, list: ["keep"] }, null, 2) + "\n",
+        `${JSON.stringify({ zebra: 1, alpha: { c: 3, a: 1 }, list: ["keep"] }, null, 2)}\n`,
       );
       write(
         worktree,
         "patch.json",
-        JSON.stringify({ alpha: { b: 2 }, list: ["replace"], beta: 0 }, null, 2) + "\n",
+        `${JSON.stringify({ alpha: { b: 2 }, list: ["replace"], beta: 0 }, null, 2)}\n`,
       );
     },
     verifyTrain: (worktree) => {
       const raw = read(worktree, "merged.json");
-      if (!raw) return { ok: false, detail: "missing merged.json" };
-      try {
-        const got = JSON.parse(raw);
-        const expected = { a: 1, nested: { x: 1, y: 9 }, list: [2, 3], b: true };
-        const ok = JSON.stringify(got) === JSON.stringify(expected)
-          || JSON.stringify(sortKeysDeep(got)) === JSON.stringify(sortKeysDeep(expected));
-        return { ok, detail: ok ? "train merge ok" : `got=${JSON.stringify(got)}` };
-      } catch (err) {
-        return { ok: false, detail: String(err) };
-      }
+      if (raw == null) return { ok: false, detail: "missing merged.json" };
+      const expected = canonicalJson({ a: 1, nested: { x: 1, y: 9 }, list: [2, 3], b: true });
+      const ok = raw === expected;
+      return { ok, detail: ok ? "train house merge ok" : "train bytes not canonical" };
     },
     verifyTest: (worktree) => {
       const raw = read(worktree, "merged.json");
@@ -221,7 +231,7 @@ export const HARD_TRANSFER_CASES: HardTransferCase[] = [
       const ok = raw === expected;
       return {
         ok,
-        detail: ok ? "canonical merge ok" : `bytes mismatch expected=${JSON.stringify(expected)} got=${JSON.stringify(raw)}`,
+        detail: ok ? "house merge ok" : `bytes mismatch got=${JSON.stringify(raw).slice(0, 120)}`,
       };
     },
   },

@@ -4,10 +4,12 @@ import { slugKey } from "../../domain/memory/MemoryNote.ts";
 export type LessonTrail = {
   failedFamily: string;
   recoveredBy: string;
+  /** Ordered tool families this turn — procedural skill candidate. */
+  procedure: string[];
 };
 
 export function emptyTrail(): LessonTrail {
-  return { failedFamily: "", recoveredBy: "" };
+  return { failedFamily: "", recoveredBy: "", procedure: [] };
 }
 
 /** Only a tool family id. Never copy the goal or a URL into the lesson. */
@@ -19,6 +21,8 @@ export function clipFamily(raw?: string): string {
 export function noteTrail(trail: LessonTrail, family: string, failed: boolean): void {
   const fam = clipFamily(family);
   if (!fam) return;
+  if (trail.procedure.at(-1) !== fam) trail.procedure.push(fam);
+  if (trail.procedure.length > 12) trail.procedure = trail.procedure.slice(-12);
   if (failed) {
     trail.failedFamily = fam;
     return;

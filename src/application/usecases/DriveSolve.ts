@@ -136,6 +136,24 @@ import {
   decideExperienceWrite,
   STRUCTURAL_FAIL_CLASSES,
 } from "../experience/experienceLayers.ts";
+import { currentKernelAblation } from "../evaluation/kernelAblation.ts";
+import {
+  captureHostEnv,
+  extractRecalledRuleKeys,
+  extractRecalledSkillNames,
+  filterSkillsForRecall,
+  formatSynapse,
+  parseSynapse,
+  plasticWritePressure,
+  reconsolidateSkill,
+  reconsolidateSynapse,
+  synapseKey,
+} from "../plasticity/plasticity.ts";
+import {
+  computePredictionError,
+  formatPredictionErrorLine,
+} from "../experience/predictionError.ts";
+import type { ExperienceRecallBags, ExperienceRecallSignal } from "../experience/experienceRecall.ts";
 
 const MAX_TOOL_ROUNDS = 12;
 const WRITE_TOOLS = FILE_TOOLS.filter((tool) => tool.name === "fs_write" || tool.name === "fs_list");
@@ -264,37 +282,62 @@ export class DriveSolve {
       body: planText,
       tags: ["plan", run.taskClass],
     });
-    const shadowWarnings = await this.recallShadowWarnings(
-      `${run.goal}\n${input.message}`,
-      [...recentMemories, ...hopNotes],
-      psyche.samost.shadow,
-      input.signal,
-    );
-    const skillHints = [
-      ...skillBodyRecs.filter((r) => r.status === "frozen" || r.status === "quarantine")
-        .map((r) => `[skill:${r.name}] status=${r.status} class=${r.bornFromClass || run.taskClass}`),
-    ];
-    const experienceBags = buildExperienceBags(recall, { shadowWarnings, skillHints });
-    const experienceBlock = renderExperienceRecall(experienceBags);
+    const ablation = currentKernelAblation();
+    const shadowWarnings = ablation.recallExperience
+      ? await this.recallShadowWarnings(
+        `${run.goal}\n${input.message}`,
+        [...recentMemories, ...hopNotes],
+        psyche.samost.shadow,
+        input.signal,
+      )
+      : "";
+    const hostEnv = captureHostEnv();
+    const recallWeights: Record<string, number> = {};
+    for (const rec of skillBodyRecs) recallWeights[rec.name] = rec.strength ?? 0.4;
+    for (const rule of recall.pickedRules) {
+      // soft default; reconsolidation synapses bump later when present
+      recallWeights[rule.key] = recallWeights[rule.key] ?? 0.45;
+    }
+    const skillHints = ablation.recallExperience
+      ? filterSkillsForRecall(
+        skillBodyRecs.filter((r) => r.status === "frozen" || r.status === "quarantine" || r.status === "verified"),
+        hostEnv,
+      ).map((r) => {
+        const proc = r.procedure?.length ? ` procedure=${r.procedure.join("→")}` : "";
+        return `[skill:${r.name}] status=${r.status} class=${r.bornFromClass || run.taskClass} strength=${(r.strength ?? 0.4).toFixed(2)}${proc}`;
+      })
+      : [];
+    const experienceBags = ablation.recallExperience
+      ? buildExperienceBags(recall, {
+        shadowWarnings,
+        skillHints,
+        query: `${run.goal}\n${input.message}`,
+        weights: recallWeights,
+        topK: 5,
+      })
+      : { shadow: [], rules: [], skills: [], episodeLines: [] };
+    const experienceBlock = ablation.recallExperience ? renderExperienceRecall(experienceBags) : "";
     const memoryNote = [
       immuneBoundaryNote(agent.constitution),
-      transferHint,
-      bodyHint,
-      statsHint,
-      rules.length
+      ablation.recallExperience ? transferHint : "",
+      ablation.recallExperience ? bodyHint : "",
+      ablation.recallExperience ? statsHint : "",
+      ablation.recallExperience && rules.length
         ? `Rules from past runs (task class + shared failure modes — obey these):\n${rules.map((line) => `- ${line}`).join("\n")}`
         : "",
       experienceBlock,
       packed.digest ? `Session so far (compressed; full chat stays in the portal):\n${packed.digest}` : "",
-      renderConversationalRecall({
-        ...recall,
-        shared,
-        life,
-        relevantEpisodes,
-        modeEpisodes,
-      }, { includeRules: false }),
+      ablation.recallExperience
+        ? renderConversationalRecall({
+          ...recall,
+          shared,
+          life,
+          relevantEpisodes,
+          modeEpisodes,
+        }, { includeRules: false })
+        : "",
     ].filter(Boolean).join("\n\n");
-    if (experienceBags.shadow.length || experienceBags.rules.length || experienceBags.skills.length) {
+    if (ablation.recallExperience && (experienceBags.shadow.length || experienceBags.rules.length || experienceBags.skills.length)) {
       run.append("system", `experience_recall_ready · ${formatBagsCount(experienceBags)}`);
     }
     const failedCalls = new Set<string>();
@@ -533,18 +576,44 @@ export class DriveSolve {
       outcomeOk,
     });
     run.append("system", recallSignal.line);
-    const writeDecision = decideExperienceWrite({
-      outcomeOk,
-      recovered: Boolean(
-        lessonTrail.failedFamily
-        && lessonTrail.recoveredBy
-        && lessonTrail.recoveredBy !== lessonTrail.failedFamily,
-      ),
-      failClass: klass,
+    const pinConvention = /<barney-redact-|house (?:JSON )?canon|house redaction tokens/i
+      .test(`${run.goal}\n${learned.body}`);
+    const pe = computePredictionError({
+      reviewFail: review.verdict !== "pass" || Boolean(corrected),
+      hadFailedFamily: Boolean(lessonTrail.failedFamily),
       structuralFail: STRUCTURAL_FAIL_CLASSES.has(String(review.failureKind ?? "")),
-      modeRepeatCount: klass !== "general" ? Math.max(1, run.sameFailureCount) : 0,
-      hasConcreteDirective: Boolean(learned.body && /do not|don't|prefer|instead|first|avoid/i.test(learned.body)),
+      operatorCorrected: corrected,
     });
+    run.append("system", formatPredictionErrorLine(pe));
+    const pressure = plasticWritePressure({
+      frustration: frustrationScore({
+        extraApproaches: extra.n,
+        sameFailureCount: run.sameFailureCount,
+      }),
+      gapCount: run.sameFailureCount,
+      sameFailureCount: run.sameFailureCount,
+    });
+    run.append("system", `plastic_pressure: ${pressure.pressure.toFixed(2)} · ${pressure.reason}`);
+    if (ablation.learnBody && ablation.recallExperience) {
+      await this.reconsolidateExperience(run, agent.id.value, experienceBags, recallSignal, outcomeOk);
+    }
+    const writeDecision = ablation.learnBody
+      ? decideExperienceWrite({
+        outcomeOk,
+        recovered: Boolean(
+          lessonTrail.failedFamily
+          && lessonTrail.recoveredBy
+          && lessonTrail.recoveredBy !== lessonTrail.failedFamily,
+        ),
+        failClass: klass,
+        structuralFail: STRUCTURAL_FAIL_CLASSES.has(String(review.failureKind ?? "")),
+        modeRepeatCount: klass !== "general" ? Math.max(1, run.sameFailureCount) : 0,
+        hasConcreteDirective: Boolean(learned.body && /do not|don't|prefer|instead|first|avoid/i.test(learned.body)),
+        pinConvention,
+        plasticPressure: pressure.pressure,
+        predictionError: pe.error,
+      })
+      : { kind: "episode_only" as const, reason: "learnBody=0 · ablation" };
     run.append("system", `experience_write: ${writeDecision.kind} · ${writeDecision.reason}`);
     const nextStats = recordStrategyOutcome(
       classStats,
@@ -586,7 +655,7 @@ export class DriveSolve {
     ];
     if (outcomeOk) {
       // Experience law: episode_only → episode save only (no rule pin, no skill pin).
-      if (writeDecision.kind !== "episode_only") {
+      if (ablation.learnBody && writeDecision.kind !== "episode_only") {
         await this.remember(run, agent.id.value, {
           key: learned.key,
           title: learned.title,
@@ -598,7 +667,7 @@ export class DriveSolve {
           await this.graph.link(classKey(klass), learned.key, "learned");
         }
       }
-      const created = writeDecision.kind === "skill_candidate"
+      const created = ablation.learnBody && writeDecision.kind === "skill_candidate"
         ? await this.growBodyFromRecovery(run, agent, failKlass.last || klass, lessonTrail)
         : "";
       await this.episodes.save(
@@ -619,7 +688,7 @@ export class DriveSolve {
         }),
       );
     } else {
-      if (writeDecision.kind === "failure_rule") {
+      if (ablation.learnBody && writeDecision.kind === "failure_rule") {
         await this.remember(run, agent.id.value, {
           key: learned.key,
           title: learned.title,
@@ -645,11 +714,13 @@ export class DriveSolve {
           usd: run.budget.usdUsed,
         }),
       );
-      await this.closeFailureClass(run, agent, {
-        summary: review.summary,
-        missing: review.missing,
-        aborted: false,
-      });
+      if (ablation.learnBody) {
+        await this.closeFailureClass(run, agent, {
+          summary: review.summary,
+          missing: review.missing,
+          aborted: false,
+        });
+      }
     }
 
     await this.runs.save(run);
@@ -896,6 +967,54 @@ export class DriveSolve {
         goal: run.goal,
       }),
     };
+  }
+
+  private async reconsolidateExperience(
+    run: Run,
+    agentId: string,
+    bags: ExperienceRecallBags,
+    signal: ExperienceRecallSignal,
+    outcomeOk: boolean,
+  ): Promise<void> {
+    const skillNames = extractRecalledSkillNames(bags);
+    for (const name of skillNames) {
+      const note = await this.memory.get(skillBodyKey(name));
+      if (!note) continue;
+      const prev = parseSkillBody(note.body, name);
+      const next = reconsolidateSkill(prev, {
+        recalled: signal.recallHit,
+        used: signal.recallUsed,
+        outcomeOk,
+      });
+      await this.remember(run, agentId, {
+        key: skillBodyKey(name),
+        title: `Body: ${name}`,
+        body: JSON.stringify(next),
+        tags: ["body", "skill", next.status, "plasticity"],
+      });
+    }
+    for (const key of extractRecalledRuleKeys(bags)) {
+      const synKey = synapseKey("rule", key);
+      const note = await this.memory.get(synKey);
+      const prev = parseSynapse(note?.body ?? "", "rule", key);
+      const next = reconsolidateSynapse(prev, {
+        recalled: signal.recallHit,
+        used: signal.recallUsed,
+        outcomeOk,
+      });
+      await this.remember(run, agentId, {
+        key: synKey,
+        title: `Synapse rule ${key}`,
+        body: formatSynapse(next),
+        tags: ["plasticity", "synapse", "rule", next.status],
+      });
+    }
+    if (skillNames.length || bags.rules.length) {
+      run.append(
+        "system",
+        `reconsolidation: skills=${skillNames.length} rules=${extractRecalledRuleKeys(bags).length} used=${signal.recallUsed ? 1 : 0} ok=${outcomeOk ? 1 : 0}`,
+      );
+    }
   }
 
   private async closeFailureClass(

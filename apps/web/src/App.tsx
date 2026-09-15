@@ -35,6 +35,7 @@ export function App() {
   const [runId, setRunId] = useState<string>();
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
+  const [allowing, setAllowing] = useState(false);
   const [alert, setAlert] = useState<Alert | null>(null);
   const [pending, setPending] = useState<string | null>(null);
   const [debug, setDebug] = useState(() => localStorage.getItem("barney.debug") === "1");
@@ -309,8 +310,8 @@ export function App() {
   }
 
   async function allowOutside(prefix: string) {
-    if (!runId || !prefix.trim()) return;
-    setBusy(true);
+    if (!runId || !prefix.trim() || allowing) return;
+    setAllowing(true);
     try {
       await api<{ granted: string }>(`/api/sessions/${runId}/permissions`, {
         method: "POST",
@@ -318,10 +319,17 @@ export function App() {
       });
       setAlert(null);
       await refresh(runId);
-      await resume("continue");
+      // Mid-flight grant: the current step can use the prefix on the next fs_* call.
+      // Resume only when nothing is already running (step finished waiting for /continue).
+      const stepLive = busy || Boolean(run?.running)
+        || ["acting", "reviewing", "researching"].includes(run?.status ?? "");
+      if (!stepLive) {
+        await resume("continue");
+      }
     } catch (err) {
       setAlert(classifyClientError(err));
-      setBusy(false);
+    } finally {
+      setAllowing(false);
     }
   }
 
@@ -511,6 +519,7 @@ export function App() {
             <AlertBanner
               alert={alert}
               busy={busy}
+              allowing={allowing}
               canResume={Boolean(runId) && run?.status !== "done"}
               onContinue={() => void resume("continue")}
               onRetry={() => void resume("retry")}
@@ -685,6 +694,7 @@ function NavBtn(props: {
 function AlertBanner(props: {
   alert: Alert;
   busy: boolean;
+  allowing?: boolean;
   canResume: boolean;
   onContinue: () => void;
   onRetry: () => void;
@@ -698,7 +708,14 @@ function AlertBanner(props: {
       <div className="muted">{props.alert.detail}</div>
       <div className="alert-actions">
         {props.onAllow ? (
-          <button type="button" className="primary" disabled={props.busy} onClick={props.onAllow}>{t.allowPath}</button>
+          <button
+            type="button"
+            className="primary"
+            disabled={Boolean(props.allowing)}
+            onClick={props.onAllow}
+          >
+            {t.allowPath}
+          </button>
         ) : null}
         {props.canResume && !props.onAllow ? (
           <>
@@ -707,9 +724,9 @@ function AlertBanner(props: {
           </>
         ) : null}
         {props.canResume && props.onAllow ? (
-          <button type="button" className="item" disabled={props.busy} onClick={props.onContinue}>{t.continue}</button>
+          <button type="button" className="item" disabled={props.busy || props.allowing} onClick={props.onContinue}>{t.continue}</button>
         ) : null}
-        <button type="button" className="item" disabled={props.busy} onClick={props.onDismiss}>{t.dismiss}</button>
+        <button type="button" className="item" disabled={props.busy || props.allowing} onClick={props.onDismiss}>{t.dismiss}</button>
       </div>
     </div>
   );

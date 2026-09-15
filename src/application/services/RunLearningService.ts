@@ -6,6 +6,7 @@ import {
   skillBodyKey,
   type SkillBodyRecord,
 } from "../context/bodyStability.ts";
+import { captureHostEnv } from "../plasticity/plasticity.ts";
 import {
   bumpBacklog,
   failureClass,
@@ -79,6 +80,7 @@ export class RunLearningService {
     const draft = learnedSkillDraft(klass, {
       failedFamily: lessonTrail.failedFamily,
       recoveredBy: lessonTrail.recoveredBy,
+      procedure: lessonTrail.procedure,
     });
     if (!draft) return "";
 
@@ -89,7 +91,10 @@ export class RunLearningService {
 
     const admitted = bodyRecord && !canRewriteSkill(bodyRecord)
       ? bodyRecord
-      : admitNewSkill(draft.name, run.taskClass, klass);
+      : {
+        ...admitNewSkill(draft.name, run.taskClass, klass, captureHostEnv()),
+        procedure: lessonTrail.procedure.filter(Boolean).slice(0, 8),
+      };
     // Quarantine is a real execution boundary: only an independently promoted
     // skill may enter the agent's active lock.
     if (admitted.status !== "quarantine") {

@@ -4,6 +4,15 @@ import {
   estimateTransferEffect,
   type TransferObservation,
 } from "../../application/evaluation/counterfactualTransfer.ts";
+import {
+  formatFourHandReport,
+  runFourHandCurriculum,
+} from "../../application/evaluation/fourHandRunner.ts";
+import {
+  planSpacedProbes,
+  summarizeSpacedRetention,
+  type SpacedLiftObservation,
+} from "../../application/evaluation/spacedTransfer.ts";
 import { getKernel } from "../../composition/Kernel.ts";
 import { KernelAgentSessionApplication } from "../../composition/KernelAgentSessionApplication.ts";
 import type { RunSnapshot } from "../../domain/run/Run.ts";
@@ -43,6 +52,55 @@ const transfer = defineCommand({
     if (!Array.isArray(observations)) throw new Error("observations JSON must contain an array");
     console.log(JSON.stringify(estimateTransferEffect(observations), null, 2));
   },
+});
+
+const experienceEval = defineCommand({
+  meta: { name: "experience", description: "Four-hand hard transfer: train / test / no-kernel / fresh" },
+  args: {
+    case: { type: "string", description: "Comma-separated case ids (default: all hard cases)" },
+    out: { type: "string", description: "Output directory for JSON report" },
+  },
+  async run({ args }) {
+    const caseIds = args.case
+      ? String(args.case).split(",").map((id) => id.trim()).filter(Boolean)
+      : undefined;
+    const outDir = args.out
+      ? String(args.out)
+      : `tmp/fourhand-${new Date().toISOString().replace(/[:.]/g, "-")}`;
+    const report = await runFourHandCurriculum({ caseIds, outDir });
+    console.log(formatFourHandReport(report));
+    console.error(`wrote ${outDir}/fourhand-report.json`);
+  },
+});
+
+const spacedEval = defineCommand({
+  meta: {
+    name: "spaced",
+    description: "Summarize spaced retention from lift observations (immediate / +1d / +7d)",
+  },
+  args: {
+    observations: { type: "positional", required: true, description: "JSON array of {caseId,delayHours,transferSuccessLift}" },
+    case: { type: "string", description: "Case id (default: all unique ids in file)" },
+  },
+  async run({ args }) {
+    const parsed = await Bun.file(String(args.observations)).json() as
+      | SpacedLiftObservation[]
+      | { observations: SpacedLiftObservation[] };
+    const observations = Array.isArray(parsed) ? parsed : parsed.observations;
+    if (!Array.isArray(observations)) throw new Error("observations JSON must contain an array");
+    const ids = args.case
+      ? [String(args.case)]
+      : [...new Set(observations.map((row) => row.caseId))];
+    console.log(JSON.stringify({
+      plan: planSpacedProbes(),
+      reports: ids.map((id) => summarizeSpacedRetention(id, observations)),
+    }, null, 2));
+  },
+});
+
+const evalCmd = defineCommand({
+  meta: { name: "eval", description: "Evaluation harnesses (experience causality, transfer)" },
+  subCommands: { experience: experienceEval, spaced: spacedEval, transfer },
 });
 
 const CLI_HELP = [
@@ -493,7 +551,7 @@ const providersCmd = defineCommand({
 
 const main = defineCommand({
   meta: { name: "barney", description: "Self-extending agent kernel" },
-  subCommands: { web, acp, transfer, cli, run, agents: agentsCmd, providers: providersCmd },
+  subCommands: { web, acp, transfer, eval: evalCmd, cli, run, agents: agentsCmd, providers: providersCmd },
 });
 
 await runMain(main);

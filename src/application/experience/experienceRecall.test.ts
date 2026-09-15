@@ -34,7 +34,7 @@ test("detectRecallUsed fingerprints rule key and skill", () => {
   expect(detectRecallUsed(bags, "hello world")).toBe(false);
 });
 
-test("finalizeRecallSignal sets hit/used/helped", () => {
+test("finalizeRecallSignal does not treat pass as causal help", () => {
   const used = finalizeRecallSignal({
     bags,
     actText: "Use placeholders; avoid secret-leak",
@@ -43,9 +43,15 @@ test("finalizeRecallSignal sets hit/used/helped", () => {
   });
   expect(used.recallHit).toBe(true);
   expect(used.recallUsed).toBe(true);
-  expect(used.recallHelped).toBe(true);
-  expect(used.line).toContain("recall_hit: 1");
-  expect(used.line).toContain("recall_used: 1");
+  expect(used.recallHelped).toBeNull();
+
+  const causal = finalizeRecallSignal({
+    bags,
+    actText: "Use placeholders; avoid secret-leak",
+    outcomeOk: true,
+    causalHelp: true,
+  });
+  expect(causal.recallHelped).toBe(true);
 
   const ignored = finalizeRecallSignal({
     bags,

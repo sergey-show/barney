@@ -3,6 +3,10 @@ import type { MemoryNote } from "../../domain/memory/MemoryNote.ts";
 import type { PickedRule } from "../context/lessonRule.ts";
 import type { TurnRecallContext } from "../services/TurnRecallService.ts";
 import { clipText } from "../context/packSession.ts";
+import {
+  topKByWeightSimilarity,
+  type WeightedCandidate,
+} from "./weightedRecall.ts";
 
 /** Mandatory pre-act recall bags — Shadow / Rules / Skills. */
 export type ExperienceRecallBags = {
@@ -21,8 +25,8 @@ export type ExperienceRecallSignal = {
    */
   recallUsed: boolean;
   /**
-   * Post-hoc: success with recallUsed. Without a fresh counterfactual arm this is
-   * correlational — 4-hand curriculum measures causal help.
+   * Causal help only (four-hand / explicit counterfactual).
+   * Never inferred from hit+used+pass alone (fayr §4.4).
    */
   recallHelped: boolean | null;
   bags: ExperienceRecallBags;
@@ -31,26 +35,76 @@ export type ExperienceRecallSignal = {
 
 export function buildExperienceBags(
   recall: TurnRecallContext,
-  opts?: { shadowWarnings?: string; skillHints?: string[] },
+  opts?: {
+    shadowWarnings?: string;
+    skillHints?: string[];
+    /** Query for weight×similarity competition. */
+    query?: string;
+    /** Optional strength/weight by rule key or skill name. */
+    weights?: Record<string, number>;
+    topK?: number;
+  },
 ): ExperienceRecallBags {
-  const shadow = [
+  const query = opts?.query ?? "";
+  const weights = opts?.weights ?? {};
+  const topK = opts?.topK ?? 5;
+
+  const shadowRaw: WeightedCandidate[] = [
     ...(opts?.shadowWarnings
       ? opts.shadowWarnings.split("\n").map((line) => line.trim()).filter(Boolean)
+        .map((line) => ({ line, kind: "shadow" as const, weight: 0.55 }))
       : []),
     ...recall.relevantEpisodes
       .filter((episode) => episode.outcome === "fail")
-      .slice(0, 3)
-      .map((episode) =>
-        `[fail:${episode.failureMode ?? "unknown"}] ${clipText(episode.nextHint || episode.goal, 160)}`),
+      .map((episode) => ({
+        line: `[fail:${episode.failureMode ?? "unknown"}] ${clipText(episode.nextHint || episode.goal, 160)}`,
+        kind: "shadow" as const,
+        weight: 0.5,
+      })),
   ];
-  const rules = recall.pickedRules.slice(0, 5).map((rule) => `[rule:${rule.key}] ${clipText(rule.line, 180)}`);
-  const skills = (opts?.skillHints ?? []).slice(0, 5);
-  const episodeLines = recall.relevantEpisodes
+
+  const ruleRaw: WeightedCandidate[] = recall.pickedRules.map((rule) => ({
+    line: `[rule:${rule.key}] ${clipText(rule.line, 180)}`,
+    kind: "rule" as const,
+    weight: weights[rule.key] ?? 0.45,
+  }));
+
+  const skillRaw: WeightedCandidate[] = (opts?.skillHints ?? []).map((line) => {
+    const name = /\[skill:([^\]]+)\]/.exec(line)?.[1] ?? "";
+    return {
+      line,
+      kind: "skill" as const,
+      weight: (name && weights[name]) || 0.5,
+    };
+  });
+
+  const episodeRaw: WeightedCandidate[] = recall.relevantEpisodes
     .filter((episode) => episode.outcome === "success")
-    .slice(0, 3)
-    .map((episode) =>
-      `[ok:${episode.taskClass}] ${clipText(episode.goal, 100)} → ${clipText(episode.nextHint, 140)}`);
-  return { shadow, rules, skills, episodeLines };
+    .map((episode) => ({
+      line: `[ok:${episode.taskClass}] ${clipText(episode.goal, 100)} → ${clipText(episode.nextHint, 140)}`,
+      kind: "episode" as const,
+      weight: 0.35,
+    }));
+
+  if (!query.trim()) {
+    return {
+      shadow: shadowRaw.slice(0, 3).map((item) => item.line),
+      rules: ruleRaw.slice(0, topK).map((item) => item.line),
+      skills: skillRaw.slice(0, topK).map((item) => item.line),
+      episodeLines: episodeRaw.slice(0, 3).map((item) => item.line),
+    };
+  }
+
+  const ranked = topKByWeightSimilarity(query, [...shadowRaw, ...ruleRaw, ...skillRaw, ...episodeRaw], topK + 6);
+  const pick = (kind: WeightedCandidate["kind"], n: number) =>
+    ranked.filter((row) => row.kind === kind).slice(0, n).map((row) => row.line);
+
+  return {
+    shadow: pick("shadow", 3),
+    rules: pick("rule", topK),
+    skills: pick("skill", topK),
+    episodeLines: pick("episode", 3),
+  };
 }
 
 export function renderExperienceRecall(bags: ExperienceRecallBags): string {
@@ -94,8 +148,7 @@ export function recallFingerprints(bags: ExperienceRecallBags): string[] {
     if (failMode && failMode !== "unknown") out.push(failMode);
     const skill = /skill[\/:\s]+([a-z0-9._-]+)/i.exec(line)?.[1];
     if (skill) out.push(skill);
-    // Distinctive short phrases from the body (3+ word chunks are too noisy; take placeholders / verbs).
-    for (const token of line.match(/<your-[a-z0-9-]+>|fs_write|fs_edit|do not|don't|avoid|prefer|instead/gi) ?? []) {
+    for (const token of line.match(/<barney-redact-[a-z0-9-]+>|<your-[a-z0-9-]+>|fs_write|fs_edit|do not|don't|avoid|prefer|instead/gi) ?? []) {
       out.push(token.toLowerCase());
     }
   }
@@ -118,19 +171,33 @@ export function formatRecallSignalLine(signal: Omit<ExperienceRecallSignal, "bag
   ].join(" · ");
 }
 
+/**
+ * Finalize turn recall metrics.
+ * `causalHelp` must come from counterfactual (four-hand); never from pass alone.
+ */
 export function finalizeRecallSignal(input: {
   bags: ExperienceRecallBags;
   actText: string;
   planText?: string;
   toolEvidence?: string;
   outcomeOk: boolean;
+  /** Explicit causal help from four-hand / ablated twin. */
+  causalHelp?: boolean | null;
 }): ExperienceRecallSignal {
   const hit = experienceRecallHit(input.bags);
   const used = detectRecallUsed(
     input.bags,
     [input.planText ?? "", input.actText, input.toolEvidence ?? ""].join("\n"),
   );
-  const helped = hit && used ? input.outcomeOk : hit && used === false ? false : null;
+  let helped: boolean | null = null;
+  if (input.causalHelp != null) {
+    helped = input.causalHelp;
+  } else if (hit && used === false) {
+    helped = false;
+  } else {
+    // Unknown without counterfactual — fayr: do not treat pass as help.
+    helped = null;
+  }
   const partial = { recallHit: hit, recallUsed: used, recallHelped: helped, bags: input.bags };
   return {
     ...partial,

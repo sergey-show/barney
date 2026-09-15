@@ -17,33 +17,34 @@ Marker lift доказывает **петлю**.
 | **Failure rule** | «при ошибке F не делай A, делай B» | похожий failure-mode |
 | **Skill** | переиспользуемый путь действия | другой task class (transfer) |
 
-Не каждый PASS пишет skill. Не каждый FAIL пишет rule.
+Не каждый PASS пишет skill. Не каждый FAIL пишет rule. Pin предпочитает **prediction error**.
 
 | Исход | Запись |
 |---|---|
-| PASS + failed path → другой path → success | `skill_candidate` (quarantine) |
-| FAIL + повтор / structural + конкретная директива | `failure_rule` |
+| PASS + failed path → другой path → success + PE | `skill_candidate` (quarantine; может нести `procedure`) |
+| FAIL + PE + повтор/structural + конкретная директива | `failure_rule` |
+| PASS + house convention pin | `lesson_pin` |
 | Иначе | `episode_only` (без pin в body) |
 
-Код: `src/application/experience/experienceLayers.ts`.
+Код: `experienceLayers.ts`, `predictionError.ts`.
 
 ## Обязательный pre-act recall
 
-Перед act — три корзины:
+Перед act — корзины, ранжированные **weight × similarity**:
 
 1. **Shadow** — похожие fails  
 2. **Rules** — директивы по failure-mode  
-3. **Skills** — quarantine / verified / frozen  
+3. **Skills** — quarantine / verified / frozen (в т.ч. procedure)  
 
 И лог:
 
 ```text
 recall_hit: 0/1
 recall_used: 0/1   # plan/act/tools оставили отпечаток урока
-recall_helped: 0/1 # корреляция до 4-hand; 1 только при hit+used+pass
+recall_helped: 0/1/?  # только каузально (four-hand); не из pass alone
 ```
 
-Код: `src/application/experience/experienceRecall.ts` (проводка в `DriveSolve`).
+Код: `experienceRecall.ts`, `weightedRecall.ts` (проводка в `DriveSolve`).
 
 ## Четыре руки (hard transfer)
 
@@ -57,10 +58,17 @@ recall_helped: 0/1 # корреляция до 4-hand; 1 только при hit
 4. **no-kernel** (та же модель, без body)  
 5. **kernel-fresh** (полное ядро, пустое body)
 
-Критерий опыта: **kernel-test > kernel-fresh** на сдвинутом тесте.
+Критерий опыта: **kernel-test > kernel-fresh** на сдвинутом тесте.  
+Каузальный `recall_helped` на kernel-test: **pass ∧ fresh fail ∧ recall_used**.
 
-Сиды: `HARD_TRANSFER_CASES` в `src/application/evaluation/fourHandCurriculum.ts`  
-(`sanitize-shifted`, `merge-shifted`).
+Сиды: `HARD_TRANSFER_CASES` (`house-redact`, `house-merge`).
+
+Spaced retention (immediate / +1d / +7d): `spacedTransfer.ts`.  
+Immediate — в four-hand отчёте; позже: `barney eval spaced <observations.json>`.
+
+## Dream consolidation
+
+Idle dream compress мержит похожие failure rules (`mergeFailureRules`).
 
 ## Метрики
 
@@ -69,9 +77,15 @@ recall_helped: 0/1 # корреляция до 4-hand; 1 только при hit
 | `transfer_success_lift` | pass rate test: kernel-with-train − kernel-fresh |
 | `recall_hit_rate` | доля шагов с релевантным recall |
 | `recall_used_rate` | доля, где plan/act реально откликнулся |
+| `recall_helped` | только каузально (four-hand) |
+| `spaced retention` | lift по задержкам (`retains` / `fades`) |
 | `skill_reuse_rate` | verified skill на новой задаче |
 | `false_skill_rate` | pinned skill, который не помог / мешал |
 | `shadow_to_rule` | fails → rules, которые потом сработали |
+
+## Стык с fayr
+
+См. [plasticity.ru.md](plasticity.ru.md) и `bio/fayr.md`.
 
 
 К [оглавлению](README.ru.md).

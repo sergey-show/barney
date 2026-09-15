@@ -60,6 +60,28 @@ export function compressShadowLocally(shadow: string[], limit = DREAM_KEEP): str
   return kept;
 }
 
+/**
+ * Merge similar failure rules into fewer heuristics (fayr dream consolidation).
+ * Keeps the shorter imperative when two rules share ≥2 tokens.
+ */
+export function mergeFailureRules(rules: string[], limit = DREAM_KEEP): string[] {
+  const cleaned = rules
+    .map((line) => line.replace(/\s+/g, " ").trim())
+    .filter((line) => line.length > 12);
+  const merged: string[] = [];
+  for (const line of cleaned) {
+    const tokens = tokenize(line);
+    const idx = merged.findIndex((other) => overlap(tokenize(other), tokens) >= 2);
+    if (idx >= 0) {
+      if (line.length < merged[idx]!.length) merged[idx] = clipHeuristic(line);
+      continue;
+    }
+    merged.push(clipHeuristic(line));
+    if (merged.length >= limit) break;
+  }
+  return merged;
+}
+
 export function applyDreamHeuristics(samost: Samost, heuristics: string[]): Samost {
   const cleaned = cleanHeuristics(heuristics).slice(0, DREAM_KEEP);
   if (!cleaned.length) return samost;

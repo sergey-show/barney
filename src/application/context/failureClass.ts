@@ -18,6 +18,7 @@ export function learnedSkillDraft(klass: string, path: {
   failedFamily?: string;
   recoveredBy?: string;
   line?: string;
+  procedure?: string[];
 }): { name: string; body: string } | null {
   if (klass === "general" || klass === "aborted-unfinished") return null;
   const failed = (path.failedFamily ?? "").trim().toLowerCase().slice(0, 40);
@@ -29,6 +30,7 @@ export function learnedSkillDraft(klass: string, path: {
   ].find((item) => item) ?? "";
   if (!line) return null;
   const name = `learned-${klass}`;
+  const procedure = (path.procedure ?? []).map((step) => step.trim()).filter(Boolean).slice(0, 8);
   return {
     name,
     body: [
@@ -37,12 +39,14 @@ export function learnedSkillDraft(klass: string, path: {
       `description: Scheme that recovered a ${klass} miss.`,
       "origin: learned",
       "status: quarantine",
+      procedure.length ? `procedure: ${procedure.join(" → ")}` : "",
       "---",
       "",
       line,
+      procedure.length ? `Procedure: ${procedure.join(" → ")}` : "",
       "Do not repeat the failed family. Do not edit the kernel.",
       "",
-    ].join("\n"),
+    ].filter((row) => row !== "").join("\n"),
   };
 }
 

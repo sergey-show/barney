@@ -10,10 +10,33 @@ import { parseBoard } from "../application/psyche/board.ts";
 import { appendExistence, formatExistence, parseExistence } from "../application/psyche/existence.ts";
 import { nextIdleWork, studyQuery } from "../application/psyche/idleTick.ts";
 import {
+  agendaMemoryKey,
+  formatAgenda,
+  gapsFromBacklogRows,
+  gapsFromFailEpisodes,
+  markAgenda,
+  mergeAgenda,
+  nextPending,
+  parseAgenda,
+  proposeAgendaItem,
+  type AgendaItem,
+} from "../application/autonomy/agenda.ts";
+import { parseBacklog } from "../application/context/failureClass.ts";
+import {
+  needsPlasticSleep,
+  planPlasticSleep,
+  planSynapseSleep,
+  parseSynapse,
+  formatSynapse,
+  synapseKey,
+} from "../application/plasticity/plasticity.ts";
+import { parseSkillBody, skillBodyKey } from "../application/context/bodyStability.ts";
+import {
   applyDreamHeuristics,
   compressShadowLocally,
   dreamSystemPrompt,
   dreamUserPrompt,
+  mergeFailureRules,
   parseDreamHeuristics,
 } from "../application/psyche/dream.ts";
 import { slugKey } from "../domain/memory/MemoryNote.ts";
@@ -96,6 +119,8 @@ export class Kernel {
   private recovered = false;
   private lastIdleAt = 0;
   private lastStudyAt = 0;
+  private lastSelfRunAt = 0;
+  private lastPlasticSleepAt = 0;
   private readonly research = new CompositeResearch(new Context7FirstResearch(), new DuckDuckGoSearch());
   /** Session grants for fs_* paths outside the worktree (prefix → allowed). */
   private readonly outsideGrants = new Map<string, Set<string>>();
@@ -225,6 +250,18 @@ export class Kernel {
       .map((item) => Date.parse(item.at))
       .filter((ms) => Number.isFinite(ms))
       .sort((a, b) => b - a)[0];
+    const agenda = await this.refreshAgenda(agent.id.value, fails, recent);
+    const pending = nextPending(agenda);
+    const operatorBusy = Boolean(
+      open
+      && !isDesignGoal(open.goal)
+      && !/^Autonomy drill\b/i.test(open.goal),
+    );
+    const skillNotes = recent.filter((note) => note.tags.includes("body") && note.tags.includes("skill"));
+    const skillRecs = skillNotes.map((note) => {
+      const name = note.key.replace(/^body\/skill\//, "") || note.title;
+      return parseSkillBody(note.body, name);
+    });
     const work = nextIdleWork({
       samostPresent: Boolean(samostNote),
       samost,
@@ -235,10 +272,16 @@ export class Kernel {
       failHints: fails.map((episode) => episode.nextHint || episode.goal),
       studied,
       studyCooldownMs: Date.now() - this.lastStudyAt,
+      selfRunCooldownMs: Date.now() - this.lastSelfRunAt,
+      plasticSleepCooldownMs: Date.now() - this.lastPlasticSleepAt,
+      needsPlasticSleep: needsPlasticSleep(skillRecs),
+      pendingSelfRun: !operatorBusy && pending
+        ? { agendaId: pending.id, goal: pending.goal, failClass: pending.failClass }
+        : null,
     });
     if (work.item === "none") return null;
     const designed = await this.memories.get(designKey(agent.id.value));
-    if (work.item === "study" && !isDesignSealed(designed?.body)) return null;
+    if ((work.item === "study" || work.item === "self_run") && !isDesignSealed(designed?.body)) return null;
     if (work.item === "seed_samost") {
       await this.memories.save(new MemoryNote({
         key: samostKey(agent.id.value),
@@ -299,26 +342,171 @@ export class Kernel {
           sourceAgentId: agent.id.value,
         }));
       }
+    } else if (work.item === "self_run") {
+      await this.runAutonomyDrill(agent.id.value, work.agendaId, work.goal, work.failClass);
+    } else if (work.item === "plastic_sleep") {
+      await this.runPlasticSleep(agent.id.value, skillRecs, recent);
     }
-    if (work.item === "seed_samost" || work.item === "absorb_shadow" || work.item === "dream" || work.item === "study") {
+    if (
+      work.item === "seed_samost"
+      || work.item === "absorb_shadow"
+      || work.item === "dream"
+      || work.item === "study"
+      || work.item === "self_run"
+      || work.item === "plastic_sleep"
+    ) {
       await this.become(agent.id.value, `become: idle ${work.item}`);
     }
     this.events.publish([event("psyche.tick", { item: work.item })]);
     return work.item;
   }
 
+  private async refreshAgenda(
+    agentId: string,
+    fails: Array<{ failureMode?: string | null; nextHint?: string | null; outcome: string }>,
+    recent: MemoryNote[],
+  ): Promise<AgendaItem[]> {
+    const key = agendaMemoryKey(agentId);
+    const existing = parseAgenda((await this.memories.get(key))?.body ?? "");
+    const backlogGaps = gapsFromBacklogRows(
+      recent
+        .filter((note) => note.tags.includes("backlog"))
+        .map((note) => {
+          const row = parseBacklog(note.body);
+          return row ? { klass: row.klass, count: row.count, hint: note.title } : null;
+        })
+        .filter((row): row is { klass: string; count: number; hint: string } => Boolean(row)),
+    );
+    const episodeGaps = gapsFromFailEpisodes(fails);
+    const proposed = [...backlogGaps, ...episodeGaps].map((gap) => proposeAgendaItem(gap));
+    const merged = mergeAgenda(existing, proposed);
+    if (JSON.stringify(merged) !== JSON.stringify(existing)) {
+      await this.memories.save(new MemoryNote({
+        key,
+        title: "Autonomy agenda",
+        body: formatAgenda(merged),
+        tags: ["agenda", "autonomy"],
+        sourceAgentId: agentId,
+      }));
+    }
+    return merged;
+  }
+
+  private async runPlasticSleep(
+    agentId: string,
+    skillRecs: ReturnType<typeof parseSkillBody>[],
+    recent: MemoryNote[],
+  ): Promise<void> {
+    this.lastPlasticSleepAt = Date.now();
+    const { next, actions } = planPlasticSleep(skillRecs);
+    for (const rec of next) {
+      const prev = skillRecs.find((item) => item.name === rec.name);
+      if (!prev || JSON.stringify(prev) === JSON.stringify(rec)) continue;
+      await this.memories.save(new MemoryNote({
+        key: skillBodyKey(rec.name),
+        title: `Body: ${rec.name}`,
+        body: JSON.stringify(rec),
+        tags: ["body", "skill", rec.status, "plasticity", "sleep"],
+        sourceAgentId: agentId,
+      }));
+    }
+    const synNotes = recent.filter((note) => note.tags.includes("synapse"));
+    const synapses = synNotes.map((note) => {
+      const ref = note.key.replace(/^plasticity\/rule\//, "") || note.title;
+      return parseSynapse(note.body, "rule", ref);
+    });
+    const slept = planSynapseSleep(synapses);
+    for (const syn of slept) {
+      await this.memories.save(new MemoryNote({
+        key: synapseKey(syn.kind, syn.ref),
+        title: `Synapse ${syn.kind} ${syn.ref}`,
+        body: formatSynapse(syn),
+        tags: ["plasticity", "synapse", syn.kind, syn.status, "sleep"],
+        sourceAgentId: agentId,
+      }));
+    }
+    const meaningful = actions.filter((action) => action.op !== "keep");
+    await this.memories.save(new MemoryNote({
+      key: slugKey(`plasticity/sleep/${new Date().toISOString().slice(0, 13)}`),
+      title: "Plastic sleep",
+      body: meaningful.length
+        ? meaningful.map((action) => JSON.stringify(action)).join("\n")
+        : "no structural changes",
+      tags: ["plasticity", "sleep"],
+      sourceAgentId: agentId,
+    }));
+  }
+
+  private async runAutonomyDrill(
+    agentId: string,
+    agendaId: string,
+    goal: string,
+    failClass: string,
+  ): Promise<void> {
+    this.lastSelfRunAt = Date.now();
+    const key = agendaMemoryKey(agentId);
+    let items = parseAgenda((await this.memories.get(key))?.body ?? "");
+    items = markAgenda(items, agendaId, { status: "running" });
+    await this.memories.save(new MemoryNote({
+      key,
+      title: "Autonomy agenda",
+      body: formatAgenda(items),
+      tags: ["agenda", "autonomy"],
+      sourceAgentId: agentId,
+    }));
+    try {
+      const created = await this.createRun(goal, agentId);
+      items = markAgenda(items, agendaId, { status: "running", runId: created.id.value });
+      await this.memories.save(new MemoryNote({
+        key,
+        title: "Autonomy agenda",
+        body: formatAgenda(items),
+        tags: ["agenda", "autonomy"],
+        sourceAgentId: agentId,
+      }));
+      const done = await this.send(created.id.value, goal);
+      const ok = done.status === "done";
+      items = markAgenda(items, agendaId, {
+        status: ok ? "done" : "dropped",
+        runId: created.id.value,
+        finishedAt: new Date().toISOString(),
+      });
+      await this.memories.save(new MemoryNote({
+        key,
+        title: "Autonomy agenda",
+        body: formatAgenda(items),
+        tags: ["agenda", "autonomy", failClass, ok ? "done" : "dropped"],
+        sourceAgentId: agentId,
+        sourceRunId: created.id.value,
+      }));
+    } catch {
+      items = markAgenda(items, agendaId, {
+        status: "dropped",
+        finishedAt: new Date().toISOString(),
+      });
+      await this.memories.save(new MemoryNote({
+        key,
+        title: "Autonomy agenda",
+        body: formatAgenda(items),
+        tags: ["agenda", "autonomy", "dropped"],
+        sourceAgentId: agentId,
+      }));
+    }
+  }
+
   private async dreamCompress(shadow: string[], rules: string[]): Promise<string[]> {
+    const mergedRules = mergeFailureRules(rules);
     try {
       const result = await this.llm.complete("planner", [
         { role: "system", content: dreamSystemPrompt() },
-        { role: "user", content: dreamUserPrompt(shadow, rules) },
+        { role: "user", content: dreamUserPrompt(shadow, mergedRules) },
       ]);
       const parsed = parseDreamHeuristics(result.text || result.thinking || "");
-      if (parsed.length) return parsed;
+      if (parsed.length) return mergeFailureRules([...parsed, ...mergedRules]);
     } catch {
       /* local fallback */
     }
-    return compressShadowLocally(shadow);
+    return mergeFailureRules([...compressShadowLocally(shadow), ...mergedRules]);
   }
 
   private async postDesignSession(agentId: string): Promise<void> {

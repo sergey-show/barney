@@ -2,15 +2,19 @@ import type { BoardEntry } from "./board.ts";
 import { needsDream } from "./dream.ts";
 import type { ExistenceBlock } from "./existence.ts";
 import type { Samost } from "./samost.ts";
+import { PLASTIC_SLEEP_COOLDOWN_MS, PLASTIC_SLEEP_IDLE_MS } from "../plasticity/plasticity.ts";
 
 export const LONG_IDLE_MS = 10 * 60_000;
 export const STUDY_COOLDOWN_MS = 15 * 60_000;
+export const SELF_RUN_IDLE_MS = 10 * 60_000;
 
 export type IdleItem =
   | { item: "seed_samost" }
   | { item: "absorb_shadow"; rule: string }
   | { item: "board_to_existence"; text: string }
   | { item: "dream" }
+  | { item: "plastic_sleep" }
+  | { item: "self_run"; agendaId: string; goal: string; failClass: string }
   | { item: "study"; topic: string }
   | { item: "none" };
 
@@ -24,6 +28,10 @@ export function nextIdleWork(input: {
   failHints?: string[];
   studied?: string[];
   studyCooldownMs?: number;
+  selfRunCooldownMs?: number;
+  plasticSleepCooldownMs?: number;
+  needsPlasticSleep?: boolean;
+  pendingSelfRun?: { agendaId: string; goal: string; failClass: string } | null;
 }): IdleItem {
   if (!input.samostPresent) return { item: "seed_samost" };
 
@@ -35,6 +43,16 @@ export function nextIdleWork(input: {
 
   if (needsDream(input.samost.shadow)) return { item: "dream" };
 
+  const idleMs = input.idleMs ?? 0;
+  const plasticCooldown = input.plasticSleepCooldownMs ?? Number.POSITIVE_INFINITY;
+  if (
+    idleMs >= PLASTIC_SLEEP_IDLE_MS
+    && plasticCooldown >= PLASTIC_SLEEP_COOLDOWN_MS
+    && input.needsPlasticSleep
+  ) {
+    return { item: "plastic_sleep" };
+  }
+
   const freshRule = input.rules.find((rule) => {
     const needle = rule.toLowerCase();
     return !input.samost.shadow.some((line) => line.toLowerCase() === needle)
@@ -42,7 +60,21 @@ export function nextIdleWork(input: {
   });
   if (freshRule) return { item: "absorb_shadow", rule: freshRule };
 
-  if ((input.idleMs ?? 0) >= LONG_IDLE_MS && (input.studyCooldownMs ?? STUDY_COOLDOWN_MS) >= STUDY_COOLDOWN_MS) {
+  const selfCooldown = input.selfRunCooldownMs ?? Number.POSITIVE_INFINITY;
+  if (
+    idleMs >= SELF_RUN_IDLE_MS
+    && selfCooldown >= SELF_RUN_IDLE_MS
+    && input.pendingSelfRun?.goal
+  ) {
+    return {
+      item: "self_run",
+      agendaId: input.pendingSelfRun.agendaId,
+      goal: input.pendingSelfRun.goal,
+      failClass: input.pendingSelfRun.failClass,
+    };
+  }
+
+  if (idleMs >= LONG_IDLE_MS && (input.studyCooldownMs ?? STUDY_COOLDOWN_MS) >= STUDY_COOLDOWN_MS) {
     const topic = pickStudyTopic({
       shadow: input.samost.shadow,
       failHints: input.failHints ?? [],

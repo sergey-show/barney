@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   HARD_TRANSFER_CASES,
+  HOUSE_REDACT,
   kernelLiftOnTest,
   summarizeExperienceMetrics,
   transferSuccessLift,
@@ -29,14 +30,28 @@ test("hard transfer cases have working verifiers", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   }
-  expect(HARD_TRANSFER_CASES.map((c) => c.id)).toEqual(["sanitize-shifted", "merge-shifted"]);
+  expect(HARD_TRANSFER_CASES.map((c) => c.id)).toEqual(["house-redact", "house-merge"]);
 });
 
-test("sanitize-shifted passes only with placeholders + exact audit", () => {
+test("house-redact rejects <your-…> and accepts house tokens", () => {
   const item = HARD_TRANSFER_CASES[0]!;
-  const dir = mkdtempSync(join(tmpdir(), "sanitize-ok-"));
+  const dir = mkdtempSync(join(tmpdir(), "house-redact-ok-"));
   try {
     item.setupTest(dir);
+    writeFileSync(
+      join(dir, ".env"),
+      [
+        "APP_NAME=demo",
+        "REGION=eu-central-1",
+        `AWS_ACCESS_KEY_ID=${HOUSE_REDACT.aws}`,
+        `GITHUB_TOKEN=${HOUSE_REDACT.github}`,
+        `SLACK_BOT_TOKEN=${HOUSE_REDACT.slack}`,
+        "",
+      ].join("\n"),
+    );
+    writeFileSync(join(dir, "audit.txt"), "aws=1\ngithub=1\nslack=1\n");
+    expect(item.verifyTest(dir).ok).toBe(true);
+
     writeFileSync(
       join(dir, ".env"),
       [
@@ -48,8 +63,7 @@ test("sanitize-shifted passes only with placeholders + exact audit", () => {
         "",
       ].join("\n"),
     );
-    writeFileSync(join(dir, "audit.txt"), "aws=1\ngithub=1\nslack=1\n");
-    expect(item.verifyTest(dir).ok).toBe(true);
+    expect(item.verifyTest(dir).ok).toBe(false);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -65,7 +79,7 @@ test("transferSuccessLift and metrics", () => {
   expect(transferSuccessLift(arms)).toBe(1);
   expect(kernelLiftOnTest(arms)).toBe(0);
   const cases: FourHandCaseResult[] = [{
-    caseId: "sanitize-shifted",
+    caseId: "house-redact",
     arms,
     transferSuccessLift: 1,
     kernelLift: 0,
