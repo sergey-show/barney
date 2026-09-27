@@ -1,9 +1,24 @@
 import { buildActSystem, turnLawFromConstitution, workspaceLines } from "../context/actPrompt.ts";
 import { cycleStrategy, familyKey, familySaturated, frustrationScore, stopAfterFail, wantingWithoutLiking, type HaltReason } from "../context/controlLoop.ts";
+import {
+  formatSystem2ForceLine,
+  shouldForceSystem2,
+  system2PreferStrategies,
+} from "../context/system2Force.ts";
+import {
+  buildCapabilityMap,
+  formatCapabilityHint,
+} from "../context/capabilityMap.ts";
 import { draftPlan, formatPlan } from "../context/draftPlan.ts";
 import { bindToolArgs, goalAnchors } from "../context/bindAnchor.ts";
 import { bumpBacklog, failureClass, formatBacklog, learnedSkillDraft, parseBacklog } from "../context/failureClass.ts";
 import { emptyTrail, formatLessonLine, lessonRule, noteTrail, isRecapLesson, type LessonTrail } from "../context/lessonRule.ts";
+import {
+  formatCalibrationLine,
+  parseConfidenceFromNote,
+  predictFromRecalls,
+  scoreCalibration,
+} from "../context/calibration.ts";
 import {
   classifyReuse,
   emptyTransferStats,
@@ -19,7 +34,6 @@ import {
   canRewriteSkill,
   formatSkillBodyHint,
   parseSkillBody,
-  recordSkillOutcome,
   skillBodyKey,
   type SkillBodyRecord,
 } from "../context/bodyStability.ts";
@@ -31,6 +45,11 @@ import { askedToReplaceSecrets, secretSanitizePersistNudge } from "../context/se
 import { measureProgress, type ProgressSnapshot } from "../context/progressSignal.ts";
 import { pickTactic } from "../context/tacticPick.ts";
 import { immuneBoundaryNote, selfGateTool, selfViolationNote } from "../context/selfGate.ts";
+import {
+  CAPABILITY_LAW_LINE,
+  discoverLedgerFromTranscript,
+  gateCapabilityWrite,
+} from "../context/capabilityDiscover.ts";
 import {
   emptyStats,
   formatStatsHint,
@@ -147,7 +166,6 @@ import {
   formatSynapse,
   parseSynapse,
   plasticWritePressure,
-  reconsolidateSkill,
   reconsolidateSynapse,
   synapseKey,
 } from "../plasticity/plasticity.ts";
@@ -207,6 +225,12 @@ export class DriveSolve {
     if (isDesignGoal(run.goal) && depth === 0) {
       return this.sealDesign(run, agent, input.message);
     }
+    if (depth === 0) {
+      const healed = await this.learning.healSkillLocks(agent);
+      if (healed > 0) {
+        run.append("system", `skill_lock_heal: pinned=${healed}`);
+      }
+    }
     const recall = await this.recall.load({
       agentId: agent.id.value,
       runId: run.id.value,
@@ -216,6 +240,27 @@ export class DriveSolve {
     let routed: TurnRoute | undefined;
     if (depth === 0) {
       routed = await this.routeTurn(run, throwIfAborted, input.signal);
+      const earlyShadowHits = recall.relevantEpisodes.filter((episode) => episode.outcome === "fail").length
+        + (recall.pickedRules.length ? 1 : 0);
+      const earlyFrustration = frustrationScore({
+        extraApproaches: 0,
+        sameFailureCount: run.sameFailureCount,
+      });
+      if (shouldForceSystem2({
+        shadowHits: earlyShadowHits,
+        frustration: earlyFrustration,
+        shortProposed: routed.short,
+      })) {
+        routed = {
+          ...routed,
+          short: false,
+          needResearch: routed.needResearch || earlyShadowHits >= 2,
+        };
+        run.append("system", formatSystem2ForceLine({
+          shadowHits: earlyShadowHits,
+          frustration: earlyFrustration,
+        }));
+      }
       if (!input.forceFull && routed.short) {
         const short = await this.executeShort(run, agent, input.message, recall, throwIfAborted, input.signal);
         if (short !== "full") return short;
@@ -319,10 +364,14 @@ export class DriveSolve {
       })
       : { shadow: [], rules: [], skills: [], episodeLines: [] };
     const experienceBlock = ablation.recallExperience ? renderExperienceRecall(experienceBags) : "";
+    const capabilityHint = ablation.recallExperience
+      ? formatCapabilityHint(buildCapabilityMap({ skills: skillBodyRecs }))
+      : "";
     const memoryNote = [
       immuneBoundaryNote(agent.constitution),
       ablation.recallExperience ? transferHint : "",
       ablation.recallExperience ? bodyHint : "",
+      ablation.recallExperience ? capabilityHint : "",
       ablation.recallExperience ? statsHint : "",
       ablation.recallExperience && rules.length
         ? `Rules from past runs (task class + shared failure modes — obey these):\n${rules.map((line) => `- ${line}`).join("\n")}`
@@ -495,6 +544,7 @@ export class DriveSolve {
         failKlass,
         progressBag,
         classStats,
+        shadowHits: experienceBags.shadow.length,
       });
       act = persisted.act;
       review = persisted.review;
@@ -538,6 +588,22 @@ export class DriveSolve {
       || note.key.startsWith(`rule/${run.taskClass}/`)
       || (klass !== "general" && note.key.includes(`/mode/${klass}/`)),
     );
+    const priorConfidence = priorRule
+      ? parseConfidenceFromNote(priorRule)
+      : undefined;
+    const priorVersion = priorRule
+      ? Number(priorRule.body.match(/\(v(\d+),/)?.[1] ?? 1) || 1
+      : undefined;
+    const outcomeOk = review.verdict === "pass" && !corrected;
+    const toolEvidence = artifactEvidence(run);
+    const recallSignal = finalizeRecallSignal({
+      bags: experienceBags,
+      actText: act.text,
+      planText,
+      toolEvidence,
+      outcomeOk,
+    });
+    run.append("system", recallSignal.line);
     const learned = lessonRule({
       taskClass: run.taskClass,
       goal: run.goal,
@@ -552,8 +618,10 @@ export class DriveSolve {
       recoveredBy: lessonTrail.recoveredBy,
       familyFailCount: lessonTrail.failedFamily ? (familyFails.get(lessonTrail.failedFamily) ?? maxFamilyFails) : maxFamilyFails,
       sources: [run.id.value],
-      priorConfidence: priorRule ? 0.4 : undefined,
-      priorVersion: priorRule ? 1 : undefined,
+      priorConfidence: priorConfidence && priorConfidence > 0 ? priorConfidence : undefined,
+      priorVersion,
+      recallUsed: recallSignal.recallUsed,
+      outcomeOk,
     });
     if (!isRecapLesson(learned.body)) {
       psyche.samost = absorbIntoSamost(psyche.samost, learned.body, review.verdict === "pass" && !corrected ? "light" : "shadow");
@@ -568,16 +636,6 @@ export class DriveSolve {
     });
     await this.flushPsyche(run, agent.id.value, psyche);
     const lastStrategy = run.usedStrategies.at(-1) || "retry_with_error";
-    const outcomeOk = review.verdict === "pass" && !corrected;
-    const toolEvidence = artifactEvidence(run);
-    const recallSignal = finalizeRecallSignal({
-      bags: experienceBags,
-      actText: act.text,
-      planText,
-      toolEvidence,
-      outcomeOk,
-    });
-    run.append("system", recallSignal.line);
     const pinConvention = /<barney-redact-|house (?:JSON )?canon|house redaction tokens/i
       .test(`${run.goal}\n${learned.body}`);
     const pe = computePredictionError({
@@ -596,9 +654,43 @@ export class DriveSolve {
       sameFailureCount: run.sameFailureCount,
     });
     run.append("system", `plastic_pressure: ${pressure.pressure.toFixed(2)} · ${pressure.reason}`);
+    let skillOutcomes = { promoted: [] as string[], reused: [] as string[], falseSkills: [] as string[] };
     if (ablation.learnBody && ablation.recallExperience) {
       await this.reconsolidateExperience(run, agent.id.value, experienceBags, recallSignal, outcomeOk);
+      skillOutcomes = await this.learning.applyRecalledSkillOutcomes(run, agent, {
+        bags: experienceBags,
+        recallHit: recallSignal.recallHit,
+        recallUsed: recallSignal.recallUsed,
+        success: outcomeOk,
+        transfer: reuse === "transfer",
+      });
+      if (skillOutcomes.promoted.length) {
+        run.append("system", `skill_promoted: ${skillOutcomes.promoted.join(",")}`);
+      }
+      if (skillOutcomes.reused.length) {
+        run.append("system", `skill_reuse: 1 · names=${skillOutcomes.reused.join(",")}`);
+      }
+      if (skillOutcomes.falseSkills.length) {
+        run.append("system", `skill_false: 1 · names=${skillOutcomes.falseSkills.join(",")}`);
+      }
     }
+    const recalledSkillNames = new Set(extractRecalledSkillNames(experienceBags));
+    const ruleConfidences = recalledMeta
+      .map((r) => parseConfidenceFromNote({
+        body: r.line,
+        tags: recentMemories.find((n) => n.key === r.key)?.tags,
+      }))
+      .filter((n): n is number => n != null);
+    const skillStrengths = skillBodyRecs
+      .filter((r) => recalledSkillNames.has(r.name))
+      .map((r) => r.strength ?? 0.4);
+    const predicted = predictFromRecalls({
+      ruleConfidences,
+      skillStrengths,
+      fallback: priorConfidence ?? learned.confidence,
+    });
+    const calib = scoreCalibration(predicted, outcomeOk);
+    run.append("system", formatCalibrationLine(calib));
     const writeDecision = ablation.learnBody
       ? decideExperienceWrite({
         outcomeOk,
@@ -638,6 +730,13 @@ export class DriveSolve {
     await this.touchSkillBodies(run, agent, skillBodyRecs, {
       success: outcomeOk,
       transfer: reuse === "transfer",
+      skipNames: recalledSkillNames,
+    });
+    const turnFrustration = frustrationScore({
+      extraApproaches: extra.n,
+      sameFailureCount: run.sameFailureCount,
+      saturatedFamilies: [...familyFails.values()].filter((n) => familySaturated(n)).length,
+      progressScore: review.progressScore,
     });
     const epMarkers = buildEpisodeMarkers({
       source: "solve",
@@ -645,9 +744,17 @@ export class DriveSolve {
       goalHash: gHash,
       reuse,
       rulesRecalled: recalledMeta.map((r) => r.key),
+      skillsRecalled: [...recalledSkillNames],
+      skillsReused: skillOutcomes.reused,
+      skillsPromoted: skillOutcomes.promoted,
       failureMode: outcomeOk ? (failKlass.last || null) : (review.verdict || klass),
       progressScore: review.progressScore,
       experience: !outcomeOk,
+      predictionError: pe.error,
+      frustration: turnFrustration,
+      confPredicted: calib.predicted,
+      calibBrier: calib.brier,
+      overconfident: calib.overconfident,
     });
     const ruleTags = [
       "rule",
@@ -680,8 +787,12 @@ export class DriveSolve {
           goal: run.goal,
           outcome: "success",
           failureMode: null,
-          capabilitiesUsed: agent.skillsLock.list().map((s) => `${s.kind}:${s.name}`).concat("solve:act"),
-          capabilitiesCreated: created ? [`skill:${created}`] : [],
+          capabilitiesUsed: agent.skillsLock.list().map((s) => `${s.kind}:${s.name}`)
+            .concat(skillOutcomes.reused.map((name) => `skill:${name}`))
+            .concat("solve:act"),
+          capabilitiesCreated: created
+            ? [`skill:${created}`, ...skillOutcomes.promoted.map((name) => `skill:${name}`)]
+            : skillOutcomes.promoted.map((name) => `skill:${name}`),
           markers: epMarkers,
           nextHint: learned.body,
           worktreeRef: run.worktreePath,
@@ -707,8 +818,10 @@ export class DriveSolve {
           goal: run.goal,
           outcome: "fail",
           failureMode: review.verdict,
-          capabilitiesUsed: agent.skillsLock.list().map((s) => `${s.kind}:${s.name}`).concat("solve:act"),
-          capabilitiesCreated: [],
+          capabilitiesUsed: agent.skillsLock.list().map((s) => `${s.kind}:${s.name}`)
+            .concat(skillOutcomes.falseSkills.map((name) => `skill:${name}`))
+            .concat("solve:act"),
+          capabilitiesCreated: skillOutcomes.promoted.map((name) => `skill:${name}`),
           markers: epMarkers,
           nextHint: learned.body,
           worktreeRef: run.worktreePath,
@@ -981,23 +1094,8 @@ export class DriveSolve {
     signal: ExperienceRecallSignal,
     outcomeOk: boolean,
   ): Promise<void> {
-    const skillNames = extractRecalledSkillNames(bags);
-    for (const name of skillNames) {
-      const note = await this.memory.get(skillBodyKey(name));
-      if (!note) continue;
-      const prev = parseSkillBody(note.body, name);
-      const next = reconsolidateSkill(prev, {
-        recalled: signal.recallHit,
-        used: signal.recallUsed,
-        outcomeOk,
-      });
-      await this.remember(run, agentId, {
-        key: skillBodyKey(name),
-        title: `Body: ${name}`,
-        body: JSON.stringify(next),
-        tags: ["body", "skill", next.status, "plasticity"],
-      });
-    }
+    // Skills graduate via learning.applyRecalledSkillOutcomes (exam → SkillsLock).
+    // Rules keep a sidecar synapse here.
     for (const key of extractRecalledRuleKeys(bags)) {
       const synKey = synapseKey("rule", key);
       const note = await this.memory.get(synKey);
@@ -1014,10 +1112,10 @@ export class DriveSolve {
         tags: ["plasticity", "synapse", "rule", next.status],
       });
     }
-    if (skillNames.length || bags.rules.length) {
+    if (bags.rules.length) {
       run.append(
         "system",
-        `reconsolidation: skills=${skillNames.length} rules=${extractRecalledRuleKeys(bags).length} used=${signal.recallUsed ? 1 : 0} ok=${outcomeOk ? 1 : 0}`,
+        `reconsolidation: rules=${extractRecalledRuleKeys(bags).length} used=${signal.recallUsed ? 1 : 0} ok=${outcomeOk ? 1 : 0}`,
       );
     }
   }
@@ -1051,7 +1149,7 @@ export class DriveSolve {
     run: Run,
     agent: Agent,
     recs: SkillBodyRecord[],
-    input: { success: boolean; transfer: boolean },
+    input: { success: boolean; transfer: boolean; skipNames?: Set<string> },
   ): Promise<void> {
     await this.learning.touchSkillBodies(run, agent, recs, input);
   }
@@ -1076,6 +1174,7 @@ export class DriveSolve {
     failKlass: { last: string };
     progressBag: { prev: ProgressSnapshot | null; last: ProgressSnapshot | null };
     classStats: TaskClassStats;
+    shadowHits?: number;
   }): Promise<{ act: ChatResult; review: Review }> {
     let { act, review } = input;
     rememberFailKlass(input.failKlass, review);
@@ -1129,9 +1228,21 @@ export class DriveSolve {
         }
       }
 
-      const prefer = preferredStrategies(input.classStats).filter((name): name is StrategyName =>
-        (["recall_failures", "research", "decompose", "write_capability", "switch_model"] as StrategyName[]).includes(name as StrategyName)
-      );
+      const frustNow = frustrationScore({
+        extraApproaches: input.extra.n,
+        sameFailureCount: input.run.sameFailureCount,
+        saturatedFamilies: [...input.familyFails.values()].filter((n) => familySaturated(n)).length,
+        progressScore: progress.score,
+      });
+      const prefer = [
+        ...system2PreferStrategies({
+          shadowHits: input.shadowHits ?? 0,
+          frustration: frustNow,
+        }),
+        ...preferredStrategies(input.classStats).filter((name): name is StrategyName =>
+          (["recall_failures", "research", "decompose", "write_capability", "switch_model"] as StrategyName[]).includes(name as StrategyName)
+        ),
+      ];
       const strategy = cycleStrategy(input.run.usedStrategies, input.run.attempts, localFiles, prefer);
       const saturatedNames = [...input.familyFails.entries()].filter(([, n]) => familySaturated(n)).map(([k]) => k);
       const tactic = pickTactic({
@@ -1233,6 +1344,23 @@ export class DriveSolve {
       constitution: agent?.constitution,
     });
     if (gate.blocked) return gate.reason ?? "BLOCKED by Self.";
+
+    const inventGate = call.name === "mcp_write" || call.name === "plugin_write" || call.name === "skill_write"
+      ? gateCapabilityWrite({
+        toolName: call.name,
+        alreadyExists: Boolean(
+          (() => {
+            const name = String(call.arguments?.name ?? "").trim();
+            if (!name) return false;
+            if (call.name === "mcp_write") return Boolean(this.mcp.get(name));
+            return Boolean(this.skills.get(name));
+          })(),
+        ),
+        ledger: discoverLedgerFromTranscript(run.transcript),
+      })
+      : { blocked: false as const };
+    if (inventGate.blocked) return inventGate.reason ?? "BLOCKED by Self: capability invent.";
+
     if (call.name.startsWith("self_")) {
       return runSelfTool(this.home, call);
     }

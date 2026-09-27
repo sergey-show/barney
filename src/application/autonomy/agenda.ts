@@ -1,16 +1,21 @@
 /**
  * Autonomy law: agenda is written rarely, raised in idle, proven as a self-run, else dropped.
  *
- * Gap (fail/backlog) → AgendaItem → idle self_run → episode/rule — never invent open-world quests.
+ * Gap (fail/backlog/capability/inner) → AgendaItem (ZPD-graded) → idle self_run.
+ * Never invent open-world quests.
  */
 
 export type AgendaStatus = "pending" | "running" | "done" | "dropped";
+
+/** Zone of proximal development: 1=name the fail, 2=checklist, 3=local rehearsal. */
+export type ZpdLevel = 1 | 2 | 3;
 
 export type AgendaGap = {
   failClass: string;
   hint: string;
   count: number;
-  source: "backlog" | "episode";
+  source: "backlog" | "episode" | "capability" | "inner";
+  zpdLevel?: ZpdLevel;
 };
 
 export type AgendaItem = {
@@ -22,6 +27,7 @@ export type AgendaItem = {
   createdAt: string;
   runId?: string;
   finishedAt?: string;
+  zpdLevel?: ZpdLevel;
 };
 
 export const SELF_RUN_COOLDOWN_MS = 30 * 60_000;
@@ -47,6 +53,13 @@ export function formatAgenda(items: AgendaItem[]): string {
   return JSON.stringify({ items }, null, 2);
 }
 
+export function zpdLevelForGap(gap: AgendaGap): ZpdLevel {
+  if (gap.zpdLevel === 1 || gap.zpdLevel === 2 || gap.zpdLevel === 3) return gap.zpdLevel;
+  if (gap.count >= 5 || gap.source === "capability") return 3;
+  if (gap.count >= 3) return 2;
+  return 1;
+}
+
 export function gapsFromBacklogRows(
   rows: Array<{ klass: string; count: number; hint?: string }>,
 ): AgendaGap[] {
@@ -58,6 +71,12 @@ export function gapsFromBacklogRows(
       count: row.count,
       hint: row.hint?.trim() || `Repeated failure mode: ${row.klass}`,
       source: "backlog" as const,
+      zpdLevel: zpdLevelForGap({
+        failClass: row.klass,
+        count: row.count,
+        hint: "",
+        source: "backlog",
+      }),
     }));
 }
 
@@ -74,32 +93,60 @@ export function gapsFromFailEpisodes(
     if (prev) {
       prev.count += 1;
       if (hint.length > prev.hint.length) prev.hint = hint;
+      prev.zpdLevel = zpdLevelForGap(prev);
     } else {
-      byClass.set(klass, { failClass: klass, hint, count: 1, source: "episode" });
+      const gap: AgendaGap = { failClass: klass, hint, count: 1, source: "episode" };
+      gap.zpdLevel = zpdLevelForGap(gap);
+      byClass.set(klass, gap);
     }
   }
   return [...byClass.values()].filter((gap) => gap.count >= AGENDA_MIN_GAP_COUNT);
 }
 
-/** Concrete, local, verifiable drill — not an open-world quest. */
+/** Concrete, local, ZPD-graded drill — not an open-world quest. */
 export function proposeAgendaItem(gap: AgendaGap, now = new Date().toISOString()): AgendaItem {
-  const id = `drill-${gap.failClass}-${now.slice(0, 10)}`;
-  const goal = [
-    `Autonomy drill for failure mode \`${gap.failClass}\`.`,
-    `Write \`recovery-${gap.failClass}.md\` with exactly two sections:`,
-    `## What failed`,
-    `## What to do instead`,
-    `Base the content on this hint (do not invent tools or URLs): ${clip(gap.hint, 220)}`,
-    `Keep the file under 40 lines. Do not edit the kernel.`,
-  ].join(" ");
+  const level = zpdLevelForGap(gap);
+  const id = `drill-zpd${level}-${gap.failClass}-${now.slice(0, 10)}`;
+  const goal = drillGoalForZpd(gap, level);
   return {
     id,
     goal,
-    reason: `${gap.source}:${gap.failClass}×${gap.count}`,
+    reason: `${gap.source}:${gap.failClass}×${gap.count}:zpd${level}`,
     failClass: gap.failClass,
     status: "pending",
     createdAt: now,
+    zpdLevel: level,
   };
+}
+
+export function drillGoalForZpd(gap: AgendaGap, level: ZpdLevel): string {
+  const hint = clip(gap.hint, 200);
+  if (level === 1) {
+    return [
+      `Autonomy drill (ZPD-1) for \`${gap.failClass}\`.`,
+      `Write \`recovery-${gap.failClass}.md\` with exactly two sections:`,
+      `## What failed`,
+      `## What to do instead`,
+      `Base on this hint (do not invent tools or URLs): ${hint}`,
+      `Keep under 40 lines. Do not edit the kernel.`,
+    ].join(" ");
+  }
+  if (level === 2) {
+    return [
+      `Autonomy drill (ZPD-2) for \`${gap.failClass}\`.`,
+      `1) Write \`recovery-${gap.failClass}.md\` with ## What failed / ## What to do instead / ## Checklist (3 concrete steps).`,
+      `2) Write \`checklist-${gap.failClass}.txt\` listing those 3 steps one per line.`,
+      `Hint: ${hint}`,
+      `No kernel edits. No invented URLs.`,
+    ].join(" ");
+  }
+  return [
+    `Autonomy drill (ZPD-3) for \`${gap.failClass}\`.`,
+    `1) Write \`recovery-${gap.failClass}.md\` (failed / instead / checklist).`,
+    `2) Create \`rehearsal-${gap.failClass}.txt\` proving the instead-path in one short local rehearsal (no network).`,
+    `Hint: ${hint}`,
+    `Keep files small. Do not edit the kernel.`,
+  ].join(" ");
 }
 
 export function mergeAgenda(
@@ -116,7 +163,6 @@ export function mergeAgenda(
   for (const item of proposed) {
     if (byClass.has(item.failClass)) continue;
     if (next.filter((row) => row.status === "pending").length >= maxPending) break;
-    // Skip if recently done for same class.
     const recentDone = existing.find((row) =>
       row.failClass === item.failClass
       && row.status === "done"
@@ -139,6 +185,14 @@ export function markAgenda(
   patch: Partial<Pick<AgendaItem, "status" | "runId" | "finishedAt">>,
 ): AgendaItem[] {
   return items.map((item) => (item.id === id ? { ...item, ...patch } : item));
+}
+
+/** Learning progress 0..1 from recent done vs dropped drills. */
+export function agendaLearningProgress(items: AgendaItem[]): number {
+  const finished = items.filter((item) => item.status === "done" || item.status === "dropped");
+  if (!finished.length) return 0.5;
+  const done = finished.filter((item) => item.status === "done").length;
+  return done / finished.length;
 }
 
 function clip(text: string, n: number): string {

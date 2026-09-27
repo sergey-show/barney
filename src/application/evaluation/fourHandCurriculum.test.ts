@@ -72,7 +72,15 @@ test("house-redact rejects <your-…> and accepts house tokens", () => {
 test("transferSuccessLift and metrics", () => {
   const arms = [
     { arm: "kernel-train" as const, ok: true, detail: "", attempts: 1 },
-    { arm: "kernel-test" as const, ok: true, detail: "", attempts: 1, recallHit: true, recallUsed: true },
+    {
+      arm: "kernel-test" as const,
+      ok: true,
+      detail: "",
+      attempts: 1,
+      recallHit: true,
+      recallUsed: true,
+      skillReused: true,
+    },
     { arm: "no-kernel" as const, ok: false, detail: "", attempts: 1 },
     { arm: "kernel-fresh" as const, ok: false, detail: "", attempts: 1 },
   ];
@@ -88,4 +96,6 @@ test("transferSuccessLift and metrics", () => {
   expect(metrics.transferSuccessLift).toBe(1);
   expect(metrics.recallHitRate).toBe(1);
   expect(metrics.recallUsedRate).toBe(1);
+  expect(metrics.skillReuseRate).toBe(1);
+  expect(metrics.falseSkillRate).toBe(0);
 });

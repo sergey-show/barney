@@ -142,7 +142,7 @@ export const PLUGIN_TOOLS: ToolSpec[] = [
   {
     name: "plugin_write",
     description:
-      "Create or update a plugin outside the kernel. Files go to ~/.barney/plugins/<name>/. Typical files: plugin.json, SKILL.md or PLUGIN.md, ui.html, mcp.json. Then plugin_read or plugin_open.",
+      "Create or update a plugin outside the kernel (~/.barney/plugins/<name>/). Kernel requires plugin_list first. Prefer an existing plugin over inventing MCP. Typical files: plugin.json, SKILL.md, ui.html, mcp.json.",
     parameters: {
       type: "object",
       properties: {
@@ -446,24 +446,23 @@ export const WAKE_TOOLS: ToolSpec[] = [
 export const MCP_TOOLS: ToolSpec[] = [
   {
     name: "mcp_list",
-    description: "List MCP recipes in ~/.barney/plugins and which servers are running.",
+    description: "List MCP recipes in ~/.barney/plugins and which servers are running. Required before mcp_write.",
     parameters: { type: "object", properties: {} },
   },
   {
     name: "mcp_write",
-    description: "Save an MCP recipe as a plugin (~/.barney/plugins/<name>/mcp.json). Then mcp_start. Prefer a UI/prompt plugin if that is enough.",
+    description: "Save an MCP recipe (~/.barney/plugins/<name>/mcp.json). Kernel blocks invent: mcp_list then web_search/browser_open first; prefer an existing plugin/skill. Then mcp_start.",
     parameters: {
       type: "object",
       properties: {
         name: { type: "string", description: "kebab-case, e.g. context7" },
-        command: { type: "string", description: "Executable, e.g. npx" },
-        args: { type: "string", description: "Space-separated args, e.g. -y @upstash/context7-mcp" },
+        command: { type: "string", description: "Executable from docs/registry evidence, e.g. npx" },
+        args: { type: "string", description: "Space-separated args from evidence, e.g. -y @upstash/context7-mcp" },
         description: { type: "string", description: "What this MCP is for" },
       },
       required: ["name", "command"],
     },
-  },
-  {
+  },  {
     name: "mcp_start",
     description: "Start an MCP server from a saved recipe (stdio JSON-RPC) and list its tools. Then mcp_call.",
     parameters: {

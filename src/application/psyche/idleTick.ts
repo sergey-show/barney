@@ -3,6 +3,11 @@ import { needsDream } from "./dream.ts";
 import type { ExistenceBlock } from "./existence.ts";
 import type { Samost } from "./samost.ts";
 import { PLASTIC_SLEEP_COOLDOWN_MS, PLASTIC_SLEEP_IDLE_MS } from "../plasticity/plasticity.ts";
+import {
+  INNER_THINK_COOLDOWN_MS,
+  INNER_THINK_IDLE_MS,
+  INNER_THINK_WAITING_COOLDOWN_MS,
+} from "./innerThink.ts";
 
 export const LONG_IDLE_MS = 10 * 60_000;
 export const STUDY_COOLDOWN_MS = 15 * 60_000;
@@ -14,6 +19,7 @@ export type IdleItem =
   | { item: "board_to_existence"; text: string }
   | { item: "dream" }
   | { item: "plastic_sleep" }
+  | { item: "inner_think"; reason: "waiting" | "idle" }
   | { item: "self_run"; agendaId: string; goal: string; failClass: string }
   | { item: "study"; topic: string }
   | { item: "none" };
@@ -30,7 +36,10 @@ export function nextIdleWork(input: {
   studyCooldownMs?: number;
   selfRunCooldownMs?: number;
   plasticSleepCooldownMs?: number;
+  innerThinkCooldownMs?: number;
   needsPlasticSleep?: boolean;
+  /** Session parked with an armed wake — think while waiting, not forever. */
+  waitingOnWake?: boolean;
   pendingSelfRun?: { agendaId: string; goal: string; failClass: string } | null;
 }): IdleItem {
   if (!input.samostPresent) return { item: "seed_samost" };
@@ -60,6 +69,14 @@ export function nextIdleWork(input: {
   });
   if (freshRule) return { item: "absorb_shadow", rule: freshRule };
 
+  const innerCooldown = input.innerThinkCooldownMs ?? Number.POSITIVE_INFINITY;
+  if (
+    input.waitingOnWake
+    && innerCooldown >= INNER_THINK_WAITING_COOLDOWN_MS
+  ) {
+    return { item: "inner_think", reason: "waiting" };
+  }
+
   const selfCooldown = input.selfRunCooldownMs ?? Number.POSITIVE_INFINITY;
   if (
     idleMs >= SELF_RUN_IDLE_MS
@@ -81,6 +98,17 @@ export function nextIdleWork(input: {
       studied: input.studied ?? [],
     });
     if (topic) return { item: "study", topic };
+  }
+
+  const hasMaterial = input.board.length > 0
+    || input.samost.shadow.length > 0
+    || (input.failHints?.length ?? 0) > 0;
+  if (
+    idleMs >= INNER_THINK_IDLE_MS
+    && innerCooldown >= INNER_THINK_COOLDOWN_MS
+    && hasMaterial
+  ) {
+    return { item: "inner_think", reason: "idle" };
   }
 
   return { item: "none" };

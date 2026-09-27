@@ -26,7 +26,14 @@ Not every PASS writes a skill. Not every FAIL writes a rule. Pins prefer **predi
 | Success + house-convention pin | pinned lesson |
 | Otherwise | episode only (nothing pinned into body rules/skills) |
 
-Code: `src/application/experience/experienceLayers.ts`, `predictionError.ts`.
+Skill loop (target):
+
+1. recovery → mint **quarantine** (not in SkillsLock)
+2. recall + use on a later task → reconsolidation / graduation
+3. **verified | frozen** → pin into SkillsLock → reusable plugin
+4. `healSkillLocks` repairs verified bodies that missed the lock
+
+Code: `experienceLayers.ts`, `predictionError.ts`, `RunLearningService.applyRecalledSkillOutcomes`.
 
 ## Mandatory recall before act
 
@@ -101,6 +108,9 @@ In idle, dream compress merges near-duplicate failure rules (`mergeFailureRules`
 | `skill_reuse_rate` | verified skill used on a new task |
 | `false_skill_rate` | pinned skill that did not help / hurt |
 | `shadow_to_rule` | fails → rules that later hit |
+| `calibration` (Brier) | stated P(success) from recalled rule conf / skill strength vs outcome; `overconfident:1` when pred≥0.7 and fail |
+
+Confidence is not prose certainty. After review, DriveSolve logs `calibration: pred=… out=… brier=…` and episode markers `confPred:` / `calib:` / `overconfident:1`. Reinforcing a rule that was **used and still failed** cuts `conf:` (overconfidence penalty); reconfirm bumps it. Code: `calibration.ts`.
 
 ## Fayr alignment
 

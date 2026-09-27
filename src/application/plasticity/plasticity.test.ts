@@ -20,10 +20,24 @@ test("reconsolidation strengthens on used+pass and weakens on used+fail", () => 
   rec = reconsolidateSkill(rec, { recalled: true, used: true, outcomeOk: true });
   expect(rec.strength).toBeGreaterThan(base);
   expect(rec.lastUsedAt).toBeTruthy();
+  expect(rec.wins).toBe(1);
+  expect(rec.status).toBe("quarantine");
   const mid = rec.strength;
   rec = reconsolidateSkill(rec, { recalled: true, used: true, outcomeOk: false });
   expect(rec.strength).toBeLessThan(mid);
   expect(rec.fails).toBe(1);
+});
+
+test("reconsolidation with transfer graduates quarantine into frozen", () => {
+  let rec = admitNewSkill("learned-transfer", "sanitize", "secret-leak");
+  rec = reconsolidateSkill(rec, {
+    recalled: true,
+    used: true,
+    outcomeOk: true,
+    transfer: true,
+  });
+  expect(rec.transfers).toBe(1);
+  expect(rec.status).toBe("frozen");
 });
 
 test("utility and archive of unused quarantine", () => {

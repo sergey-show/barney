@@ -34,6 +34,10 @@ export type ArmResult = {
   recallHit?: boolean;
   recallUsed?: boolean;
   recallHelped?: boolean | null;
+  /** Verified/frozen skill recalled+used on this arm (see skill_reuse transcript). */
+  skillReused?: boolean;
+  /** Pinned skill recalled+used but arm failed. */
+  skillFalse?: boolean;
   markerHits?: number;
 };
 
@@ -256,12 +260,14 @@ export function summarizeExperienceMetrics(cases: FourHandCaseResult[]): Experie
   const testArms = cases.flatMap((item) => item.arms.filter((arm) => arm.arm === "kernel-test"));
   const hit = testArms.filter((arm) => arm.recallHit).length;
   const used = testArms.filter((arm) => arm.recallUsed).length;
+  const skillReuse = testArms.filter((arm) => arm.skillReused).length;
+  const skillFalse = testArms.filter((arm) => arm.skillFalse).length;
   return {
     transferSuccessLift: cases.reduce((sum, item) => sum + item.transferSuccessLift, 0) / n,
     recallHitRate: testArms.length ? hit / testArms.length : 0,
     recallUsedRate: testArms.length ? used / testArms.length : 0,
-    skillReuseRate: 0,
-    falseSkillRate: 0,
+    skillReuseRate: testArms.length ? skillReuse / testArms.length : 0,
+    falseSkillRate: testArms.length ? skillFalse / testArms.length : 0,
   };
 }
 

@@ -59,11 +59,14 @@ Barney can attach MCP **itself** on a full turn:
 
 Typical loop:
 
-1. `mcp_list` — reuse a recipe if it already exists.
-2. `mcp_write` — only if a stdio server is actually needed.
-3. `mcp_start` — read the tool list from the server.
-4. `mcp_call` with `server`, `tool`, and JSON `arguments`.
-5. `mcp_stop` when done.
+1. `mcp_list` / `plugin_list` — reuse a recipe if it already exists (**kernel-required** before write).
+2. `web_search` / `browser_open` — official package/docs (**kernel-required** for a *new* recipe).
+3. `mcp_write` — only with evidence; invent without list/search is `BLOCKED by Self`.
+4. `mcp_start` — read the tool list from the server.
+5. `mcp_call` with `server`, `tool`, and JSON `arguments`.
+6. `mcp_stop` when done.
+
+Code gate: `capabilityDiscover.ts` / `DriveSolve.dispatchTool`. Prompt line is advisory; the block is physical.
 
 After `mcp_write`, the MCP is pinned on the instance (`kind: mcp`) and body git records `become: mcp <name>`.
 
@@ -73,6 +76,6 @@ If a turn is stuck, do **not** invent an MCP from the miss. Change tool family a
 
 - Timeout per MCP request: 20s.
 - Nested specialists may start and call MCP, but should not grow the kernel.
-- `mcp_write` is not the same as skill quarantine: a recipe can be saved immediately. Still prefer a verified skill when the recovery is “after this family failed, that family delivered”.
+- New `mcp_write` goes through the capability gate (list + search). Updating an existing recipe needs list only.
 
 Index: [Docs](README.md) · [Plugins](plugins.md) · [Tools](tools.md).

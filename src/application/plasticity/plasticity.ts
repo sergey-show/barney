@@ -6,7 +6,12 @@
  * changes only via human release.
  */
 
-import type { SkillBodyRecord, SkillEnv, SkillStatus } from "../context/bodyStability.ts";
+import {
+  graduateSkillStatus,
+  type SkillBodyRecord,
+  type SkillEnv,
+  type SkillStatus,
+} from "../context/bodyStability.ts";
 
 export type { SkillEnv };
 export const PLASTIC_SLEEP_IDLE_MS = 20 * 60_000;
@@ -165,13 +170,14 @@ export function shouldUnfreeze(rec: SkillBodyRecord): boolean {
  */
 export function reconsolidateSkill(
   rec: SkillBodyRecord,
-  input: ReconsolidationInput,
+  input: ReconsolidationInput & { transfer?: boolean },
 ): SkillBodyRecord {
   if (!input.recalled || rec.status === "archived") return rec;
   const now = input.now ?? new Date().toISOString();
   let strength = rec.strength ?? 0.4;
   let fails = rec.fails ?? 0;
   let wins = rec.wins;
+  let transfers = rec.transfers ?? 0;
   const next: SkillBodyRecord = {
     ...rec,
     lastRecalledAt: now,
@@ -182,6 +188,7 @@ export function reconsolidateSkill(
     if (input.outcomeOk) {
       strength = clamp01(strength + 0.12);
       wins += 1;
+      if (input.transfer) transfers += 1;
     } else {
       strength = clamp01(strength - 0.18);
       fails += 1;
@@ -192,11 +199,13 @@ export function reconsolidateSkill(
   next.strength = strength;
   next.fails = fails;
   next.wins = wins;
+  next.transfers = transfers;
   if (shouldUnfreeze(next)) {
     next.status = "verified";
     next.frozenAt = undefined;
   }
-  return next;
+  // Same graduation law as recordSkillOutcome — recall+use can clear quarantine.
+  return graduateSkillStatus(next);
 }
 
 export function reconsolidateSynapse(

@@ -42,6 +42,10 @@ Idle psyche and the autonomy agenda stay separate: a wake is **deferred session 
 - An open cron language  
 - Mixing agenda gaps with operator schedules  
 
-Code: `src/application/autonomy/wake.ts`, `runWakeTool.ts`, `Kernel.deliverWakes`.
+## Inner think (bounded)
+
+While a session waits on a wake **or** has been idle long enough, `Kernel.tick` may run one short private turn (`inner_think`): board / memory / existence only — **no** operator reply. Cooldown 5–10 minutes. Self-dialogue, not a forever loop.
+
+Code: `innerThink.ts`, `idleTick.ts`, `Kernel.tick`.
 
 Back to [docs index](README.md).

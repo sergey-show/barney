@@ -26,7 +26,14 @@
 | Успех + закрепление «домашней» конвенции | закреплённый урок |
 | Иначе | только эпизод (в тело правил и навыков не пишется) |
 
-Код: `experienceLayers.ts`, `predictionError.ts`.
+Петля навыка (целевая):
+
+1. recovery → mint в **quarantine** (в SkillsLock не кладётся)
+2. recall + use на новой задаче → reconsolidation / graduation
+3. **verified | frozen** → pin в SkillsLock → reusable plugin
+4. `healSkillLocks` чинит verified-тела, которые выпали из lock
+
+Код: `experienceLayers.ts`, `predictionError.ts`, `RunLearningService.applyRecalledSkillOutcomes`.
 
 ## Обязательное вспоминание перед актом
 
@@ -100,6 +107,9 @@ Immediate уже в four-hand; позже — `barney eval spaced <observations.
 | `skill_reuse_rate` | проверенный навык сработал на новой задаче |
 | `false_skill_rate` | закреплённый навык не помог или мешал |
 | `shadow_to_rule` | провалы → правила, которые потом сработали |
+| `calibration` (Brier) | заявленное P(успеха) из conf правил / strength навыков vs исход; `overconfident:1` при pred≥0.7 и fail |
+
+Уверенность — не уверенный текст. После review DriveSolve пишет `calibration: pred=… out=… brier=…` и маркеры эпизода `confPred:` / `calib:` / `overconfident:1`. Если правило **вспомнили, использовали, а задача всё равно провалилась** — `conf:` режется (штраф за overconfidence); при подтверждении слегка растёт. Код: `calibration.ts`.
 
 ## Стык с fayr
 
