@@ -34,7 +34,7 @@ test("ZPD drills escalate with count", () => {
   expect(zpdLevelForGap({ failClass: "x", hint: "h", count: 3, source: "episode" })).toBe(2);
   expect(zpdLevelForGap({ failClass: "x", hint: "h", count: 5, source: "capability" })).toBe(3);
   expect(drillGoalForZpd({ failClass: "secret-leak", hint: "hint", count: 3, source: "episode" }, 2)).toMatch(/ZPD-2/);
-  expect(proposeAgendaItem({ failClass: "a", hint: "h", count: 5, source: "backlog" }).goal).toMatch(/ZPD-3|rehearsal/);
+  expect(proposeAgendaItem({ failClass: "a", hint: "h", count: 5, source: "backlog" }).goal).toMatch(/ZPD-3|proof-a\.py|ZPD_PROOF/);
 });
 
 test("salience markers boost recall score", () => {

@@ -36,7 +36,9 @@ Autonomy without working experience is useless. Order:
 2. Agenda from real gaps  
 3. Quarantine skill clears the same exam (recall+use → SkillsLock) — see skill loop in experience law  
 4. Capability map + decay → agenda items (self-model)  
-5. ZPD-graded drills (1=name the fail, 2=checklist, 3=local rehearsal)  
+5. ZPD-graded drills: **1**=name the fail, **2**=checklist, **3**=executable proof (`proof-<class>.py` must print `ZPD_PROOF fail=1` then `ZPD_PROOF pass=1`; Kernel drops the drill if markers are missing)  
+
+During dream idle, **Learned** appendages and rule lines may consolidate (dedupe/compress). The immune constitution base above `# Learned` is never rewritten by the model.
 
 ## Idle order
 

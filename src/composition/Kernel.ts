@@ -29,6 +29,12 @@ import {
   proposeAgendaItem,
   type AgendaItem,
 } from "../application/autonomy/agenda.ts";
+import { judgeZpd3Proof } from "../application/autonomy/zpdProof.ts";
+import {
+  consolidateLearnedBlocks,
+  consolidateRuleLines,
+  needsLearnedConsolidation,
+} from "../application/context/consolidateLearned.ts";
 import {
   buildCapabilityMap,
   capabilityMapKey,
@@ -349,6 +355,31 @@ export class Kernel {
           sourceAgentId: agent.id.value,
         }));
       }
+      // Body consolidation only: # Learned appendages + rule lines — never immune base.
+      if (needsLearnedConsolidation(agent.constitution)) {
+        const learned = consolidateLearnedBlocks(agent.constitution);
+        if (learned.changed) {
+          agent.replaceConstitution(learned.constitution);
+          await this.agents.save(agent);
+          await this.memories.save(new MemoryNote({
+            key: slugKey(`plasticity/learned/${new Date().toISOString().slice(0, 13)}`),
+            title: "Learned consolidation",
+            body: `learned ${learned.before}→${learned.after}`,
+            tags: ["plasticity", "learned", "consolidate"],
+            sourceAgentId: agent.id.value,
+          }));
+        }
+      }
+      const ruleConsol = consolidateRuleLines(rules);
+      if (ruleConsol.changed && ruleConsol.lines.length) {
+        await this.memories.save(new MemoryNote({
+          key: slugKey(`plasticity/rules/${new Date().toISOString().slice(0, 13)}`),
+          title: "Rules consolidation",
+          body: ruleConsol.lines.join("\n"),
+          tags: ["plasticity", "rules", "consolidate"],
+          sourceAgentId: agent.id.value,
+        }));
+      }
     } else if (work.item === "board_to_existence" && open) {
       const next = appendExistence(existence, { kind: "idle", text: work.text });
       await this.memories.save(new MemoryNote({
@@ -571,6 +602,8 @@ export class Kernel {
     this.lastSelfRunAt = Date.now();
     const key = agendaMemoryKey(agentId);
     let items = parseAgenda((await this.memories.get(key))?.body ?? "");
+    const drill = items.find((item) => item.id === agendaId);
+    const zpd = drill?.zpdLevel ?? 1;
     items = markAgenda(items, agendaId, { status: "running" });
     await this.memories.save(new MemoryNote({
       key,
@@ -590,7 +623,21 @@ export class Kernel {
         sourceAgentId: agentId,
       }));
       const done = await this.send(created.id.value, goal);
-      const ok = done.status === "done";
+      let ok = done.status === "done";
+      let dropReason = "";
+      if (ok && zpd === 3) {
+        const evidence = done.transcript
+          .map((item) => `${item.kind}: ${item.text}`)
+          .join("\n");
+        const proof = judgeZpd3Proof({ failClass, evidence, goal });
+        if (!proof.ok) {
+          ok = false;
+          dropReason = proof.reason;
+          done.append("system", `zpd3_proof: fail · ${proof.reason}`);
+        } else {
+          done.append("system", `zpd3_proof: pass · ${proof.reason}`);
+        }
+      }
       items = markAgenda(items, agendaId, {
         status: ok ? "done" : "dropped",
         runId: created.id.value,
@@ -600,7 +647,14 @@ export class Kernel {
         key,
         title: "Autonomy agenda",
         body: formatAgenda(items),
-        tags: ["agenda", "autonomy", failClass, ok ? "done" : "dropped"],
+        tags: [
+          "agenda",
+          "autonomy",
+          failClass,
+          ok ? "done" : "dropped",
+          ...(zpd === 3 ? ["zpd3"] : []),
+          ...(dropReason ? ["zpd3-unproven"] : []),
+        ],
         sourceAgentId: agentId,
         sourceRunId: created.id.value,
       }));

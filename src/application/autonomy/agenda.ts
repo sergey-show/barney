@@ -7,7 +7,7 @@
 
 export type AgendaStatus = "pending" | "running" | "done" | "dropped";
 
-/** Zone of proximal development: 1=name the fail, 2=checklist, 3=local rehearsal. */
+/** Zone of proximal development: 1=name the fail, 2=checklist, 3=executable fail/pass proof. */
 export type ZpdLevel = 1 | 2 | 3;
 
 export type AgendaGap = {
@@ -140,12 +140,16 @@ export function drillGoalForZpd(gap: AgendaGap, level: ZpdLevel): string {
       `No kernel edits. No invented URLs.`,
     ].join(" ");
   }
+  const proof = `proof-${gap.failClass.replace(/[^a-zA-Z0-9_-]+/g, "-")}.py`;
   return [
     `Autonomy drill (ZPD-3) for \`${gap.failClass}\`.`,
-    `1) Write \`recovery-${gap.failClass}.md\` (failed / instead / checklist).`,
-    `2) Create \`rehearsal-${gap.failClass}.txt\` proving the instead-path in one short local rehearsal (no network).`,
+    `1) Write \`recovery-${gap.failClass}.md\` (## What failed / ## What to do instead / ## Checklist).`,
+    `2) Write executable \`${proof}\` (Python, no network) with two phases:`,
+    `   - FAIL: reproduce the old/wrong path for this failClass; print exactly \`ZPD_PROOF fail=1\` when that path errors.`,
+    `   - PASS: apply the instead-path from recovery; print exactly \`ZPD_PROOF pass=1\` when it succeeds.`,
+    `3) Run the script with the shell tool and keep both marker lines in the tool output.`,
     `Hint: ${hint}`,
-    `Keep files small. Do not edit the kernel.`,
+    `Done only if both markers appear. Do not edit the kernel.`,
   ].join(" ");
 }
 

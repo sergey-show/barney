@@ -109,6 +109,20 @@ export class Agent {
     if (patch.sourceRunId) this.sourceRunIds.push(patch.sourceRunId);
   }
 
+  /**
+   * Replace full constitution text after Learned-only consolidation.
+   * Callers must not alter the immune base; Kernel uses consolidateLearnedBlocks.
+   */
+  replaceConstitution(next: string): void {
+    const text = next.trim();
+    if (!text) return;
+    if (/^\s*you are\b/i.test(text)) {
+      throw new Error("constitution cannot start with You are");
+    }
+    this.constitution = text;
+    this.version += 1;
+  }
+
   snapshot(): AgentSnapshot {
     return {
       id: this.id.value,
