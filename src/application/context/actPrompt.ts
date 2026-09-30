@@ -1,3 +1,5 @@
+import { CAPABILITY_LAW_LINE } from "./capabilityDiscover.ts";
+
 export type ActPromptInput = {
   constitution: string;
   samost: string;
@@ -45,6 +47,7 @@ export function buildActSystem(input: ActPromptInput): string {
       ? "Delegated specialist, not a character. Do the subtask. Write notes with memory_write. Do not spawn agents."
       : "",
     tools,
+    CAPABILITY_LAW_LINE,
     "Secrets in tool output are DETECTED_SECRET_<KIND>_<HASH>. Use that token in edits; do not ask for the value.",
     "Sanitize law: replace every mask with the user's exact <your-…> placeholders (not house/barney-redact tokens), then tree-verify with grep -r DETECTED_SECRET_ . — do not stop at inventory or wait for go-ahead.",
     "Visible reply: Markdown. mermaid or canvas fences when they help.",

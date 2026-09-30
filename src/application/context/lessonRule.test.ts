@@ -171,6 +171,37 @@ test("repeated family fails crystallize a stronger switch rule", () => {
   expect(rule.sources).toEqual(["run-1", "run-2"]);
 });
 
+test("reinforcing a rule after used+fail cuts confidence (overconfidence)", () => {
+  const rule = lessonRule({
+    taskClass: "general",
+    goal: "sanitize secrets",
+    verdict: "fail",
+    summary: "still missing",
+    failedFamily: "shell:grep",
+    priorConfidence: 0.8,
+    priorVersion: 2,
+    recallUsed: true,
+    outcomeOk: false,
+  });
+  expect(rule.confidence).toBeLessThan(0.7);
+  expect(rule.version).toBe(3);
+});
+
+test("reinforcing a rule after success bumps confidence", () => {
+  const rule = lessonRule({
+    taskClass: "general",
+    goal: "sanitize secrets",
+    verdict: "pass",
+    summary: "ok",
+    priorConfidence: 0.5,
+    priorVersion: 1,
+    recallUsed: true,
+    outcomeOk: true,
+  });
+  expect(rule.confidence).toBe(0.65);
+  expect(rule.version).toBe(2);
+});
+
 test("pickRules surfaces a trail lesson", () => {
   const lines = pickRules([
     { key: "rule/general/openssl", title: "x", body: "[unrun-program] if shell:openssl fails, do not repeat shell:openssl.", tags: ["rule", "fail", "general"] },

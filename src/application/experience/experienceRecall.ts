@@ -3,6 +3,7 @@ import type { MemoryNote } from "../../domain/memory/MemoryNote.ts";
 import type { PickedRule } from "../context/lessonRule.ts";
 import type { TurnRecallContext } from "../services/TurnRecallService.ts";
 import { clipText } from "../context/packSession.ts";
+import { salienceFromMarkers } from "../context/episodeMarkers.ts";
 import {
   topKByWeightSimilarity,
   type WeightedCandidate,
@@ -52,7 +53,7 @@ export function buildExperienceBags(
   const shadowRaw: WeightedCandidate[] = [
     ...(opts?.shadowWarnings
       ? opts.shadowWarnings.split("\n").map((line) => line.trim()).filter(Boolean)
-        .map((line) => ({ line, kind: "shadow" as const, weight: 0.55 }))
+        .map((line) => ({ line, kind: "shadow" as const, weight: 0.55, salience: 0.7 }))
       : []),
     ...recall.relevantEpisodes
       .filter((episode) => episode.outcome === "fail")
@@ -60,6 +61,7 @@ export function buildExperienceBags(
         line: `[fail:${episode.failureMode ?? "unknown"}] ${clipText(episode.nextHint || episode.goal, 160)}`,
         kind: "shadow" as const,
         weight: 0.5,
+        salience: salienceFromMarkers(episode.markers ?? []),
       })),
   ];
 
@@ -67,6 +69,7 @@ export function buildExperienceBags(
     line: `[rule:${rule.key}] ${clipText(rule.line, 180)}`,
     kind: "rule" as const,
     weight: weights[rule.key] ?? 0.45,
+    salience: 0.4,
   }));
 
   const skillRaw: WeightedCandidate[] = (opts?.skillHints ?? []).map((line) => {
@@ -75,6 +78,7 @@ export function buildExperienceBags(
       line,
       kind: "skill" as const,
       weight: (name && weights[name]) || 0.5,
+      salience: 0.45,
     };
   });
 
@@ -84,6 +88,7 @@ export function buildExperienceBags(
       line: `[ok:${episode.taskClass}] ${clipText(episode.goal, 100)} → ${clipText(episode.nextHint, 140)}`,
       kind: "episode" as const,
       weight: 0.35,
+      salience: salienceFromMarkers(episode.markers ?? []),
     }));
 
   if (!query.trim()) {

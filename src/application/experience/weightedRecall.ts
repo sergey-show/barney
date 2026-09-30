@@ -9,6 +9,8 @@ export type WeightedCandidate = {
   kind: "shadow" | "rule" | "skill" | "episode";
   /** Synaptic weight / strength 0..1+ */
   weight: number;
+  /** Optional episode salience 0..1 (PE / frustration). */
+  salience?: number;
 };
 
 export type ScoredCandidate = WeightedCandidate & {
@@ -38,14 +40,15 @@ export function recallSimilarity(query: string, line: string): number {
   return Math.min(1, jaccard * 0.6 + coverage * 0.4);
 }
 
-/** score = weight × (0.15 + similarity) — weak weight still competes if very similar. */
+/** score = weight × (0.15 + similarity) × salienceFactor */
 export function scoreCandidate(query: string, item: WeightedCandidate): ScoredCandidate {
   const similarity = recallSimilarity(query, item.line);
   const weight = Math.max(0.05, item.weight);
+  const salienceFactor = 0.7 + 0.3 * Math.max(0, Math.min(1, item.salience ?? 0.35));
   return {
     ...item,
     similarity,
-    score: weight * (0.15 + similarity),
+    score: weight * (0.15 + similarity) * salienceFactor,
   };
 }
 

@@ -6,9 +6,17 @@ import { GuardPolicy } from "../domain/guard/GuardPolicy.ts";
 import { MemoryNote } from "../domain/memory/MemoryNote.ts";
 import type { Run } from "../domain/run/Run.ts";
 import { event } from "../domain/shared/DomainEvent.ts";
-import { parseBoard } from "../application/psyche/board.ts";
+import { formatBoard, parseBoard } from "../application/psyche/board.ts";
 import { appendExistence, formatExistence, parseExistence } from "../application/psyche/existence.ts";
 import { nextIdleWork, studyQuery } from "../application/psyche/idleTick.ts";
+import {
+  applyInnerThinkBoard,
+  innerThinkLocalFallback,
+  innerThinkSystemPrompt,
+  innerThinkUserPrompt,
+  parseInnerThink,
+  parseInnerThinkDirectives,
+} from "../application/psyche/innerThink.ts";
 import {
   agendaMemoryKey,
   formatAgenda,
@@ -21,6 +29,18 @@ import {
   proposeAgendaItem,
   type AgendaItem,
 } from "../application/autonomy/agenda.ts";
+import { judgeZpd3Proof } from "../application/autonomy/zpdProof.ts";
+import {
+  consolidateLearnedBlocks,
+  consolidateRuleLines,
+  needsLearnedConsolidation,
+} from "../application/context/consolidateLearned.ts";
+import {
+  buildCapabilityMap,
+  capabilityMapKey,
+  formatCapabilityMap,
+  gapsFromCapabilityMap,
+} from "../application/context/capabilityMap.ts";
 import {
   cancelWakesForRun,
   dueWakes,
@@ -130,6 +150,7 @@ export class Kernel {
   private lastStudyAt = 0;
   private lastSelfRunAt = 0;
   private lastPlasticSleepAt = 0;
+  private lastInnerThinkAt = 0;
   private readonly research = new CompositeResearch(new Context7FirstResearch(), new DuckDuckGoSearch());
   /** Session grants for fs_* paths outside the worktree (prefix → allowed). */
   private readonly outsideGrants = new Map<string, Set<string>>();
@@ -270,6 +291,11 @@ export class Kernel {
       && !isDesignGoal(open.goal)
       && !/^Autonomy drill\b/i.test(open.goal),
     );
+    const wakeItems = parseWakes((await this.memories.get(wakeMemoryKey(agent.id.value)))?.body ?? "");
+    const waitingOnWake = Boolean(
+      open
+      && wakeItems.some((item) => item.status === "armed" && item.runId === open.id.value),
+    );
     const skillNotes = recent.filter((note) => note.tags.includes("body") && note.tags.includes("skill"));
     const skillRecs = skillNotes.map((note) => {
       const name = note.key.replace(/^body\/skill\//, "") || note.title;
@@ -287,15 +313,21 @@ export class Kernel {
       studyCooldownMs: Date.now() - this.lastStudyAt,
       selfRunCooldownMs: Date.now() - this.lastSelfRunAt,
       plasticSleepCooldownMs: Date.now() - this.lastPlasticSleepAt,
+      innerThinkCooldownMs: Date.now() - this.lastInnerThinkAt,
       needsPlasticSleep: needsPlasticSleep(skillRecs),
+      waitingOnWake,
       pendingSelfRun: !operatorBusy && pending
         ? { agendaId: pending.id, goal: pending.goal, failClass: pending.failClass }
         : null,
     });
     if (work.item === "none") return null;
     const designed = await this.memories.get(designKey(agent.id.value));
-    if ((work.item === "study" || work.item === "self_run") && !isDesignSealed(designed?.body)) return null;
-    if (work.item === "seed_samost") {
+    if (
+      (work.item === "study" || work.item === "self_run" || work.item === "inner_think")
+      && !isDesignSealed(designed?.body)
+    ) {
+      return null;
+    }    if (work.item === "seed_samost") {
       await this.memories.save(new MemoryNote({
         key: samostKey(agent.id.value),
         title: "Self",
@@ -320,6 +352,31 @@ export class Kernel {
           title: "Self",
           body: formatSamost(applyDreamHeuristics(samost, heuristics)),
           tags: ["samost", "psyche", "dream"],
+          sourceAgentId: agent.id.value,
+        }));
+      }
+      // Body consolidation only: # Learned appendages + rule lines — never immune base.
+      if (needsLearnedConsolidation(agent.constitution)) {
+        const learned = consolidateLearnedBlocks(agent.constitution);
+        if (learned.changed) {
+          agent.replaceConstitution(learned.constitution);
+          await this.agents.save(agent);
+          await this.memories.save(new MemoryNote({
+            key: slugKey(`plasticity/learned/${new Date().toISOString().slice(0, 13)}`),
+            title: "Learned consolidation",
+            body: `learned ${learned.before}→${learned.after}`,
+            tags: ["plasticity", "learned", "consolidate"],
+            sourceAgentId: agent.id.value,
+          }));
+        }
+      }
+      const ruleConsol = consolidateRuleLines(rules);
+      if (ruleConsol.changed && ruleConsol.lines.length) {
+        await this.memories.save(new MemoryNote({
+          key: slugKey(`plasticity/rules/${new Date().toISOString().slice(0, 13)}`),
+          title: "Rules consolidation",
+          body: ruleConsol.lines.join("\n"),
+          tags: ["plasticity", "rules", "consolidate"],
           sourceAgentId: agent.id.value,
         }));
       }
@@ -357,6 +414,20 @@ export class Kernel {
       }
     } else if (work.item === "self_run") {
       await this.runAutonomyDrill(agent.id.value, work.agendaId, work.goal, work.failClass);
+    } else if (work.item === "inner_think") {
+      await this.runInnerThink({
+        agentId: agent.id.value,
+        runId: open?.id.value,
+        reason: work.reason,
+        samost,
+        board,
+        existence,
+        failHints: fails.map((episode) => episode.nextHint || episode.goal),
+        wakeReasons: wakeItems
+          .filter((item) => item.status === "armed")
+          .map((item) => `${item.kind}: ${item.reason}`)
+          .slice(0, 4),
+      });
     } else if (work.item === "plastic_sleep") {
       await this.runPlasticSleep(agent.id.value, skillRecs, recent);
     }
@@ -367,6 +438,7 @@ export class Kernel {
       || work.item === "study"
       || work.item === "self_run"
       || work.item === "plastic_sleep"
+      || work.item === "inner_think"
     ) {
       await this.become(agent.id.value, `become: idle ${work.item}`);
     }
@@ -436,17 +508,33 @@ export class Kernel {
   ): Promise<AgendaItem[]> {
     const key = agendaMemoryKey(agentId);
     const existing = parseAgenda((await this.memories.get(key))?.body ?? "");
-    const backlogGaps = gapsFromBacklogRows(
-      recent
-        .filter((note) => note.tags.includes("backlog"))
-        .map((note) => {
-          const row = parseBacklog(note.body);
-          return row ? { klass: row.klass, count: row.count, hint: note.title } : null;
-        })
-        .filter((row): row is { klass: string; count: number; hint: string } => Boolean(row)),
-    );
+    const backlogRows = recent
+      .filter((note) => note.tags.includes("backlog"))
+      .map((note) => {
+        const row = parseBacklog(note.body);
+        return row ? { klass: row.klass, count: row.count, hint: note.title } : null;
+      })
+      .filter((row): row is { klass: string; count: number; hint: string } => Boolean(row));
+    const backlogGaps = gapsFromBacklogRows(backlogRows);
     const episodeGaps = gapsFromFailEpisodes(fails);
-    const proposed = [...backlogGaps, ...episodeGaps].map((gap) => proposeAgendaItem(gap));
+    const skillNotes = recent.filter((note) => note.tags.includes("body") && note.tags.includes("skill"));
+    const skillRecs = skillNotes.map((note) => {
+      const name = note.key.replace(/^body\/skill\//, "") || note.title;
+      return parseSkillBody(note.body, name);
+    });
+    const capMap = buildCapabilityMap({
+      skills: skillRecs,
+      failClasses: backlogRows.map((row) => ({ klass: row.klass, count: row.count, hint: row.hint })),
+    });
+    await this.memories.save(new MemoryNote({
+      key: capabilityMapKey(agentId),
+      title: "Capability map",
+      body: formatCapabilityMap(capMap),
+      tags: ["capability", "self-model", "autonomy"],
+      sourceAgentId: agentId,
+    }));
+    const capabilityGaps = gapsFromCapabilityMap(capMap);
+    const proposed = [...backlogGaps, ...episodeGaps, ...capabilityGaps].map((gap) => proposeAgendaItem(gap));
     const merged = mergeAgenda(existing, proposed);
     if (JSON.stringify(merged) !== JSON.stringify(existing)) {
       await this.memories.save(new MemoryNote({
@@ -514,6 +602,8 @@ export class Kernel {
     this.lastSelfRunAt = Date.now();
     const key = agendaMemoryKey(agentId);
     let items = parseAgenda((await this.memories.get(key))?.body ?? "");
+    const drill = items.find((item) => item.id === agendaId);
+    const zpd = drill?.zpdLevel ?? 1;
     items = markAgenda(items, agendaId, { status: "running" });
     await this.memories.save(new MemoryNote({
       key,
@@ -533,7 +623,21 @@ export class Kernel {
         sourceAgentId: agentId,
       }));
       const done = await this.send(created.id.value, goal);
-      const ok = done.status === "done";
+      let ok = done.status === "done";
+      let dropReason = "";
+      if (ok && zpd === 3) {
+        const evidence = done.transcript
+          .map((item) => `${item.kind}: ${item.text}`)
+          .join("\n");
+        const proof = judgeZpd3Proof({ failClass, evidence, goal });
+        if (!proof.ok) {
+          ok = false;
+          dropReason = proof.reason;
+          done.append("system", `zpd3_proof: fail · ${proof.reason}`);
+        } else {
+          done.append("system", `zpd3_proof: pass · ${proof.reason}`);
+        }
+      }
       items = markAgenda(items, agendaId, {
         status: ok ? "done" : "dropped",
         runId: created.id.value,
@@ -543,7 +647,14 @@ export class Kernel {
         key,
         title: "Autonomy agenda",
         body: formatAgenda(items),
-        tags: ["agenda", "autonomy", failClass, ok ? "done" : "dropped"],
+        tags: [
+          "agenda",
+          "autonomy",
+          failClass,
+          ok ? "done" : "dropped",
+          ...(zpd === 3 ? ["zpd3"] : []),
+          ...(dropReason ? ["zpd3-unproven"] : []),
+        ],
         sourceAgentId: agentId,
         sourceRunId: created.id.value,
       }));
@@ -575,6 +686,119 @@ export class Kernel {
       /* local fallback */
     }
     return mergeFailureRules([...compressShadowLocally(shadow), ...mergedRules]);
+  }
+
+  /** Bounded self-dialogue: board/memory/existence only — never an operator reply. */
+  private async runInnerThink(input: {
+    agentId: string;
+    runId?: string;
+    reason: "waiting" | "idle";
+    samost: ReturnType<typeof seedSamost>;
+    board: ReturnType<typeof parseBoard>;
+    existence: ReturnType<typeof parseExistence>;
+    failHints: string[];
+    wakeReasons: string[];
+  }): Promise<void> {
+    this.lastInnerThinkAt = Date.now();
+    let draft = innerThinkLocalFallback({
+      shadow: input.samost.shadow,
+      board: input.board,
+      failHints: input.failHints,
+    });
+    try {
+      const result = await this.llm.complete("planner", [
+        { role: "system", content: innerThinkSystemPrompt() },
+        {
+          role: "user",
+          content: innerThinkUserPrompt({
+            reason: input.reason,
+            motive: input.board.find((e) => e.kind === "motive")?.text,
+            board: input.board,
+            shadow: input.samost.shadow,
+            failHints: input.failHints,
+            wakeReasons: input.wakeReasons,
+          }),
+        },
+      ]);
+      const parsed = parseInnerThink(result.text || result.thinking || "");
+      if (parsed.thoughts || parsed.board.length || parsed.note) draft = parsed;
+    } catch {
+      /* keep local fallback */
+    }
+
+    if (input.runId) {
+      const nextBoard = applyInnerThinkBoard(input.board, draft.board);
+      await this.memories.save(new MemoryNote({
+        key: boardKey(input.runId),
+        title: "Board",
+        body: formatBoard(nextBoard),
+        tags: ["board", "psyche", "inner"],
+        sourceRunId: input.runId,
+        sourceAgentId: input.agentId,
+      }));
+      const thought = draft.thoughts || "inner think";
+      await this.memories.save(new MemoryNote({
+        key: existenceKey(input.runId),
+        title: "Existence",
+        body: formatExistence(appendExistence(input.existence, {
+          kind: "idle",
+          text: `inner(${input.reason}): ${thought.slice(0, 160)}`,
+        })),
+        tags: ["existence", "psyche", "inner"],
+        sourceRunId: input.runId,
+        sourceAgentId: input.agentId,
+      }));
+    }
+
+    if (draft.note) {
+      await this.memories.save(new MemoryNote({
+        key: slugKey(`inner/${Date.now()}`),
+        title: `Inner think (${input.reason})`,
+        body: draft.note,
+        tags: ["inner", "think", "experience"],
+        sourceAgentId: input.agentId,
+        sourceRunId: input.runId ?? "",
+      }));
+      const directives = parseInnerThinkDirectives(draft.note);
+      if (directives.shadow && !isRecapLesson(directives.shadow)) {
+        const note = await this.memories.get(samostKey(input.agentId));
+        const samost = note ? parseSamost(note.body) : input.samost;
+        await this.memories.save(new MemoryNote({
+          key: samostKey(input.agentId),
+          title: "Self",
+          body: formatSamost(absorbIntoSamost(samost, directives.shadow, "shadow")),
+          tags: ["samost", "psyche", "inner"],
+          sourceAgentId: input.agentId,
+        }));
+      }
+      if (directives.agenda) {
+        const key = agendaMemoryKey(input.agentId);
+        const existing = parseAgenda((await this.memories.get(key))?.body ?? "");
+        const proposed = proposeAgendaItem({
+          failClass: directives.agenda.failClass,
+          hint: directives.agenda.hint,
+          count: 2,
+          source: "inner",
+          zpdLevel: 1,
+        });
+        const merged = mergeAgenda(existing, [proposed]);
+        if (JSON.stringify(merged) !== JSON.stringify(existing)) {
+          await this.memories.save(new MemoryNote({
+            key,
+            title: "Autonomy agenda",
+            body: formatAgenda(merged),
+            tags: ["agenda", "autonomy", "inner"],
+            sourceAgentId: input.agentId,
+          }));
+        }
+      }
+    }
+
+    this.events.publish([event("psyche.inner_think", {
+      reason: input.reason,
+      boardAdds: draft.board.length,
+      hasNote: Boolean(draft.note),
+    })]);
   }
 
   private async postDesignSession(agentId: string): Promise<void> {

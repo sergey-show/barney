@@ -90,6 +90,27 @@ export function canRewriteSkill(rec: SkillBodyRecord | null | undefined): boolea
   return rec.status === "quarantine" && rec.wins === 0 && rec.transfers === 0;
 }
 
+/**
+ * Status law: quarantine → verified → frozen from wins / transfers.
+ * Shared by outcome recording and reconsolidation so promotion cannot drift.
+ */
+export function graduateSkillStatus(rec: SkillBodyRecord): SkillBodyRecord {
+  const next: SkillBodyRecord = { ...rec };
+  if (next.status === "quarantine" && (next.wins >= 2 || next.transfers >= 1)) {
+    next.status = "verified";
+  }
+  if (next.status === "verified" && (next.wins >= 3 || next.transfers >= 1)) {
+    next.status = "frozen";
+    next.frozenAt = next.updatedAt;
+  }
+  return next;
+}
+
+/** Active skills may enter SkillsLock; quarantine stays probation-only. */
+export function skillEligibleForLock(rec: SkillBodyRecord): boolean {
+  return rec.status === "verified" || rec.status === "frozen";
+}
+
 export function recordSkillOutcome(
   rec: SkillBodyRecord,
   input: { success: boolean; transfer: boolean },
@@ -103,23 +124,17 @@ export function recordSkillOutcome(
       updatedAt: now,
     };
   }
-  const next: SkillBodyRecord = {
+  return graduateSkillStatus({
     ...rec,
     wins: rec.wins + 1,
     transfers: rec.transfers + (input.transfer ? 1 : 0),
     strength: clamp01((rec.strength ?? 0.4) + 0.1),
     lastUsedAt: now,
     updatedAt: now,
-  };
-  if (next.status === "quarantine" && (next.wins >= 2 || next.transfers >= 1)) {
-    next.status = "verified";
-  }
-  if (next.status === "verified" && (next.wins >= 3 || next.transfers >= 1)) {
-    next.status = "frozen";
-    next.frozenAt = next.updatedAt;
-  }
-  return next;
+  });
 }
+
+// reshapeProcedureAfterOutcome applied by callers after record/reconsolidate
 
 export function formatSkillBodyHint(recs: SkillBodyRecord[]): string {
   if (!recs.length) return "";

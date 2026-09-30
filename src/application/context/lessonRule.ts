@@ -1,5 +1,6 @@
 import { redactSecrets } from "./packSession.ts";
 import { slugKey } from "../../domain/memory/MemoryNote.ts";
+import { updateRuleQuality } from "./calibration.ts";
 
 export type LessonTrail = {
   failedFamily: string;
@@ -49,6 +50,10 @@ export type LessonInput = {
   /** Prior confidence when reinforcing an existing rule. */
   priorConfidence?: number;
   priorVersion?: number;
+  /** Recalled rule was echoed in plan/act/tools this turn. */
+  recallUsed?: boolean;
+  /** Task outcome after review (pass and not operator-corrected). */
+  outcomeOk?: boolean;
 };
 
 export type LessonRule = {
@@ -67,8 +72,12 @@ export function lessonRule(input: LessonInput): LessonRule {
   const priorConf = input.priorConfidence ?? 0;
   const priorVer = input.priorVersion ?? 0;
   const confirmed = priorConf > 0;
+  const outcomeOk = input.outcomeOk ?? (input.verdict === "pass" && !input.operatorCorrected);
   const confidence = confirmed
-    ? Math.min(1, priorConf + 0.15)
+    ? updateRuleQuality(priorConf, {
+      recallUsed: Boolean(input.recallUsed),
+      outcomeOk,
+    })
     : crystallizeConfidence(input);
   const version = confirmed ? priorVer + 1 : 1;
   const sources = [...(input.sources ?? [])].slice(0, 5);

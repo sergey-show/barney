@@ -30,8 +30,10 @@ test("proposeAgendaItem builds a local drill goal", () => {
     source: "backlog",
   });
   expect(item.status).toBe("pending");
+  expect(item.zpdLevel).toBe(1);
   expect(item.goal).toContain("recovery-secret-leak.md");
   expect(item.goal).toContain("What failed");
+  expect(item.goal).toMatch(/ZPD-1/);
 });
 
 test("mergeAgenda dedupes by class and nextPending respects order", () => {

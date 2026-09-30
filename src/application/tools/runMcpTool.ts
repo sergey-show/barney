@@ -15,7 +15,11 @@ export async function runMcpTool(
         const listed = mcp.list();
         const live = runtime.running();
         if (!listed.length && !live.length) {
-          return "No MCP recipes. Prefer a skill. If you need a server, mcp_write name/command/args, then mcp_start.";
+          return [
+            "No MCP recipes on disk.",
+            "Capability law: plugin_list (prefer skill/plugin), then web_search or browser_open for the official package,",
+            "then mcp_write only with evidence. Do not invent npx args.",
+          ].join(" ");
         }
         const running = new Map(live.map((item) => [item.name, item.tools]));
         const recipes = listed.map((server) => {

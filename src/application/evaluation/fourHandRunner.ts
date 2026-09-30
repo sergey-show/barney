@@ -232,6 +232,8 @@ function scoreArm(
     recallHit: recall.hit,
     recallUsed: recall.used,
     recallHelped: recall.helped,
+    skillReused: recall.skillReused,
+    skillFalse: recall.skillFalse,
   };
 }
 
@@ -248,20 +250,26 @@ export function parseRecallSignals(transcript: TranscriptItem[]): {
   hit: boolean;
   used: boolean;
   helped: boolean | null;
+  skillReused: boolean;
+  skillFalse: boolean;
 } {
   let hit = false;
   let used = false;
   let helped: boolean | null = null;
+  let skillReused = false;
+  let skillFalse = false;
   for (const item of transcript) {
     if (item.kind !== "system") continue;
     const line = item.text;
+    if (/skill_reuse:\s*1/.test(line)) skillReused = true;
+    if (/skill_false:\s*1/.test(line)) skillFalse = true;
     if (!/recall_hit:/.test(line)) continue;
     hit = /recall_hit:\s*1/.test(line) || hit;
     used = /recall_used:\s*1/.test(line) || used;
     if (/recall_helped:\s*1/.test(line)) helped = true;
     else if (/recall_helped:\s*0/.test(line) && helped !== true) helped = false;
   }
-  return { hit, used, helped };
+  return { hit, used, helped, skillReused, skillFalse };
 }
 
 function verdictOf(lift: number, n: number): FourHandReport["verdict"] {
@@ -278,6 +286,8 @@ export function formatFourHandReport(report: FourHandReport): string {
     `transfer_success_lift: ${report.metrics.transferSuccessLift.toFixed(2)}`,
     `recall_hit_rate: ${report.metrics.recallHitRate.toFixed(2)}`,
     `recall_used_rate: ${report.metrics.recallUsedRate.toFixed(2)}`,
+    `skill_reuse_rate: ${report.metrics.skillReuseRate.toFixed(2)}`,
+    `false_skill_rate: ${report.metrics.falseSkillRate.toFixed(2)}`,
     `spaced_plan: ${report.spacedPlan.map((p) => p.label).join(" → ")}`,
     "",
   ];
