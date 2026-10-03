@@ -14,6 +14,8 @@ import { SqliteRunRepository } from "../../infrastructure/persistence/SqliteRunR
 import { openStore } from "../../infrastructure/persistence/SqliteStore.ts";
 import { ProcessTable } from "../../infrastructure/process/ProcessTable.ts";
 import { FsPluginStore } from "../../infrastructure/plugins/FsPluginStore.ts";
+import { FsProviderStore } from "../../infrastructure/spi/FsProviderStore.ts";
+import { CompositeVerifyPort } from "../spi/CompositeVerifyPort.ts";
 import { NodeWorkspace } from "../../infrastructure/workspace/NodeWorkspace.ts";
 import { DriveSolve } from "./DriveSolve.ts";
 import { EnsureDefaultAgent } from "./EnsureDefaultAgent.ts";
@@ -58,6 +60,8 @@ function harness(home: string) {
   const runs = new SqliteRunRepository(db, agents);
   const llm = new ScriptedLearner();
   const skills = new FsPluginStore(join(home, "plugins"));
+  const providers = new FsProviderStore(join(home, "providers"));
+  const verifyPort = new CompositeVerifyPort(providers);
   const memory = new SqliteMemoryRepository(db);
   const start = new StartRun(agents, runs, { create: async (id) => {
     const dir = worktree(home, id);
@@ -80,6 +84,8 @@ function harness(home: string) {
     silentHome(),
     new ProcessTable(),
     new McpRuntime(),
+    providers,
+    verifyPort,
   );
   return { start, drive, memory, skills, llm, agents };
 }

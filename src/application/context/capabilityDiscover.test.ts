@@ -14,7 +14,7 @@ test("blocks invent write without list", () => {
     ledger: emptyDiscoverLedger(),
   });
   expect(hit.blocked).toBe(true);
-  expect(hit.reason).toMatch(/mcp_list or plugin_list/i);
+  expect(hit.reason).toMatch(/mcp_list,\s*plugin_list,\s*or provider_list/i);
 });
 
 test("blocks invent write after list but without research", () => {
@@ -46,6 +46,21 @@ test("allows new plugin after list without web_search", () => {
   noteDiscoverTool(ledger, "plugin_list");
   expect(gateCapabilityWrite({
     toolName: "plugin_write",
+    alreadyExists: false,
+    ledger,
+  }).blocked).toBe(false);
+});
+
+test("blocks provider_write without provider_list; allows after list", () => {
+  expect(gateCapabilityWrite({
+    toolName: "provider_write",
+    alreadyExists: false,
+    ledger: emptyDiscoverLedger(),
+  }).blocked).toBe(true);
+  const ledger = emptyDiscoverLedger();
+  noteDiscoverTool(ledger, "provider_list");
+  expect(gateCapabilityWrite({
+    toolName: "provider_write",
     alreadyExists: false,
     ledger,
   }).blocked).toBe(false);

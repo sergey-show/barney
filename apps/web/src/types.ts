@@ -43,6 +43,30 @@ export type PsycheState = {
   episodes: Array<{ id: string; runId: string; goal: string; outcome: string; failureMode: string | null; nextHint: string; createdAt: string }>;
 };
 
+export type PsycheEvolution = {
+  shadowCount: number;
+  lightCount: number;
+  skills: {
+    quarantine: string[];
+    verified: string[];
+    frozen: string[];
+    quarantineCount: number;
+    verifiedCount: number;
+    frozenCount: number;
+  };
+  frustration: number | null;
+  frustrationSource: "episode" | "transcript" | "none";
+  lastDreamAt: string | null;
+  lastDreamSummary: string | null;
+  agenda: {
+    pending: Array<{ id: string; goal: string; status: string; failClass: string; zpdLevel?: number }>;
+    running: Array<{ id: string; goal: string; status: string; failClass: string; zpdLevel?: number }>;
+    nextGoal: string | null;
+  };
+  designSealed: boolean;
+  updatedAt: string;
+};
+
 export function lanesOf(state: ProviderState): Lanes {
   if (state.lanes) return { large: state.lanes.large, small: null };
   const large = state.bindings.find((item) => item.role === "coder");

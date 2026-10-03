@@ -174,6 +174,9 @@ is started. The first ACP prompt creates the Barney run in the client's `cwd`,
 later prompts reuse it, and cancellation uses the same runtime path as Web and
 CLI.
 
+**One-click IDE wiring** (no hand-rolled JSON-RPC): see [`extensions/`](extensions/README.md)
+for VS Code VSIX and Cursor settings.
+
 ## Body
 
 `~/.barney` is the body. Git there is the biography of becoming.

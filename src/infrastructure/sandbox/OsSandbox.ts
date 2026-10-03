@@ -28,14 +28,30 @@ export function wrapSandboxed(spec: SandboxSpec): { command: string; args: strin
   return { command: spec.command, args: spec.args };
 }
 
+/**
+ * Tighter default bubblewrap profile:
+ * - read-only root; only the worktree is writable
+ * - fresh /tmp; isolated pid/ipc/uts namespaces
+ * - no new privileges
+ *
+ * This is OS-level containment for shell tools — not a Docker VM and not
+ * "absolute" isolation. Optional Docker profile: `deploy/docker/sandbox/`.
+ */
 export function linuxSandboxArgs(spec: SandboxSpec): string[] {
   return [
     "--die-with-parent",
+    "--unshare-pid",
+    "--unshare-ipc",
+    "--unshare-uts",
+    "--hostname", "barney-sandbox",
+    "--new-session",
+    "--cap-drop", "ALL",
     "--ro-bind", "/", "/",
     "--dev", "/dev",
     "--proc", "/proc",
     "--tmpfs", "/tmp",
     "--bind", spec.cwd, spec.cwd,
+    "--chdir", spec.cwd,
     spec.command,
     ...spec.args,
   ];

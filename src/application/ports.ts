@@ -169,6 +169,10 @@ export interface SkillPort {
   readAsset(name: string, path: string): string;
 }
 
+/** Stable SPI verify port — implemented by body providers, not by patching the kernel. */
+export type { VerifyPort } from "./spi/CompositeVerifyPort.ts";
+export type { VerifyRequest, VerifyResult } from "./spi/providerTypes.ts";
+
 export interface EventBus {
   publish(events: DomainEvent[]): void;
   subscribe(handler: (event: DomainEvent) => void): () => void;

@@ -85,7 +85,10 @@ barney eval experience --out ./tmp/fourhand-proof
 | `house-merge` | PASS | FAIL | FAIL | 1 | 1 | 0 |
 
 Verdict `experience_helps` · mean lift **1.00**.  
-`kernelLift = 0`. Spaced: immediate only. `skillReuseRate: 0`.
+`kernelLift = 0`. Spaced: immediate only.
+After train, `house-redact` seeds a frozen SkillsLock skill (`house-redact-tokens`)
+so kernel-test can measure `skill_reuse` when house tokens are applied
+(`skillReuseRate` can be `> 0`; `falseSkillRate` stays documented).
 
 Report: [`docs/proof/2026-09-15-fourhand-qwen38`](./proof/2026-09-15-fourhand-qwen38/).
 
@@ -105,8 +108,10 @@ In idle, dream compress merges near-duplicate failure rules (`mergeFailureRules`
 | `recall_used_rate` | steps where plan/act actually answered the recall |
 | `recall_helped` | causal help only (four-hand) |
 | spaced retention | lift across delays (holds / fades) |
-| `skill_reuse_rate` | verified skill used on a new task |
-| `false_skill_rate` | pinned skill that did not help / hurt |
+| `skill_reuse_rate` | fraction of **kernel-test** arms with `skill_reuse: 1` (verified/frozen skill recalled+used+success; may include same-turn promote) |
+| `false_skill_rate` | fraction of **kernel-test** arms with `skill_false: 1` (verified/frozen recalled+used+**fail**; quarantine used+fail does not count) |
+
+`house-merge` may keep `skillReuseRate: 0` while `transfer_success_lift: 1` — that is the **lesson/memory** layer, not a bug. `house-redact` seeds `house-redact-tokens` after train so the **SkillsLock** layer can be measured.
 | `shadow_to_rule` | fails → rules that later hit |
 | `calibration` (Brier) | stated P(success) from recalled rule conf / skill strength vs outcome; `overconfident:1` when pred≥0.7 and fail |
 

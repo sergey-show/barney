@@ -44,6 +44,10 @@ Kernel sources (`src/`, `DriveSolve.ts`, `Kernel.ts`) cannot be rewritten. That 
 
 Secrets in tool output become `DETECTED_SECRET_<KIND>_<HASH>`. Use the **full token** in `fs_edit` / `sed`. A grep for the letters `DETECTED_SECRET` will miss live secrets on disk.
 
+Shadow / experience recall redacts live keys and `DETECTED_SECRET_*` before prompt injection (`shadowIsolation.ts`). Notes tagged `secret` are excluded from cross-task Shadow recall.
+
+Shell Constrain: [constrain.md](constrain.md).
+
 The same exact failed call is blocked. A tool family that fails twice is saturated: change family, do not hammer the same tool.
 
 `fs_restore` brings back the last good session version of a file after a bad write.

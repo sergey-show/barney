@@ -31,6 +31,7 @@ test("hard transfer cases have working verifiers", () => {
     }
   }
   expect(HARD_TRANSFER_CASES.map((c) => c.id)).toEqual(["house-redact", "house-merge"]);
+  expect(HARD_TRANSFER_CASES[0]?.skillSeed?.name).toBe("house-redact-tokens");
 });
 
 test("house-redact rejects <your-…> and accepts house tokens", () => {

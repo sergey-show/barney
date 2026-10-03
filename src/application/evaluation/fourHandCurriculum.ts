@@ -24,6 +24,16 @@ export type HardTransferCase = {
   setupTest: (worktree: string) => void;
   verifyTrain?: (worktree: string) => { ok: boolean; detail: string };
   verifyTest: (worktree: string) => { ok: boolean; detail: string };
+  /**
+   * After successful train, seed a verified/frozen skill into the train home
+   * so kernel-test can exercise skill_reuse (SkillsLock path).
+   */
+  skillSeed?: {
+    name: string;
+    klass: string;
+    procedure: string[];
+    fingerprints?: string[];
+  };
 };
 
 export type ArmResult = {
@@ -128,6 +138,17 @@ export const HARD_TRANSFER_CASES: HardTransferCase[] = [
       "Do not invent `<your-…>` tokens.",
     ].join(" "),
     whyHard: "Test never spells house tokens; fresh invents <your-…> or REDACTED and fails.",
+    skillSeed: {
+      name: "house-redact-tokens",
+      klass: "sanitize",
+      procedure: [
+        "replace live secrets with <barney-redact-aws>",
+        "replace github with <barney-redact-github>",
+        "replace slack with <barney-redact-slack>",
+        "write audit.txt aws=1 github=1 slack=1",
+      ],
+      fingerprints: ["<barney-redact-aws>", "<barney-redact-github>", "<barney-redact-slack>"],
+    },
     setupTrain: (worktree) => {
       write(
         worktree,

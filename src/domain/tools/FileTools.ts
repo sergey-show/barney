@@ -133,6 +133,60 @@ export const SHELL_TOOL: ToolSpec = {
   },
 };
 
+export const PROVIDER_TOOLS: ToolSpec[] = [
+  {
+    name: "provider_list",
+    description:
+      "List body SPI providers (~/.barney/providers). Kernel ports stay fixed; providers are quarantine→exam→activate. Prefer skill/plugin before inventing a provider.",
+    parameters: { type: "object", properties: {} },
+  },
+  {
+    name: "provider_read",
+    description: "Read provider.json or a file inside ~/.barney/providers/<name>/.",
+    parameters: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "kebab-case provider name" },
+        path: { type: "string", description: "File inside provider dir (default provider.json)" },
+      },
+      required: ["name"],
+    },
+  },
+  {
+    name: "provider_write",
+    description:
+      "Create/update a body SPI provider (not kernel src/). Requires provider_list first. Starts in quarantine; activate via provider_exam. Pilot port: verify (shell script).",
+    parameters: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "kebab-case provider name" },
+        path: { type: "string", description: "File inside provider, e.g. provider.json or verify.sh" },
+        content: { type: "string", description: "Full file contents" },
+        description: { type: "string", description: "Optional description when creating" },
+      },
+      required: ["name", "path", "content"],
+    },
+  },
+  {
+    name: "provider_exam",
+    description:
+      "Run a quarantine/active verify provider against the worktree. Success graduates status (quarantine→verified→frozen). Does not patch the kernel.",
+    parameters: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "Provider name" },
+        transfer: { type: "string", description: "Set true when this is a shifted-instance exam" },
+      },
+      required: ["name"],
+    },
+  },
+  {
+    name: "provider_verify",
+    description: "Run all verified|frozen verify providers (soft checks). Observation only — does not override Review.",
+    parameters: { type: "object", properties: {} },
+  },
+];
+
 export const PLUGIN_TOOLS: ToolSpec[] = [
   {
     name: "plugin_list",
@@ -528,5 +582,5 @@ export const SELF_TOOLS: ToolSpec[] = [
   },
 ];
 
-export const AGENT_TOOLS: ToolSpec[] = [...FILE_TOOLS, SHELL_TOOL, WEB_SEARCH_TOOL, ...PLUGIN_TOOLS, ...BROWSER_TOOLS, ...MEMORY_TOOLS, ...TEAM_TOOLS, ...PROCESS_TOOLS, ...WAKE_TOOLS, ...MCP_TOOLS, ...SELF_TOOLS];
+export const AGENT_TOOLS: ToolSpec[] = [...FILE_TOOLS, SHELL_TOOL, WEB_SEARCH_TOOL, ...PLUGIN_TOOLS, ...PROVIDER_TOOLS, ...BROWSER_TOOLS, ...MEMORY_TOOLS, ...TEAM_TOOLS, ...PROCESS_TOOLS, ...WAKE_TOOLS, ...MCP_TOOLS, ...SELF_TOOLS];
 export const CHILD_TOOLS: ToolSpec[] = AGENT_TOOLS.filter((tool) => !["agent_spawn", "agent_delegate", "plan_set", "self_rollback"].includes(tool.name));
