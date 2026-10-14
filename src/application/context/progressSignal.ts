@@ -2,6 +2,8 @@
  * Run-local progress signal: feeds wanting ≠ liking, persist nudges, and review pins.
  * Score rises when missing artifacts fall, mutates/probes appear, or failure mode changes.
  */
+import { evidenceWrote } from "./reviewJudge.ts";
+
 
 export type ProgressDelta = "improved" | "flat" | "regressed";
 
@@ -126,12 +128,7 @@ function countMissingArtifacts(latest: string, evidence: string): number {
 }
 
 function evidenceWrotePath(evidence: string, path: string): boolean {
-  const base = path.split("/").filter(Boolean).at(-1) ?? path;
-  return new RegExp(
-    `(?:fs_write|fs_edit|wrote)\\b[^\\n]*${escapeReg(base)}|` +
-      `(?:tee|\\>|\\>\\>)\\s*[^\\n]*${escapeReg(base)}`,
-    "i",
-  ).test(evidence);
+  return evidenceWrote(evidence, path);
 }
 
 function countMutates(evidence: string): number {
@@ -139,7 +136,11 @@ function countMutates(evidence: string): number {
   for (const block of evidence.split(/\n(?=(?:fs_|shell |browser_))/)) {
     const head = block.split("\n")[0] ?? "";
     if (/^fs_(?:write|edit|append) /.test(head) && !/^error:/im.test(block)) n += 1;
-    else if (/^shell /.test(head) && /\bsed\b/i.test(head) && /-i\b/.test(head) && /^exit 0\b/m.test(block)) n += 1;
+    else if (
+      /^shell /.test(head)
+      && /\b(?:sed\s+-i|cp|mv|install)\b/i.test(head)
+      && /^exit 0\b/m.test(block)
+    ) n += 1;
   }
   return n;
 }
@@ -162,10 +163,6 @@ function countInspections(evidence: string): number {
     else if (/^shell /.test(head) && /\b(?:grep|find|rg|git\s+status|git\s+log)\b/i.test(head)) n += 1;
   }
   return n;
-}
-
-function escapeReg(text: string): string {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function clamp(n: number, lo: number, hi: number): number {

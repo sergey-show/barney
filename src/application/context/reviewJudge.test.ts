@@ -1,6 +1,16 @@
 import { expect, test } from "bun:test";
 import { clipText } from "./packSession.ts";
-import { artifactPins, inferFailureKind, judgeReview, missingIsLocalArtifact, parseReview, requestedArtifacts, stillMissingArtifacts } from "./reviewJudge.ts";
+import {
+  artifactPins,
+  evidenceWrote,
+  inferFailureKind,
+  judgeReview,
+  missingIsLocalArtifact,
+  parseReview,
+  requestedArtifacts,
+  stillMissingArtifacts,
+  unwrittenArtifacts,
+} from "./reviewJudge.ts";
 
 test("parseReview stringifies array missing so clipText does not crash", () => {
   const review = parseReview(
@@ -498,4 +508,47 @@ test("judgeReview trusts reviewer on invented vs copied token formats", () => {
     ].join("\n"),
   );
   expect(failed.verdict).toBe("fail");
+});
+
+test("cp + ls full path credits nginx-style shell delivery (no Not yet written)", () => {
+  const latest = [
+    "Configure `/etc/nginx/nginx.conf` and `/etc/nginx/conf.d/benchmark-site.conf`",
+    "Write `/var/www/html/index.html` and `/var/www/html/404.html`",
+  ].join("\n");
+  const evidence = [
+    'fs_write {"path":"/tmp/nginx.conf","content":"http { }"}\nwrote /tmp/nginx.conf (10 chars)',
+    'fs_write {"path":"/tmp/benchmark-site.conf","content":"server { }"}\nwrote /tmp/benchmark-site.conf (10 chars)',
+    'shell {"command":"cp /tmp/nginx.conf /etc/nginx/nginx.conf && cp /tmp/benchmark-site.conf /etc/nginx/conf.d/benchmark-site.conf && nginx -t"}',
+    "exit 0",
+    "nginx: configuration file /etc/nginx/nginx.conf test is successful",
+    'shell {"command":"ls -la /etc/nginx/nginx.conf /etc/nginx/conf.d/benchmark-site.conf /var/www/html/index.html /var/www/html/404.html"}',
+    "exit 0",
+    "-rw-r--r-- 1 root root 777 Oct 14 07:55 /etc/nginx/nginx.conf",
+    "-rw-r--r-- 1 root root 423 Oct 14 07:55 /etc/nginx/conf.d/benchmark-site.conf",
+    "-rw-r--r-- 1 root root  34 Oct 14 07:59 /var/www/html/index.html",
+    "-rw-r--r-- 1 root root  38 Oct 14 07:59 /var/www/html/404.html",
+  ].join("\n");
+
+  expect(evidenceWrote(evidence, "/etc/nginx/nginx.conf")).toBe(true);
+  expect(evidenceWrote(evidence, "/etc/nginx/conf.d/benchmark-site.conf")).toBe(true);
+  expect(evidenceWrote(evidence, "/var/www/html/index.html")).toBe(true);
+  expect(unwrittenArtifacts(latest, evidence)).toEqual([]);
+  expect(artifactPins(latest, evidence)).not.toContain("Not yet written");
+  expect(artifactPins(latest, evidence)).toContain("Already on disk");
+
+  const review = judgeReview(
+    '{"verdict":"pass","achieved":true,"summary":"nginx up","needsResearch":false}',
+    latest,
+    evidence,
+  );
+  expect(review.verdict).toBe("pass");
+});
+
+test("failed cp does not credit the destination path", () => {
+  const evidence = [
+    'shell {"command":"cp /tmp/missing /etc/nginx/nginx.conf"}',
+    "exit 1",
+    "cp: cannot stat '/tmp/missing'",
+  ].join("\n");
+  expect(evidenceWrote(evidence, "/etc/nginx/nginx.conf")).toBe(false);
 });

@@ -1,0 +1,236 @@
+[
+  {
+    "job": "2026-10-14__12-05-14",
+    "dir": "fix-git__JfKGYzB",
+    "reward": 1.0,
+    "exc": null,
+    "done": "ready",
+    "n_console": 8,
+    "n_review": 1,
+    "fail_hint": "",
+    "last": "review: pass: Agent found the orphaned commit c499730 'Move to Stanford' via reflog, created a backup branch 'lost-changes', cherry-picked it onto master, resolved a co",
+    "n_events": 35,
+    "reviews": [
+      "pass: Agent found the orphaned commit c499730 'Move to Stanford' via reflog, created a backup branch 'lost-changes', cherry-picked it onto master, resolved a conflict in _includes/about.md, and confir"
+    ]
+  },
+  {
+    "job": "2026-10-14__12-05-14",
+    "dir": "nginx-request-logging__PpSkfpB",
+    "reward": 1.0,
+    "exc": null,
+    "done": "ready",
+    "n_console": 14,
+    "n_review": 2,
+    "fail_hint": "",
+    "last": "review: pass: All requirements verified in console evidence: Nginx installed and running on port 8080. benchmark-site.conf correctly configures listen 8080, root /var/w",
+    "n_events": 50,
+    "reviews": [
+      "fail: All requirements verified through console evidence: nginx installed (1.22.1), /etc/nginx/nginx.conf contains log_format bench_format with $time_local, $request_method, $status, double-quoted $ht",
+      "pass: All requirements verified in console evidence: Nginx installed and running on port 8080. benchmark-site.conf correctly configures listen 8080, root /var/www/html, access_log with bench_format to"
+    ]
+  },
+  {
+    "job": "2026-10-14__12-05-14",
+    "dir": "openssl-selfsigned-cert__MWKwUfs",
+    "reward": 1.0,
+    "exc": null,
+    "done": "ready",
+    "n_console": 17,
+    "n_review": 2,
+    "fail_hint": "",
+    "last": "review: pass: All 6 deliverables verified on disk: /app/ssl/ directory exists with server.key (600 perms, 2048-bit RSA), server.crt (O=DevOps Team, CN=dev-internal.comp",
+    "n_events": 55,
+    "reviews": [
+      "fail: Five of six deliverables are on disk and appear correct (key 2048-bit RSA 600, 365-day self-signed cert with O=DevOps Team / CN=dev-internal.company.local, combined PEM, verification.txt with su",
+      "pass: All 6 deliverables verified on disk: /app/ssl/ directory exists with server.key (600 perms, 2048-bit RSA), server.crt (O=DevOps Team, CN=dev-internal.company.local, 365-day validity 2026-10-14 t"
+    ]
+  },
+  {
+    "job": "2026-10-14__12-05-14",
+    "dir": "sanitize-git-repo__jW994wL",
+    "reward": 0.0,
+    "exc": null,
+    "done": "ready",
+    "n_console": 72,
+    "n_review": 5,
+    "fail_hint": "FAILED ../../tests/test_outputs.py::test_no_other_files_changed - ValueError:...",
+    "last": "review: fail: Agent successfully identified and replaced all API keys across 4 files (ray_processing/ray_cluster.yaml, ray_processing/process.py, eval/eval_openlm_ckpt.",
+    "n_events": 175,
+    "reviews": [
+      "fail: Agent successfully replaced all identified secrets in 4 files (ray_cluster.yaml, process.py, eval_openlm_ckpt.py, and a JSON dataset file) with the user-specified placeholders. Final tree-wide v",
+      "uncertain: ",
+      "fail: Agent successfully identified and replaced all API keys across 4 files (ray_processing/ray_cluster.yaml, ray_processing/process.py, eval/eval_openlm_ckpt.py, and the arcade100k.json file). Final"
+    ]
+  },
+  {
+    "job": "2026-10-14__12-05-14",
+    "dir": "write-compressor__JvH6uoe",
+    "reward": 0.0,
+    "exc": null,
+    "done": "ready",
+    "n_console": 10,
+    "n_review": 3,
+    "fail_hint": "E       AssertionError: File /app/data.comp does not exist",
+    "last": "review: fail: The agent read decomp.c, attempted to write a broken Python compressor script, hit 'python3: not found', discovered perl/gcc/cc were available, and then s",
+    "n_events": 52,
+    "reviews": [
+      "fail: The agent began reverse-engineering the decompressor's arithmetic-coding / range-coding scheme to understand how to generate valid compressed input, but never actually produced or wrote the data",
+      "fail: The agent read decomp.c, understood the decoder semantics, and began drafting a Python compressor, but never completed or ran it. The pin 'Not yet written: data.comp' confirms the deliverable wa",
+      "fail: The agent read decomp.c, attempted to write a broken Python compressor script, hit 'python3: not found', discovered perl/gcc/cc were available, and then stopped. The pin explicitly says 'Not yet"
+    ]
+  },
+  {
+    "job": "2026-10-14__13-37-58",
+    "dir": "kv-store-grpc__PCSS36s",
+    "reward": 1.0,
+    "exc": null,
+    "done": "ready",
+    "n_console": 15,
+    "n_review": 1,
+    "fail_hint": "",
+    "last": "review: pass: All 5 requirements are satisfied: (1) grpcio-1.73.0 and grpcio-tools-1.73.0 installed system-wide; (2) /app/kv-store.proto created with KVStore service, G",
+    "n_events": 44,
+    "reviews": [
+      "pass: All 5 requirements are satisfied: (1) grpcio-1.73.0 and grpcio-tools-1.73.0 installed system-wide; (2) /app/kv-store.proto created with KVStore service, GetVal and SetVal RPCs (field number coll"
+    ]
+  },
+  {
+    "job": "2026-10-14__13-37-58",
+    "dir": "log-summary-date-ranges__DrWiRg3",
+    "reward": 1.0,
+    "exc": null,
+    "done": "ready",
+    "n_console": 21,
+    "n_review": 2,
+    "fail_hint": "",
+    "last": "review: pass: The agent wrote /app/summary.csv with the exact requested structure and verified counts. Independent verification via 'find . -name \"*.log\" | xargs grep -",
+    "n_events": 63,
+    "reviews": [
+      "fail: The agent wrote and ran a Python script (collect.py) that computed correct counts (verified via grep/shell against the log files), but the pin line 'Not yet written: /app/summary.csv' confirms t",
+      "pass: The agent wrote /app/summary.csv with the exact requested structure and verified counts. Independent verification via 'find . -name \"*.log\" | xargs grep -hoE' confirms totals match (14160 ERROR,"
+    ]
+  },
+  {
+    "job": "2026-10-14__13-37-58",
+    "dir": "merge-diff-arc-agi-task__EYRJjyR",
+    "reward": 1.0,
+    "exc": null,
+    "done": "ready",
+    "n_console": 26,
+    "n_review": 2,
+    "fail_hint": "",
+    "last": "review: pass: All criteria met: /app/repo initialized as git repo, branch1 (c8dca82) and branch2 (836b057) created from respective bundles, branch2 merged into branch1 ",
+    "n_events": 79,
+    "reviews": [
+      "fail: The agent correctly identified the anti-diagonal modulo-3 pattern and produced working logic, but: (a) the git merge failed with 'CONFLICT (content): Merge conflict in algo.py' and was never res",
+      "pass: All criteria met: /app/repo initialized as git repo, branch1 (c8dca82) and branch2 (836b057) created from respective bundles, branch2 merged into branch1 (commit 51cb528), algo.py present in tra"
+    ]
+  },
+  {
+    "job": "2026-10-14__13-37-58",
+    "dir": "pypi-server__yba2P5h",
+    "reward": 1.0,
+    "exc": "NonZeroAgentExitCodeError",
+    "done": null,
+    "n_console": 0,
+    "n_review": 0,
+    "fail_hint": "",
+    "last": "",
+    "n_events": 0,
+    "reviews": []
+  },
+  {
+    "job": "2026-10-14__13-37-58",
+    "dir": "regex-log__DyRX2wc",
+    "reward": 0.0,
+    "exc": null,
+    "done": "ready",
+    "n_console": 11,
+    "n_review": 2,
+    "fail_hint": "            raise AssertionError(f\"Regex in {regex_file} is invalid: {e}\")",
+    "last": "review: fail: The file /app/regex.txt exists with content, but the regex uses `.*?` (non-greedy) which causes it to match the first date in a line, not the last date as",
+    "n_events": 46,
+    "reviews": [
+      "fail: The final content of /app/regex.txt is: ^(?=.*(?<![0-9A-Za-z])(?:IPv4)(?![0-9A-Za-z])).*?(?<![0-9A-Za-z])(DATE)(?![0-9A-Za-z]). The critical flaw: the delimiter between the IPv4-verified lookahe",
+      "fail: The file /app/regex.txt exists with content, but the regex uses `.*?` (non-greedy) which causes it to match the first date in a line, not the last date as the user explicitly requested. To match"
+    ]
+  },
+  {
+    "job": "2026-10-14__14-47-42",
+    "dir": "caffe-cifar-10__Hw9xQu7",
+    "reward": 0.0,
+    "exc": null,
+    "done": "ready",
+    "n_console": 41,
+    "n_review": 3,
+    "fail_hint": "E       AssertionError: Caffe binary not found at any expected location: ['/app/caffe/.build_release/tools/caffe.bin', '/app/caffe/build/tools/caffe']",
+    "last": "review: fail: The agent only performed disk-space probing, wrote a throwaway test file (tmp_test.txt, later removed), and attempted to mount a block device. No evidence",
+    "n_events": 101,
+    "reviews": [
+      "fail: Agent failed at the very first step: installing build dependencies. Multiple apt-get attempts all failed with 'You don't have enough free space in /var/cache/apt/archives/'. The overlay filesyst",
+      "fail: The agent only managed to install some build dependencies via apt (after several failures) but never cloned Caffe, never built it, never downloaded CIFAR-10 data, never created the solver protot",
+      "fail: The agent only performed disk-space probing, wrote a throwaway test file (tmp_test.txt, later removed), and attempted to mount a block device. No evidence of Caffe being cloned, built, trained, "
+    ]
+  },
+  {
+    "job": "2026-10-14__14-47-42",
+    "dir": "path-tracing__gsoj5YM",
+    "reward": 0.0,
+    "exc": null,
+    "done": "ready",
+    "n_console": 42,
+    "n_review": 3,
+    "fail_hint": "E       AssertionError: File /app/image.c does not exist",
+    "last": "review: fail: The agent attempted to reverse-engineer a binary (orig) to extract rendering parameters (sphere/plane intersection, sky color, rodata floats) but all anal",
+    "n_events": 102,
+    "reviews": [
+      "fail: The agent performed analysis of the binary 'orig' (objdump, strings, file inspection) but never actually wrote the required image.c file. The pin explicitly states 'Not yet written: image.c'. No",
+      "fail: The agent spent the entire session reverse-engineering the target binary via objdump/disassembly, trying to understand the raytracer's scene constants and shading model. However, it never actual",
+      "fail: The agent attempted to reverse-engineer a binary (orig) to extract rendering parameters (sphere/plane intersection, sky color, rodata floats) but all analysis scripts failed (missing /tmp/ro.txt"
+    ]
+  },
+  {
+    "job": "2026-10-14__14-47-42",
+    "dir": "pytorch-model-recovery__c6xRA38",
+    "reward": null,
+    "exc": "NonZeroAgentExitCodeError",
+    "done": null,
+    "n_console": 0,
+    "n_review": 0,
+    "fail_hint": "",
+    "last": "",
+    "n_events": 0,
+    "reviews": []
+  },
+  {
+    "job": "2026-10-14__14-47-42",
+    "dir": "qemu-alpine-ssh__Xr8CKpa",
+    "reward": null,
+    "exc": "NonZeroAgentExitCodeError",
+    "done": null,
+    "n_console": 0,
+    "n_review": 0,
+    "fail_hint": "",
+    "last": "",
+    "n_events": 0,
+    "reviews": []
+  },
+  {
+    "job": "2026-10-14__14-47-42",
+    "dir": "schemelike-metacircular-eval__PMqQLTA",
+    "reward": 0.0,
+    "exc": null,
+    "done": "ready",
+    "n_console": 28,
+    "n_review": 3,
+    "fail_hint": "/tests/test_outputs.py:220: AssertionError",
+    "last": "review: fail: The agent is still in the analysis phase, discussing design challenges around mutable environments and define-inside-lambda. While eval.scm is noted as 'A",
+    "n_events": 79,
+    "reviews": [
+      "fail: The agent produced only a stream of design reasoning about how to implement the metacircular evaluator (meta-closures, environment cells, primitive detection, etc.) but never actually wrote the ",
+      "fail: The agent produced no deliverable. Shell evidence explicitly shows 'ls: cannot access /app/eval.scm: No such file or directory'. The agent's reply consists of internal debugging thoughts about i",
+      "fail: The agent is still in the analysis phase, discussing design challenges around mutable environments and define-inside-lambda. While eval.scm is noted as 'Already on disk', there is no evidence th"
+    ]
+  }
+]

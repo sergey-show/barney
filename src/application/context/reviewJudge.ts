@@ -489,11 +489,19 @@ function shellExitFailed(block: string): boolean {
 }
 
 function evidenceListed(evidence: string, requested: string): boolean {
-  const base = requested.replaceAll("\\", "/").split("/").filter(Boolean).at(-1);
-  if (!base) return false;
-  const escaped = base.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  if (new RegExp(`${escaped} EXISTS\\b`).test(evidence)) return true;
-  return new RegExp(`^-[rwxsStT-]{9,11}\\s[^\\n]*\\s${escaped}\\s*$`, "m").test(evidence);
+  return writeAliases(requested).some((alias) => {
+    const escaped = alias.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    if (new RegExp(`${escaped} EXISTS\\b`).test(evidence)) return true;
+    // ls -la: mode … basename, or mode … /full/path/basename
+    if (new RegExp(`^-[rwxsStT-]{9,11}\\s[^\\n]*(?:\\s|/)${escaped}\\s*$`, "m").test(evidence)) {
+      return true;
+    }
+    // stat -c '%n %s bytes …' (nginx-style absolute path first)
+    if (alias.includes("/") && new RegExp(`^${escaped}\\s+\\d+\\s+bytes\\b`, "m").test(evidence)) {
+      return true;
+    }
+    return false;
+  });
 }
 
 function toolBlocks(evidence: string): string[] {
@@ -503,8 +511,14 @@ function toolBlocks(evidence: string): string[] {
 function blockWrites(block: string, requested: string): boolean {
   return writeAliases(requested).some((alias) => {
     const escaped = alias.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    return new RegExp(
+    // fs_write / redirect / tee / sed -i
+    if (new RegExp(
       `(?:wrote |edited |(?:-out|-o|>|>>)\\s*|path"\\s*:\\s*"|sed\\s+-i\\b[^\\n]*\\s|tee\\s+)${escaped}(?:\\s|"|\\(|$|<<)`,
+      "i",
+    ).test(block)) return true;
+    // shell delivery: destination is the last path token (cp/mv/install … dest)
+    return new RegExp(
+      `\\b(?:cp|mv|install)\\b[^\\n]*\\s${escaped}\\s*(?:["'\`;|&]|$)`,
       "i",
     ).test(block);
   });
