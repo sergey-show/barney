@@ -61,6 +61,11 @@ import {
 } from "../application/plasticity/plasticity.ts";
 import { parseSkillBody, skillBodyKey } from "../application/context/bodyStability.ts";
 import {
+  buildPsycheEvolution,
+  parseFrustrationFromMarkers,
+  parseFrustrationFromTranscript,
+} from "../application/psyche/evolution.ts";
+import {
   applyDreamHeuristics,
   compressShadowLocally,
   dreamSystemPrompt,
@@ -111,6 +116,8 @@ import { Context7FirstResearch } from "../infrastructure/research/Context7FirstR
 import { CompositeResearch, DuckDuckGoSearch } from "../infrastructure/research/webSearch.ts";
 import { PlaywrightBrowser } from "../infrastructure/browser/PlaywrightBrowser.ts";
 import { FsPluginStore, defaultCompatDirs, mcpView } from "../infrastructure/plugins/FsPluginStore.ts";
+import { FsProviderStore } from "../infrastructure/spi/FsProviderStore.ts";
+import { CompositeVerifyPort } from "../application/spi/CompositeVerifyPort.ts";
 import { McpRuntime } from "../infrastructure/mcp/McpRuntime.ts";
 import { NodeWorkspace } from "../infrastructure/workspace/NodeWorkspace.ts";
 import {
@@ -134,6 +141,9 @@ export class Kernel {
   readonly providers: SqliteProviderCatalog;
   readonly plugins: FsPluginStore;
   readonly skills: FsPluginStore;
+  /** Body SPI providers (~/.barney/providers) — not LLM catalog. */
+  readonly spiProviders: FsProviderStore;
+  readonly verifyPort: CompositeVerifyPort;
   readonly mcp: McpPort;
   readonly mcpRuntime: McpRuntime;
   readonly browser: PlaywrightBrowser;
@@ -177,6 +187,8 @@ export class Kernel {
       extra: defaultCompatDirs(),
     });
     this.skills = this.plugins;
+    this.spiProviders = new FsProviderStore(join(home, "providers"));
+    this.verifyPort = new CompositeVerifyPort(this.spiProviders);
     this.mcp = mcpView(this.plugins);
     this.mcpRuntime = new McpRuntime();
     this.browser = new PlaywrightBrowser();
@@ -205,6 +217,8 @@ export class Kernel {
       this.homeRepo,
       this.processes,
       this.mcpRuntime,
+      this.spiProviders,
+      this.verifyPort,
     );
     this.sessionService = new SessionService(
       () => this.boot(),
@@ -1010,6 +1024,57 @@ export class Kernel {
         createdAt: item.createdAt,
       })),
     };
+  }
+
+  /** Read-only evolution gauges for the psyche dashboard. */
+  async psycheEvolution(runId?: string) {
+    const agent = await this.boot();
+    const samost = parseSamost((await this.memories.get(samostKey(agent.id.value)))?.body ?? "");
+    const design = await this.memories.get(designKey(agent.id.value));
+    const agenda = parseAgenda((await this.memories.get(agendaMemoryKey(agent.id.value)))?.body ?? "");
+    const skillNotes = await this.memories.search("body/skill", 80);
+    const skills = skillNotes
+      .filter((note) => note.key.startsWith("body/skill/"))
+      .map((note) => parseSkillBody(note.body, note.key.replace(/^body\/skill\//, "")));
+    const dreamNotes = (await this.memories.search("dream", 20))
+      .filter((note) => note.tags.includes("dream"))
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    const dream = dreamNotes[0];
+    const episodes = await this.episodes.findRecent(4);
+    let frustration: number | null = null;
+    let frustrationSource: "episode" | "transcript" | "none" = "none";
+    for (const episode of episodes) {
+      const fromMarkers = parseFrustrationFromMarkers(episode.markers);
+      if (fromMarkers != null) {
+        frustration = fromMarkers;
+        frustrationSource = "episode";
+        break;
+      }
+    }
+    if (frustration == null) {
+      const run = runId
+        ? await this.runs.get(runId)
+        : (await this.runs.list())[0] ?? null;
+      const transcript = run?.transcript ?? [];
+      const fromTx = parseFrustrationFromTranscript(
+        transcript.map((item) => ({ kind: item.kind, text: item.text })),
+      );
+      if (fromTx != null) {
+        frustration = fromTx;
+        frustrationSource = "transcript";
+      }
+    }
+    return buildPsycheEvolution({
+      shadow: samost.shadow,
+      light: samost.light,
+      skills,
+      agenda,
+      designSealed: isDesignSealed(design?.body),
+      frustration,
+      frustrationSource,
+      dreamBody: dream?.body,
+      dreamUpdatedAt: dream?.updatedAt,
+    });
   }
 
   async updatePsyche(input: {

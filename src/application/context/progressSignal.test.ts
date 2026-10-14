@@ -46,3 +46,22 @@ test("classifyTask separates research from delivery", () => {
   expect(classifyTask("look up the docs for openssl")).toBe("research");
   expect(classifyTask("fix nginx.conf log format")).toBe("delivery");
 });
+
+test("cp delivery counts as mutate and clears missing via shared evidenceWrote", () => {
+  const latest = "Write `/etc/nginx/nginx.conf`";
+  const evidence = [
+    'shell {"command":"cp /tmp/nginx.conf /etc/nginx/nginx.conf"}',
+    "exit 0",
+    'shell {"command":"ls -la /etc/nginx/nginx.conf"}',
+    "exit 0",
+    "-rw-r--r-- 1 root root 777 Oct 14 07:55 /etc/nginx/nginx.conf",
+  ].join("\n");
+  const snap = measureProgress({
+    latest,
+    evidence,
+    // leave missingArtifacts unset so path scan + evidenceWrotePath run
+  });
+  expect(snap.missingArtifacts).toBe(0);
+  expect(snap.mutates).toBeGreaterThanOrEqual(1);
+  expect(snap.score).toBeGreaterThanOrEqual(40);
+});

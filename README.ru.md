@@ -169,6 +169,7 @@ barney providers use local --model <id-из-/v1/models>
 
 Barney даёт IDE тот же локальный жизненный цикл сессии через стабильный ACP v1.
 Укажите в ACP-клиенте команду `barney-agent` либо запустите `barney acp` напрямую.
+One-click без ручного JSON-RPC: [`extensions/`](extensions/README.md).
 Транспорт — JSON-RPC 2.0 через stdio: сетевой слушатель и облачный сервис не
 поднимаются. Первый запрос создаёт прогон Barney в `cwd` клиента, следующие
 продолжают его, а отмена идёт тем же путём, что в Web и CLI.

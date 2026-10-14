@@ -19,6 +19,7 @@ const LIST_TOOLS = new Set([
   "mcp_list",
   "plugin_list",
   "skill_list",
+  "provider_list",
 ]);
 
 const RESEARCH_TOOLS = new Set([
@@ -81,11 +82,11 @@ export type CapabilityWriteGate = {
 };
 
 /**
- * Gate mcp_write / plugin_write / skill_write for *new* body growth.
+ * Gate mcp_write / plugin_write / skill_write / provider_write for *new* body growth.
  * - Always require body list first (see what exists).
  * - New MCP recipes also require search evidence (no invented npx packages).
- * - Existing recipe/plugin on disk may update after list only.
- * - New local plugin/skill may write after list (prefer plugin over MCP).
+ * - Existing recipe/plugin/provider on disk may update after list only.
+ * - New local plugin/skill/SPI provider may write after list (prefer plugin over MCP/SPI).
  */
 export function gateCapabilityWrite(input: {
   toolName: string;
@@ -96,6 +97,7 @@ export function gateCapabilityWrite(input: {
     input.toolName !== "mcp_write"
     && input.toolName !== "plugin_write"
     && input.toolName !== "skill_write"
+    && input.toolName !== "provider_write"
   ) {
     return { blocked: false };
   }
@@ -105,17 +107,19 @@ export function gateCapabilityWrite(input: {
       blocked: true,
       reason: [
         "BLOCKED by Self: capability invent.",
-        "First mcp_list or plugin_list (see what already exists).",
+        "First mcp_list, plugin_list, or provider_list (see what already exists).",
         input.toolName === "mcp_write"
           ? "Then web_search or browser_open for the real package/docs. Only then mcp_write. Do not invent command/args."
-          : "Then plugin_write / skill_write if nothing fits. Prefer an existing plugin over a new MCP.",
+          : input.toolName === "provider_write"
+            ? "Then provider_write only for a stable SPI port (prefer skill/plugin). Quarantine until provider_exam."
+            : "Then plugin_write / skill_write if nothing fits. Prefer an existing plugin over a new MCP.",
       ].join(" "),
     };
   }
 
   if (input.alreadyExists) return { blocked: false };
 
-  // Local plugin/skill growth is allowed after list; MCP must show evidence.
+  // Local plugin/skill/SPI growth is allowed after list; MCP must show evidence.
   if (input.toolName !== "mcp_write") return { blocked: false };
 
   if (!input.ledger.researched) {
@@ -134,4 +138,4 @@ export function gateCapabilityWrite(input: {
 }
 
 export const CAPABILITY_LAW_LINE =
-  "Capability law (code-enforced): mcp_list|plugin_list → web_search|browser_open → reuse if present → only then mcp_write|plugin_write. Do not invent recipes.";
+  "Capability law (code-enforced): mcp_list|plugin_list|provider_list → web_search|browser_open → reuse if present → only then mcp_write|plugin_write|provider_write. Prefer skill > SPI provider > MCP. Do not invent recipes.";

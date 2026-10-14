@@ -84,7 +84,10 @@ barney eval experience --out ./tmp/fourhand-proof
 | `house-merge` | PASS | FAIL | FAIL | 1 | 1 | 0 |
 
 Вердикт `experience_helps` · средний lift **1.00**.  
-`kernelLift = 0`. Spaced: только immediate. `skillReuseRate: 0`.
+`kernelLift = 0`. Spaced: только immediate.
+После train `house-redact` сидит frozen skill в SkillsLock (`house-redact-tokens`),
+чтобы kernel-test мог дать `skill_reuse` при применении house-токенов
+(`skillReuseRate` может быть `> 0`; `falseSkillRate` фиксируется отдельно).
 
 Отчёт: [`docs/proof/2026-09-15-fourhand-qwen38`](./proof/2026-09-15-fourhand-qwen38/).
 
@@ -104,8 +107,10 @@ Immediate уже в four-hand; позже — `barney eval spaced <observations.
 | `recall_used_rate` | доля шагов, где план/акт реально откликнулся на память |
 | `recall_helped` | помогло ли каузально (только four-hand) |
 | удержание во времени | прирост по задержкам (держится / забывается) |
-| `skill_reuse_rate` | проверенный навык сработал на новой задаче |
-| `false_skill_rate` | закреплённый навык не помог или мешал |
+| `skill_reuse_rate` | доля **kernel-test** с `skill_reuse: 1` (verified/frozen recalled+used+success) |
+| `false_skill_rate` | доля **kernel-test** с `skill_false: 1` (verified/frozen recalled+used+**fail**; quarantine used+fail не считает) |
+
+`house-merge` может оставить `skillReuseRate: 0` при `transfer_success_lift: 1` — это слой **lesson/memory**, не баг. `house-redact` после train сидит `house-redact-tokens`, чтобы мерить слой **SkillsLock**.
 | `shadow_to_rule` | провалы → правила, которые потом сработали |
 | `calibration` (Brier) | заявленное P(успеха) из conf правил / strength навыков vs исход; `overconfident:1` при pred≥0.7 и fail |
 

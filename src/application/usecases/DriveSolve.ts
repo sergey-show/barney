@@ -39,6 +39,7 @@ import {
 } from "../context/bodyStability.ts";
 import { buildEpisodeMarkers } from "../context/episodeMarkers.ts";
 import { formatShadowWarnings, rankByEmbeddings, rankBySimilarity, type RecallItem } from "../context/semanticRecall.ts";
+import { filterNotesForShadowRecall, scopeShadowLines } from "../context/shadowIsolation.ts";
 import { sealReply } from "../context/sealReply.ts";
 import { judgeReview, artifactPins, missingIsLocalArtifact, requestedArtifacts, stillMissingArtifacts, unwrittenArtifacts } from "../context/reviewJudge.ts";
 import { askedToReplaceSecrets, secretSanitizePersistNudge } from "../context/secretSanitize.ts";
@@ -137,10 +138,14 @@ import { runFileTool } from "../tools/runFileTool.ts";
 import { runMcpTool } from "../tools/runMcpTool.ts";
 import { runMemoryTool } from "../tools/runMemoryTool.ts";
 import { runProcessTool } from "../tools/runProcessTool.ts";
+import { runProviderTool } from "../tools/runProviderTool.ts";
 import { runWakeTool } from "../tools/runWakeTool.ts";
 import { runSelfTool } from "../tools/runSelfTool.ts";
 import { runSkillTool } from "../tools/runSkillTool.ts";
 import { runTeamTool } from "../tools/runTeamTool.ts";
+import type { VerifyPort } from "../spi/CompositeVerifyPort.ts";
+import { providerEligibleForRun } from "../spi/providerStability.ts";
+import type { FsProviderStore } from "../../infrastructure/spi/FsProviderStore.ts";
 import { RunLearningService } from "../services/RunLearningService.ts";
 import {
   renderConversationalRecall,
@@ -205,6 +210,8 @@ export class DriveSolve {
     private readonly home: HomeRepoPort,
     private readonly processes: ProcessPort,
     private readonly mcpRuntime: McpRuntimePort,
+    private readonly providers: FsProviderStore,
+    private readonly verifyPort: VerifyPort,
   ) {
     this.learning = new RunLearningService(agents, memory, graph, skills, home, events);
     this.recall = new TurnRecallService(episodes, memory, graph);
@@ -604,6 +611,24 @@ export class DriveSolve {
       outcomeOk,
     });
     run.append("system", recallSignal.line);
+    const activeSpi = this.providers.list().filter((p) => p.port === "verify" && providerEligibleForRun(p));
+    if (activeSpi.length) {
+      try {
+        const spiResults = await this.verifyPort.verify({
+          worktree: run.worktreePath,
+          goal: run.goal,
+          evidence: toolEvidence,
+        });
+        for (const row of spiResults) {
+          run.append(
+            "system",
+            `spi_verify: ${row.provider} ok=${row.ok ? 1 : 0} status=${row.status} · ${clipText(row.detail, 160)}`,
+          );
+        }
+      } catch (err) {
+        run.append("system", `spi_verify: error ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
     const learned = lessonRule({
       taskClass: run.taskClass,
       goal: run.goal,
@@ -1345,7 +1370,10 @@ export class DriveSolve {
     });
     if (gate.blocked) return gate.reason ?? "BLOCKED by Self.";
 
-    const inventGate = call.name === "mcp_write" || call.name === "plugin_write" || call.name === "skill_write"
+    const inventGate = call.name === "mcp_write"
+      || call.name === "plugin_write"
+      || call.name === "skill_write"
+      || call.name === "provider_write"
       ? gateCapabilityWrite({
         toolName: call.name,
         alreadyExists: Boolean(
@@ -1353,6 +1381,7 @@ export class DriveSolve {
             const name = String(call.arguments?.name ?? "").trim();
             if (!name) return false;
             if (call.name === "mcp_write") return Boolean(this.mcp.get(name));
+            if (call.name === "provider_write") return Boolean(this.providers.get(name));
             return Boolean(this.skills.get(name));
           })(),
         ),
@@ -1360,6 +1389,20 @@ export class DriveSolve {
       })
       : { blocked: false as const };
     if (inventGate.blocked) return inventGate.reason ?? "BLOCKED by Self: capability invent.";
+
+    if (call.name.startsWith("provider_")) {
+      const out = await runProviderTool(this.providers, this.verifyPort, call, {
+        worktree: run.worktreePath,
+        goal: run.goal,
+        ledger: discoverLedgerFromTranscript(run.transcript),
+        evidence: reviewEvidence(run, run.goal),
+      });
+      if (call.name === "provider_write" || call.name === "provider_exam") {
+        const name = String(call.arguments?.name ?? "").trim();
+        if (name) await this.become(`become: spi ${name}`);
+      }
+      return out;
+    }
 
     if (call.name.startsWith("self_")) {
       return runSelfTool(this.home, call);
@@ -1574,7 +1617,8 @@ export class DriveSolve {
     shadow: string[],
     signal?: AbortSignal,
   ): Promise<string> {
-    const candidates: RecallItem[] = [
+    const scopedShadow = scopeShadowLines(shadow, query, 6);
+    const candidates: RecallItem[] = filterNotesForShadowRecall([
       ...notes
         .filter((note) =>
           note.tags.some((tag) => /fail|rule|experience|shadow|backlog/i.test(tag))
@@ -1585,12 +1629,12 @@ export class DriveSolve {
           text: `${note.title}: ${note.body}`.replace(/\s+/g, " ").trim().slice(0, 240),
           tags: note.tags,
         })),
-      ...shadow.map((line, index) => ({
+      ...scopedShadow.map((line, index) => ({
         key: `shadow/${index}`,
         text: line,
         tags: ["shadow"],
       })),
-    ];
+    ]);
     if (!candidates.length) return "";
     let picked = rankBySimilarity(query, candidates, 3);
     if (this.llm.embed) {

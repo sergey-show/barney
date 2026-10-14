@@ -134,6 +134,10 @@ export function createApp() {
     return c.json(await kernel.psycheState(c.req.query("runId") || undefined));
   });
 
+  app.get("/api/psyche/evolution", async (c) => {
+    return c.json(await kernel.psycheEvolution(c.req.query("runId") || undefined));
+  });
+
   app.patch("/api/psyche", async (c) => {
     try {
       const body = await c.req.json<{

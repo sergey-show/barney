@@ -1,0 +1,64 @@
+{
+  "name": "barney-acp",
+  "displayName": "Barney ACP",
+  "description": "One-click Agent Client Protocol wiring for Barney (barney-agent over stdio).",
+  "version": "0.1.0",
+  "publisher": "sergey-show",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": ["AI", "Other"],
+  "activationEvents": [
+    "onCommand:barney.acp.verify",
+    "onCommand:barney.acp.copyConfig"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "barney.acp.verify",
+        "title": "Barney: Verify ACP agent"
+      },
+      {
+        "command": "barney.acp.copyConfig",
+        "title": "Barney: Copy ACP settings snippet"
+      }
+    ],
+    "configuration": {
+      "title": "Barney ACP",
+      "properties": {
+        "barney.acp.command": {
+          "type": "string",
+          "default": "barney-agent",
+          "description": "Executable that serves ACP v1 over stdio (default: barney-agent)."
+        },
+        "barney.acp.args": {
+          "type": "array",
+          "default": [],
+          "items": { "type": "string" },
+          "description": "Extra args for the ACP process (usually empty; barney-agent already selects acp)."
+        },
+        "acp.agents": {
+          "type": "object",
+          "default": {
+            "barney": {
+              "command": "barney-agent",
+              "args": [],
+              "env": {}
+            }
+          },
+          "description": "ACP Client compatible agent map. Includes Barney by default."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p .",
+    "package": "npm run compile && npx --yes @vscode/vsce package --no-dependencies",
+    "vscode:prepublish": "npm run compile"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.90.0",
+    "typescript": "^5.9.2"
+  }
+}

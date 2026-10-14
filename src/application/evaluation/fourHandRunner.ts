@@ -19,6 +19,7 @@ import {
   type FourHandCaseResult,
   type HardTransferCase,
 } from "./fourHandCurriculum.ts";
+import { seedVerifiedTransferSkill } from "./seedTransferSkill.ts";
 import { setKernelAblationMode, type KernelMode } from "./kernelAblation.ts";
 import {
   planSpacedProbes,
@@ -142,6 +143,10 @@ async function runCase(
       await kernel.send(trainRun.id.value, goal);
       const trainOk = item.verifyTrain?.(wt);
       console.error(`  train[${i}] ${trainOk?.ok ? "PASS" : "fail"} ${trainOk?.detail ?? ""}`);
+    }
+    if (item.skillSeed) {
+      const seeded = await seedVerifiedTransferSkill(kernel, item.skillSeed);
+      console.error(`  skill-seed ${seeded.name} status=${seeded.status}`);
     }
     const testWt = mkdtempSync(join(scratch, `${item.id}-kernel-test-wt-`));
     item.setupTest(testWt);
@@ -297,7 +302,10 @@ export function formatFourHandReport(report: FourHandReport): string {
       const recall = arm.recallHit == null
         ? ""
         : ` · recall hit=${Number(arm.recallHit)} used=${Number(arm.recallUsed ?? 0)} helped=${arm.recallHelped == null ? "?" : Number(arm.recallHelped)}`;
-      lines.push(`  ${arm.arm.padEnd(14)} ${arm.ok ? "PASS" : "FAIL"} · ${arm.detail}${recall}`);
+      const skill = arm.skillReused || arm.skillFalse
+        ? ` · skill reuse=${Number(Boolean(arm.skillReused))} false=${Number(Boolean(arm.skillFalse))}`
+        : "";
+      lines.push(`  ${arm.arm.padEnd(14)} ${arm.ok ? "PASS" : "FAIL"} · ${arm.detail}${recall}${skill}`);
     }
     const spaced = report.spacedRetention.find((row) => row.caseId === item.caseId);
     if (spaced) {

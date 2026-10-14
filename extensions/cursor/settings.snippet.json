@@ -1,0 +1,10 @@
+{
+  "acp.agents": {
+    "barney": {
+      "command": "barney-agent",
+      "args": [],
+      "env": {}
+    }
+  },
+  "barney.acp.command": "barney-agent"
+}

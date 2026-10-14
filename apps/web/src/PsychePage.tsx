@@ -2,14 +2,20 @@ import { useEffect, useState } from "react";
 import { api, jsonBody } from "./api.ts";
 import { useLocale } from "./LocaleContext.tsx";
 import { Pager, usePager } from "./Pager.tsx";
-import type { PsycheState } from "./types.ts";
+import type { PsycheEvolution, PsycheState } from "./types.ts";
 
 function linesOf(value: string): string[] {
   return value.split("\n").map((line) => line.replace(/^[-*]\s*/, "").trim()).filter(Boolean);
 }
 
+function gaugeWidth(value: number, max: number): string {
+  if (max <= 0) return "0%";
+  return `${Math.min(100, Math.round((value / max) * 100))}%`;
+}
+
 export function PsychePage(props: { runId?: string }) {
   const [state, setState] = useState<PsycheState | null>(null);
+  const [evolution, setEvolution] = useState<PsycheEvolution | null>(null);
   const [compass, setCompass] = useState("");
   const [character, setCharacter] = useState("");
   const [error, setError] = useState("");
@@ -18,8 +24,13 @@ export function PsychePage(props: { runId?: string }) {
   const episodePage = usePager(state?.episodes ?? []);
 
   async function load() {
-    const next = await api<PsycheState>(`/api/psyche${props.runId ? `?runId=${encodeURIComponent(props.runId)}` : ""}`);
+    const q = props.runId ? `?runId=${encodeURIComponent(props.runId)}` : "";
+    const [next, evo] = await Promise.all([
+      api<PsycheState>(`/api/psyche${q}`),
+      api<PsycheEvolution>(`/api/psyche/evolution${q}`),
+    ]);
     setState(next);
+    setEvolution(evo);
     setCompass(next.samost.compass);
     setCharacter(next.samost.character.join("\n"));
   }
@@ -99,6 +110,62 @@ export function PsychePage(props: { runId?: string }) {
             </div>
           </div>
         </section>
+
+        {evolution ? (
+          <section className="psyche-section">
+            <div className="section-heading">
+              <div>
+                <span className="section-kicker">{t.experience}</span>
+                <h3>{t.evolutionTitle}</h3>
+                <p>{t.evolutionHint}</p>
+              </div>
+            </div>
+            <div className="evolution-grid">
+              <div className="evolution-gauge">
+                <div className="evolution-gauge-head"><span>{t.evolutionShadow}</span><b>{evolution.shadowCount}</b></div>
+                <div className="evolution-bar"><i style={{ width: gaugeWidth(evolution.shadowCount, Math.max(evolution.shadowCount, evolution.lightCount, 8)) }} /></div>
+              </div>
+              <div className="evolution-gauge">
+                <div className="evolution-gauge-head"><span>{t.evolutionLight}</span><b>{evolution.lightCount}</b></div>
+                <div className="evolution-bar light"><i style={{ width: gaugeWidth(evolution.lightCount, Math.max(evolution.shadowCount, evolution.lightCount, 8)) }} /></div>
+              </div>
+              <div className="evolution-gauge">
+                <div className="evolution-gauge-head"><span>{t.evolutionQuarantine}</span><b>{evolution.skills.quarantineCount}</b></div>
+                <div className="evolution-bar quarantine"><i style={{ width: gaugeWidth(evolution.skills.quarantineCount, Math.max(1, evolution.skills.quarantineCount + evolution.skills.verifiedCount + evolution.skills.frozenCount)) }} /></div>
+                <small>{evolution.skills.quarantine.slice(0, 4).join(", ") || "—"}</small>
+              </div>
+              <div className="evolution-gauge">
+                <div className="evolution-gauge-head"><span>{t.evolutionVerified}</span><b>{evolution.skills.verifiedCount}</b></div>
+                <div className="evolution-bar verified"><i style={{ width: gaugeWidth(evolution.skills.verifiedCount, Math.max(1, evolution.skills.quarantineCount + evolution.skills.verifiedCount + evolution.skills.frozenCount)) }} /></div>
+                <small>{evolution.skills.verified.slice(0, 4).join(", ") || "—"}</small>
+              </div>
+              <div className="evolution-gauge">
+                <div className="evolution-gauge-head"><span>{t.evolutionFrozen}</span><b>{evolution.skills.frozenCount}</b></div>
+                <div className="evolution-bar frozen"><i style={{ width: gaugeWidth(evolution.skills.frozenCount, Math.max(1, evolution.skills.quarantineCount + evolution.skills.verifiedCount + evolution.skills.frozenCount)) }} /></div>
+                <small>{evolution.skills.frozen.slice(0, 4).join(", ") || "—"}</small>
+              </div>
+              <div className="evolution-gauge">
+                <div className="evolution-gauge-head"><span>{t.evolutionFrustration}</span><b>{evolution.frustration ?? "—"}</b></div>
+                <div className="evolution-bar frustration"><i style={{ width: gaugeWidth(evolution.frustration ?? 0, 8) }} /></div>
+                <small>{evolution.frustration == null ? t.evolutionFrustrationNone : evolution.frustrationSource}</small>
+              </div>
+            </div>
+            <div className="evolution-notes">
+              <div>
+                <strong>{t.evolutionDream}</strong>
+                <p>{evolution.lastDreamSummary ?? t.evolutionNoDream}</p>
+                {evolution.lastDreamAt ? <small>{new Date(evolution.lastDreamAt).toLocaleString()}</small> : null}
+              </div>
+              <div>
+                <strong>{t.evolutionAgenda}</strong>
+                <p>{evolution.agenda.nextGoal ?? t.evolutionNoAgenda}</p>
+                <small>
+                  pending {evolution.agenda.pending.length} · running {evolution.agenda.running.length}
+                </small>
+              </div>
+            </div>
+          </section>
+        ) : null}
 
         <section className="psyche-section">
           <div className="section-heading">

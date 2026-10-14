@@ -2085,6 +2085,76 @@ button.primary.compact {
 .character-fields { display: grid; grid-template-columns: 1.15fr .85fr; gap: 14px; }
 .character-fields .lede { margin: -2px 0 8px; font-size: 10px; }
 .pattern-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.evolution-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.evolution-gauge {
+  border: 1px solid rgb(255 255 255 / .06);
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: rgb(255 255 255 / .02);
+}
+.evolution-gauge-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 11px;
+}
+.evolution-gauge-head b { font: 11px var(--mono); color: var(--muted-strong); }
+.evolution-bar {
+  height: 6px;
+  border-radius: 999px;
+  background: rgb(255 255 255 / .06);
+  overflow: hidden;
+}
+.evolution-bar > i {
+  display: block;
+  height: 100%;
+  background: rgb(232 113 113 / .75);
+  border-radius: inherit;
+}
+.evolution-bar.light > i { background: rgb(83 201 147 / .75); }
+.evolution-bar.quarantine > i { background: rgb(240 180 80 / .8); }
+.evolution-bar.verified > i { background: rgb(110 168 255 / .8); }
+.evolution-bar.frozen > i { background: rgb(170 140 255 / .8); }
+.evolution-bar.frustration > i { background: rgb(255 120 90 / .85); }
+.evolution-gauge small {
+  display: block;
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 9px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.evolution-notes {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.evolution-notes > div {
+  border: 1px solid rgb(255 255 255 / .06);
+  border-radius: 10px;
+  padding: 12px;
+  background: rgb(255 255 255 / .02);
+}
+.evolution-notes strong { font-size: 11px; }
+.evolution-notes p {
+  margin: 6px 0 4px;
+  color: var(--muted-strong);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.evolution-notes small { color: var(--muted); font-size: 9px; }
+@media (max-width: 720px) {
+  .evolution-notes { grid-template-columns: 1fr; }
+}
+
 .pattern-card {
   min-height: 150px;
   padding: 14px;
