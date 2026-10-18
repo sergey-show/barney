@@ -170,7 +170,7 @@ const ru = {
   filesLede: "Файлы этого разговора.",
   filesNeedSession: "Сначала начните разговор.",
   worktree: "папка задачи",
-  characterTitle: "Характер",
+  characterTitle: "Self",
   characterLede: (name: string, version: string, sealed: boolean) =>
     `${name} · v${version} · ${sealed ? "настроен" : "ещё не настроен"}`,
   characterIntro: "Можно править направление и черты.",
@@ -442,7 +442,7 @@ const en = {
   filesLede: "Files from this chat.",
   filesNeedSession: "Start a chat first.",
   worktree: "task folder",
-  characterTitle: "Character",
+  characterTitle: "Self",
   characterLede: (name: string, version: string, sealed: boolean) =>
     `${name} · v${version} · ${sealed ? "ready" : "not set up yet"}`,
   characterIntro: "Direction and traits are editable.",

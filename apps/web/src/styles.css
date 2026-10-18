@@ -2306,3 +2306,28 @@ button.primary.compact {
   .provider-modal-head { padding: 18px; }
   .provider-modal-body { padding: 12px; }
 }
+
+.grounding-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 16px 0;
+}
+.grounding-chip {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid rgb(120 140 160 / .25);
+  background: rgb(120 140 160 / .08);
+  color: inherit;
+  opacity: .9;
+}
+.grounding-chip.ok {
+  border-color: rgb(72 180 120 / .35);
+  background: rgb(72 180 120 / .1);
+}
+.grounding-chip.fail {
+  border-color: rgb(232 113 113 / .35);
+  background: rgb(232 113 113 / .1);
+}
+

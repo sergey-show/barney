@@ -121,6 +121,7 @@ const CLI_HELP = [
   "CONTROL",
   "  /work                expand or collapse activity",
   "  /status              show task status and workspace",
+  "  /self                show Self board, existence, oracle/PE chips",
   "  /allow <path>        grant access outside the workspace",
   "  /debug               show internal transcript in plain mode",
   "  /stop                stop an active step (Ctrl+C also stops it)",
@@ -130,7 +131,7 @@ const CLI_HELP = [
 const TUI_HELP = [
   "TASKS      /new  /sessions [query]  /open <id>  /continue  /retry  /close",
   "KNOWLEDGE  /memory [query]  /note <key>  /agents  /agent <name>",
-  "CONTROL    /work  /status  /allow <path>  /debug  /quit",
+  "CONTROL    /work  /status  /self  /allow <path>  /debug  /quit",
   "STOP       Press Ctrl+C while Barney is working.",
 ].join("\n");
 
@@ -300,11 +301,42 @@ const cli = defineCommand({
       }
       if (line === "/status") {
         if (!current) note("session", "No active session. Send a task or use /open.");
-        else note("meta", [
-          `${current.status} · ${current.attempts} attempts · ${current.tokensUsed} tokens`,
-          current.goal,
-          current.worktreePath,
-        ].join("\n"));
+        else {
+          const oracle = [...current.transcript].reverse().find((item) => item.kind === "system" && /^oracle:/i.test(item.text));
+          const pe = [...current.transcript].reverse().find((item) => item.kind === "system" && /^prediction_error:/i.test(item.text));
+          note("meta", [
+            `${current.status} · ${current.attempts} attempts · ${current.tokensUsed} tokens`,
+            current.goal,
+            current.worktreePath,
+            oracle ? oracle.text : "oracle: (none)",
+            pe ? pe.text : "prediction_error: (none)",
+          ].join("\n"));
+        }
+        again();
+        continue;
+      }
+      if (line === "/self") {
+        try {
+          const psyche = await kernel.psycheState(runId || undefined);
+          const board = psyche.board?.length
+            ? psyche.board.map((b: { kind: string; text: string }) => `  [${b.kind}] ${b.text}`).join("\n")
+            : "  (empty)";
+          const existence = psyche.existence?.length
+            ? psyche.existence.slice(-8).map((e: { kind: string; text: string }) => `  [${e.kind}] ${e.text}`).join("\n")
+            : "  (empty)";
+          const episode = psyche.episodes?.[0];
+          note("meta", [
+            `Self · ${psyche.agent.name} v${psyche.agent.version}`,
+            `compass: ${psyche.samost.compass || "(none)"}`,
+            "board:",
+            board,
+            "existence:",
+            existence,
+            episode ? `last episode: ${episode.outcome}${episode.nextHint ? ` · next: ${episode.nextHint}` : ""}` : "last episode: (none)",
+          ].join("\n"));
+        } catch (err) {
+          note("session", err instanceof Error ? err.message : String(err));
+        }
         again();
         continue;
       }

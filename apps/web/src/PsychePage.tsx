@@ -39,6 +39,30 @@ export function PsychePage(props: { runId?: string }) {
     void load().catch((err) => setError(String(err)));
   }, [props.runId]);
 
+  useEffect(() => {
+    let closed = false;
+    let socket: WebSocket | undefined;
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    const connect = () => {
+      if (closed) return;
+      const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/ws`);
+      socket = ws;
+      ws.onmessage = () => {
+        void load().catch(() => undefined);
+      };
+      ws.onclose = () => {
+        if (closed) return;
+        retry = setTimeout(connect, 2000);
+      };
+    };
+    connect();
+    return () => {
+      closed = true;
+      if (retry) clearTimeout(retry);
+      socket?.close();
+    };
+  }, [props.runId]);
+
   async function save() {
     setBusy(true);
     setError("");
@@ -195,6 +219,52 @@ export function PsychePage(props: { runId?: string }) {
         <section className="psyche-section">
           <div className="section-heading">
             <div>
+              <span className="section-kicker">{t.currentSession}</span>
+              <h3>{t.board}</h3>
+            </div>
+            <span className="count-badge">{state.board.length}</span>
+          </div>
+          {state.board.length === 0 ? (
+            <div className="section-empty compact">{t.emptyBoard}</div>
+          ) : (
+            <ul className="psyche-list">
+              {state.board.map((entry, i) => (
+                <li key={`${entry.kind}-${i}`}>
+                  <strong>{entry.kind}</strong>
+                  {" · "}
+                  {entry.text}
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+
+        <section className="psyche-section">
+          <div className="section-heading">
+            <div>
+              <span className="section-kicker">{t.currentSession}</span>
+              <h3>{t.existence}</h3>
+            </div>
+            <span className="count-badge">{state.existence.length}</span>
+          </div>
+          {state.existence.length === 0 ? (
+            <div className="section-empty compact">{t.emptyExistence}</div>
+          ) : (
+            <ul className="psyche-list">
+              {state.existence.slice(-12).map((entry, i) => (
+                <li key={`${entry.at}-${i}`}>
+                  <strong>{entry.kind}</strong>
+                  {" · "}
+                  {entry.text}
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+
+        <section className="psyche-section">
+          <div className="section-heading">
+            <div>
               <span className="section-kicker">{t.history}</span>
               <h3>{t.episodes}</h3>
               <p>{t.episodesHint}</p>
@@ -214,6 +284,7 @@ export function PsychePage(props: { runId?: string }) {
                       <div className="plain-meta">
                         {episode.outcome}
                         {episode.failureMode ? ` · ${episode.failureMode}` : ""}
+                        {episode.nextHint ? ` · next: ${episode.nextHint}` : ""}
                       </div>
                     </div>
                     <span className="episode-date">{new Date(episode.createdAt).toLocaleDateString()}</span>

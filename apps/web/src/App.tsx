@@ -10,6 +10,7 @@ import { LinksPage } from "./LinksPage.tsx";
 import { MemoryPage } from "./MemoryPage.tsx";
 import { PsychePage } from "./PsychePage.tsx";
 import { SessionsPage } from "./SessionsPage.tsx";
+import { groundingChipsFromTranscript } from "./groundingChips.ts";
 import { groupTranscript, isOpenWork, isPrelude } from "./transcript.ts";
 import { formatReplyFootnote } from "@domain/run/replyMeta.ts";
 import { lanesOf, shortModel, type Agent, type FileEntry, type Item, type Lanes, type Plugin, type Provider, type ProviderState, type Run } from "./types.ts";
@@ -473,6 +474,18 @@ export function App() {
             <FilesPage sessionId={runId} initialPath={filePath} />
           ) : (
           <>
+          {run ? (
+            <div className="grounding-chips" aria-label="Grounding">
+              {groundingChipsFromTranscript(run.transcript).map((chip) => (
+                <span
+                  key={chip.kind}
+                  className={`grounding-chip ${chip.ok ? "ok" : "fail"}`}
+                >
+                  {chip.label}
+                </span>
+              ))}
+            </div>
+          ) : null}
           <div className="stream" ref={streamRef} onScroll={onStreamScroll}>
             {!run && !pending ? (
               <div className="empty-hero">
