@@ -175,6 +175,12 @@ import {
   synapseKey,
 } from "../plasticity/plasticity.ts";
 import {
+  resolveExpectations,
+  softArtifactFromTranscript,
+} from "../context/expectationMatrix.ts";
+import { formatOracleEvidence } from "../../domain/oracle/Oracle.ts";
+import { TextAnalyticsOracle } from "../../infrastructure/oracle/TextAnalyticsOracle.ts";
+import {
   computePredictionError,
   formatPredictionErrorLine,
 } from "../experience/predictionError.ts";
@@ -601,8 +607,25 @@ export class DriveSolve {
     const priorVersion = priorRule
       ? Number(priorRule.body.match(/\(v(\d+),/)?.[1] ?? 1) || 1
       : undefined;
-    const outcomeOk = review.verdict === "pass" && !corrected;
     const toolEvidence = artifactEvidence(run);
+    const expectations = resolveExpectations({
+      goal: run.goal,
+      failClass: klass,
+    });
+    let oracleVerdict = null as import("../../domain/oracle/Oracle.ts").OracleVerdict | null;
+    if (expectations) {
+      const artifact = softArtifactFromTranscript(run.transcript) || act.text;
+      oracleVerdict = new TextAnalyticsOracle().verify(artifact, expectations);
+      run.append("system", formatOracleEvidence(oracleVerdict));
+      if (oracleVerdict.markers.laziness) {
+        psyche.board = addBoard(psyche.board, {
+          kind: "blocker",
+          text: "Homeostasis: soft artifact too thin — raise fact density / length",
+        });
+        run.append("system", "frustration:soft_laziness · homeostasis anti-evasion");
+      }
+    }
+    const outcomeOk = review.verdict === "pass" && !corrected && (!oracleVerdict || oracleVerdict.ok);
     const recallSignal = finalizeRecallSignal({
       bags: experienceBags,
       actText: act.text,
@@ -664,15 +687,18 @@ export class DriveSolve {
     const pinConvention = /<barney-redact-|house (?:JSON )?canon|house redaction tokens/i
       .test(`${run.goal}\n${learned.body}`);
     const pe = computePredictionError({
-      reviewFail: review.verdict !== "pass" || Boolean(corrected),
+      reviewFail: review.verdict !== "pass" || Boolean(corrected) || Boolean(oracleVerdict && !oracleVerdict.ok),
       hadFailedFamily: Boolean(lessonTrail.failedFamily),
-      structuralFail: STRUCTURAL_FAIL_CLASSES.has(String(review.failureKind ?? "")),
+      structuralFail: STRUCTURAL_FAIL_CLASSES.has(String(review.failureKind ?? ""))
+        || Boolean(oracleVerdict?.markers.structuralMiss),
       operatorCorrected: corrected,
+      oracle: oracleVerdict,
+      plannedSuccess: review.verdict === "pass" && !corrected,
     });
     run.append("system", formatPredictionErrorLine(pe));
     const pressure = plasticWritePressure({
       frustration: frustrationScore({
-        extraApproaches: extra.n,
+        extraApproaches: extra.n + (oracleVerdict?.markers.laziness ? 2 : 0),
         sameFailureCount: run.sameFailureCount,
       }),
       gapCount: run.sameFailureCount,

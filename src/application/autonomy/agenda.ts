@@ -140,6 +140,18 @@ export function drillGoalForZpd(gap: AgendaGap, level: ZpdLevel): string {
       `No kernel edits. No invented URLs.`,
     ].join(" ");
   }
+  if (/^soft[-_]/i.test(gap.failClass)) {
+    const harness = `soft-zpd-${gap.failClass.replace(/[^a-zA-Z0-9_-]+/g, "-")}.json`;
+    return [
+      `Autonomy drill (ZPD-3 soft) for \`${gap.failClass}\`.`,
+      `1) Write \`recovery-${gap.failClass}.md\` (## What failed / ## What to do instead / ## Checklist).`,
+      `2) Write \`${harness}\` with JSON fields failArtifact, passArtifact, expectations (requiredEntities, forbiddenPatterns, constraints.minTokens).`,
+      `   failArtifact must violate the matrix; passArtifact must satisfy it.`,
+      `3) Keep recovery note text in the session; kernel oracle will emit \`ZPD_PROOF fail=1\` / \`ZPD_PROOF pass=1\`.`,
+      `Hint: ${hint}`,
+      `Done only if oracle fail→pass is proven. Do not edit the kernel.`,
+    ].join(" ");
+  }
   const proof = `proof-${gap.failClass.replace(/[^a-zA-Z0-9_-]+/g, "-")}.py`;
   return [
     `Autonomy drill (ZPD-3) for \`${gap.failClass}\`.`,

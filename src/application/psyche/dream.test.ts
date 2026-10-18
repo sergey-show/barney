@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import {
   applyDreamHeuristics,
   compressShadowLocally,
+  compressSoftOracleRules,
   needsDream,
   parseDreamHeuristics,
 } from "./dream.ts";
@@ -48,6 +49,17 @@ test("applyDreamHeuristics replaces bloated shadow with heuristics", () => {
   ]);
   expect(next.shadow.some((line) => /openssl timeout/i.test(line))).toBe(true);
   expect(next.shadow.length).toBeLessThanOrEqual(12);
+});
+
+test("compressSoftOracleRules builds entity/ban/minTokens heuristics", () => {
+  const rules = compressSoftOracleRules([
+    'oracle: ok=0 · STRUCTURAL_MISS=1 · missing required entity: "ticket"; forbidden pattern: /as an ai/i',
+    "oracle: ok=0 · LAZINESS=1 · laziness: 8 tokens < minTokens 40",
+    "unrelated openssl timeout",
+  ]);
+  expect(rules.some((line) => /ticket/i.test(line))).toBe(true);
+  expect(rules.some((line) => /as an ai/i.test(line))).toBe(true);
+  expect(rules.some((line) => /40 tokens|anti-laziness/i.test(line))).toBe(true);
 });
 
 test("idle prefers dream over absorb when shadow is bloated", () => {

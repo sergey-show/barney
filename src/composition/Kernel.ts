@@ -29,7 +29,11 @@ import {
   proposeAgendaItem,
   type AgendaItem,
 } from "../application/autonomy/agenda.ts";
-import { judgeZpd3Proof } from "../application/autonomy/zpdProof.ts";
+import { judgeSoftZpd3, judgeZpd3Proof } from "../application/autonomy/zpdProof.ts";
+import { parseSoftZpdHarness } from "../application/autonomy/softZpdHarness.ts";
+import { isSoftFailClass } from "../application/context/expectationMatrix.ts";
+import { TextAnalyticsOracle } from "../infrastructure/oracle/TextAnalyticsOracle.ts";
+import { compressSoftOracleRules } from "../application/psyche/dream.ts";
 import {
   consolidateLearnedBlocks,
   consolidateRuleLines,
@@ -643,13 +647,33 @@ export class Kernel {
         const evidence = done.transcript
           .map((item) => `${item.kind}: ${item.text}`)
           .join("\n");
-        const proof = judgeZpd3Proof({ failClass, evidence, goal });
-        if (!proof.ok) {
-          ok = false;
-          dropReason = proof.reason;
-          done.append("system", `zpd3_proof: fail · ${proof.reason}`);
+        if (isSoftFailClass(failClass)) {
+          const harness = parseSoftZpdHarness(evidence, failClass);
+          const soft = harness
+            ? judgeSoftZpd3(new TextAnalyticsOracle(), harness)
+            : {
+              ok: false,
+              reason: "missing soft-zpd harness JSON (failArtifact/passArtifact/expectations)",
+            };
+          if (!soft.ok) {
+            ok = false;
+            dropReason = soft.reason;
+            done.append("system", `zpd3_soft: fail · ${soft.reason}`);
+          } else {
+            done.append("system", `zpd3_soft: pass · ${soft.reason}`);
+            if ("evidenceLine" in soft && soft.evidenceLine) {
+              done.append("system", soft.evidenceLine);
+            }
+          }
         } else {
-          done.append("system", `zpd3_proof: pass · ${proof.reason}`);
+          const proof = judgeZpd3Proof({ failClass, evidence, goal });
+          if (!proof.ok) {
+            ok = false;
+            dropReason = proof.reason;
+            done.append("system", `zpd3_proof: fail · ${proof.reason}`);
+          } else {
+            done.append("system", `zpd3_proof: pass · ${proof.reason}`);
+          }
         }
       }
       items = markAgenda(items, agendaId, {
@@ -688,14 +712,15 @@ export class Kernel {
   }
 
   private async dreamCompress(shadow: string[], rules: string[]): Promise<string[]> {
-    const mergedRules = mergeFailureRules(rules);
+    const softRules = compressSoftOracleRules(shadow);
+    const mergedRules = mergeFailureRules([...rules, ...softRules]);
     try {
       const result = await this.llm.complete("planner", [
         { role: "system", content: dreamSystemPrompt() },
         { role: "user", content: dreamUserPrompt(shadow, mergedRules) },
       ]);
       const parsed = parseDreamHeuristics(result.text || result.thinking || "");
-      if (parsed.length) return mergeFailureRules([...parsed, ...mergedRules]);
+      if (parsed.length) return mergeFailureRules([...parsed, ...mergedRules, ...softRules]);
     } catch {
       /* local fallback */
     }

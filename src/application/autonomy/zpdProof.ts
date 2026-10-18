@@ -1,10 +1,24 @@
 /**
  * ZPD-3 executable proof: fail the old path, pass the new — review-by-result for drills.
- * Script must emit both markers on stdout (kernel checks transcript/evidence).
+ * DevOps path: script must emit both markers on stdout (kernel checks transcript/evidence).
+ * Soft path: OraclePort verifies fail/pass artifacts; same marker strings for SkillsLock.
  */
+
+import type { ExpectationMatrix } from "../../domain/oracle/Oracle.ts";
+import { formatOracleEvidence } from "../../domain/oracle/Oracle.ts";
+import type { OraclePort } from "../ports.ts";
 
 export const ZPD_FAIL_MARK = "ZPD_PROOF fail=1";
 export const ZPD_PASS_MARK = "ZPD_PROOF pass=1";
+
+/** Soft ZPD-3 harness: adversarial pair + declared matrix (no .py required). */
+export type SoftZpdHarness = {
+  failClass: string;
+  failArtifact: string;
+  passArtifact: string;
+  expectations: ExpectationMatrix;
+  recoveryNote?: string;
+};
 
 export function zpd3ProofPath(failClass: string): string {
   const safe = failClass.replace(/[^a-zA-Z0-9_-]+/g, "-").replace(/^-|-$/g, "") || "general";
@@ -23,6 +37,86 @@ export type Zpd3ProofVerdict = {
   failShown: boolean;
   passShown: boolean;
 };
+
+export type SoftZpdVerdict = Zpd3ProofVerdict & {
+  evidenceLine: string;
+  failOracleOk: boolean;
+  passOracleOk: boolean;
+};
+
+/**
+ * Soft ZPD-3 gate: oracle must reject failArtifact and accept passArtifact.
+ * Emits the same ZPD_PROOF markers so SkillsLock / agenda stay domain-agnostic.
+ */
+export function judgeSoftZpd3(
+  oracle: OraclePort,
+  harness: SoftZpdHarness,
+): SoftZpdVerdict {
+  const failV = oracle.verify(harness.failArtifact, harness.expectations);
+  const passV = oracle.verify(harness.passArtifact, harness.expectations);
+  const oldFails = !failV.ok;
+  const newPasses = passV.ok;
+  const hasRecovery = Boolean(harness.recoveryNote?.trim());
+  const evidenceLine = [
+    oldFails ? ZPD_FAIL_MARK : null,
+    newPasses ? ZPD_PASS_MARK : null,
+    formatOracleEvidence({
+      ...failV,
+      markers: { ...failV.markers, zpdFail: oldFails, zpdPass: false },
+    }),
+    formatOracleEvidence({
+      ...passV,
+      markers: { ...passV.markers, zpdFail: false, zpdPass: newPasses },
+    }),
+  ].filter(Boolean).join("\n");
+
+  if (!hasRecovery) {
+    return {
+      ok: false,
+      reason: `missing recovery note for ${harness.failClass}`,
+      hasScript: true,
+      failShown: oldFails,
+      passShown: newPasses,
+      evidenceLine,
+      failOracleOk: failV.ok,
+      passOracleOk: passV.ok,
+    };
+  }
+  if (!oldFails) {
+    return {
+      ok: false,
+      reason: `fail arm did not fail under oracle (${ZPD_FAIL_MARK})`,
+      hasScript: true,
+      failShown: false,
+      passShown: newPasses,
+      evidenceLine,
+      failOracleOk: failV.ok,
+      passOracleOk: passV.ok,
+    };
+  }
+  if (!newPasses) {
+    return {
+      ok: false,
+      reason: `pass arm did not pass under oracle (${ZPD_PASS_MARK})`,
+      hasScript: true,
+      failShown: true,
+      passShown: false,
+      evidenceLine,
+      failOracleOk: failV.ok,
+      passOracleOk: passV.ok,
+    };
+  }
+  return {
+    ok: true,
+    reason: "oracle fail→pass proven",
+    hasScript: true,
+    failShown: true,
+    passShown: true,
+    evidenceLine,
+    failOracleOk: failV.ok,
+    passOracleOk: passV.ok,
+  };
+}
 
 /** Kernel gate: ZPD-3 done only if script exists and both proof markers appear. */
 export function judgeZpd3Proof(input: {

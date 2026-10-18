@@ -95,6 +95,49 @@ export function applyDreamHeuristics(samost: Samost, heuristics: string[]): Samo
   return next;
 }
 
+/**
+ * Compress soft-oracle failures into imperative samost rules (no second LLM required).
+ * Lines like `oracle: … missing required entity: "ticket"` → `Require entity ticket in soft replies.`
+ */
+export function compressSoftOracleRules(
+  shadow: string[],
+  limit = DREAM_KEEP,
+): string[] {
+  const rules: string[] = [];
+  const entities = new Set<string>();
+  const forbidden = new Set<string>();
+  let minTokens = 0;
+  for (const line of shadow) {
+    const text = line.replace(/\s+/g, " ").trim();
+    if (!/oracle:|STRUCTURAL_MISS|LAZINESS|missing required|forbidden/i.test(text)) continue;
+    for (const match of text.matchAll(/missing required entity:\s*"([^"]+)"/gi)) {
+      entities.add(match[1]!.trim());
+    }
+    for (const match of text.matchAll(/forbidden (?:pattern|literal):\s*(?:\/([^/]+)\/i|"([^"]+)")/gi)) {
+      forbidden.add((match[1] ?? match[2] ?? "").trim());
+    }
+    for (const match of text.matchAll(/missing semantic anchor:\s*"([^"]+)"/gi)) {
+      entities.add(match[1]!.trim());
+    }
+    const tok = text.match(/minTokens\s+(\d+)/i) ?? text.match(/(\d+)\s+tokens\s*<\s*minTokens\s+(\d+)/i);
+    if (tok) {
+      const n = Number(tok[2] ?? tok[1]);
+      if (Number.isFinite(n)) minTokens = Math.max(minTokens, n);
+    }
+    if (/LAZINESS=1|laziness:/i.test(text) && minTokens < 40) minTokens = 40;
+  }
+  if (entities.size) {
+    rules.push(`Require soft entities: ${[...entities].slice(0, 6).join(", ")}.`);
+  }
+  if (forbidden.size) {
+    rules.push(`Ban soft lubrication: ${[...forbidden].slice(0, 6).join(", ")}.`);
+  }
+  if (minTokens > 0) {
+    rules.push(`Soft replies must have at least ${minTokens} tokens (anti-laziness).`);
+  }
+  return mergeFailureRules([...rules, ...shadow.filter((l) => /soft[-_]|oracle:/i.test(l))], limit);
+}
+
 function seedShadows(shadow: string[]): string[] {
   return shadow.filter((line) =>
     /guess without evidence|change the tool|do not halt/i.test(line),

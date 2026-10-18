@@ -1,6 +1,14 @@
 import { expect, test } from "bun:test";
-import { judgeZpd3Proof, ZPD_FAIL_MARK, ZPD_PASS_MARK, zpd3ProofPath } from "./zpdProof.ts";
+import {
+  judgeSoftZpd3,
+  judgeZpd3Proof,
+  ZPD_FAIL_MARK,
+  ZPD_PASS_MARK,
+  zpd3ProofPath,
+} from "./zpdProof.ts";
 import { drillGoalForZpd, proposeAgendaItem } from "./agenda.ts";
+import { TextAnalyticsOracle } from "../../infrastructure/oracle/TextAnalyticsOracle.ts";
+import { softComplaintCases } from "../evaluation/softTransferCurriculum.ts";
 
 test("zpd3 proof path is local executable", () => {
   expect(zpd3ProofPath("secret-leak")).toBe("proof-secret-leak.py");
@@ -24,6 +32,18 @@ test("ZPD-3 drill goal requires fail/pass markers", () => {
     count: 5,
     source: "backlog",
   }).goal).toMatch(/proof-a\.py|ZPD_PROOF/);
+});
+
+test("ZPD-3 soft drill uses harness JSON not proof.py", () => {
+  const goal = drillGoalForZpd({
+    failClass: "soft-complaint-evasion",
+    hint: "ban as an ai",
+    count: 5,
+    source: "capability",
+  }, 3);
+  expect(goal).toMatch(/ZPD-3 soft/);
+  expect(goal).toMatch(/soft-zpd-.*\.json/);
+  expect(goal).not.toMatch(/\.py/);
 });
 
 test("judgeZpd3Proof requires script and both markers", () => {
@@ -57,4 +77,18 @@ console: ${ZPD_PASS_MARK}
   });
   expect(ok.ok).toBe(true);
   expect(ok.reason).toMatch(/fail\+pass/);
+});
+
+test("judgeSoftZpd3 uses oracle fail→pass with shared markers", () => {
+  const c = softComplaintCases[0]!;
+  const verdict = judgeSoftZpd3(new TextAnalyticsOracle(), {
+    failClass: c.failClass,
+    failArtifact: c.lazyOrBad,
+    passArtifact: c.good,
+    expectations: c.expectations,
+    recoveryNote: c.recoveryNote,
+  });
+  expect(verdict.ok).toBe(true);
+  expect(verdict.evidenceLine).toContain(ZPD_FAIL_MARK);
+  expect(verdict.evidenceLine).toContain(ZPD_PASS_MARK);
 });

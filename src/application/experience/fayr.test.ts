@@ -11,6 +11,21 @@ test("prediction error fires on review fail and recovery path", () => {
   expect(computePredictionError({ reviewFail: false, hadFailedFamily: false }).error).toBe(0);
 });
 
+test("prediction error prefers soft oracle plan≠fact", () => {
+  const pe = computePredictionError({
+    reviewFail: false,
+    hadFailedFamily: false,
+    plannedSuccess: true,
+    oracle: {
+      ok: false,
+      markers: { zpdFail: false, zpdPass: false, structuralMiss: true, laziness: false },
+      evidence: "missing required entity",
+    },
+  });
+  expect(pe.error).toBe(1);
+  expect(pe.reason).toMatch(/structural miss|oracle/i);
+});
+
 test("skill_candidate requires prediction error", () => {
   const blocked = decideExperienceWrite({
     outcomeOk: true,

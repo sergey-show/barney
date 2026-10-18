@@ -1,8 +1,11 @@
 import type { Agent } from "../domain/agent/Agent.ts";
 import type { Episode } from "../domain/memory/Episode.ts";
+import type { ExpectationMatrix, OracleVerdict } from "../domain/oracle/Oracle.ts";
 import type { ChatMessage, ChatResult, CompleteOptions, Role } from "../domain/provider/Role.ts";
 import type { Run } from "../domain/run/Run.ts";
 import type { DomainEvent } from "../domain/shared/DomainEvent.ts";
+
+export type { ExpectationMatrix, OracleVerdict };
 
 export interface AgentRepository {
   save(agent: Agent): Promise<void>;
@@ -172,6 +175,14 @@ export interface SkillPort {
 /** Stable SPI verify port — implemented by body providers, not by patching the kernel. */
 export type { VerifyPort } from "./spi/CompositeVerifyPort.ts";
 export type { VerifyRequest, VerifyResult } from "./spi/providerTypes.ts";
+
+/**
+ * Immune Core port: soft-domain truth without loading agent JS.
+ * Built-in oracles live under infrastructure/; body SPI verify remains shell-based.
+ */
+export interface OraclePort {
+  verify(artifact: string, expectations: ExpectationMatrix): OracleVerdict;
+}
 
 export interface EventBus {
   publish(events: DomainEvent[]): void;
