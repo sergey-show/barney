@@ -19,6 +19,7 @@ The kernel in `src/` does not change for a task. New capability lives in `~/.bar
 | [Plasticity](plasticity.md) | Cortical plasticity: reconsolidation, prune, sleep, duel |
 | [Constrain](constrain.md) | OS sandbox defaults + optional Docker profile |
 | [SPI](spi.md) | Body providers on stable kernel ports (quarantine→exam) |
+| [Oracle](oracle.md) | Soft-domain PE/ZPD grounding without LLM-as-judge |
 
 Prefer a **plugin or skill** for a new ability. Use **SPI** for port implementations. Use **MCP** only when the work needs an external stdio server.
 
