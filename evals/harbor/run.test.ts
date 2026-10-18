@@ -1,6 +1,20 @@
 import { expect, test } from "bun:test";
-import { parseArgs, parseHarborModel, transcriptEvents } from "./run.ts";
+import { harborSolvePolicy, parseArgs, parseHarborModel, transcriptEvents } from "./run.ts";
 import type { Run } from "../../src/domain/run/Run.ts";
+
+test("harborSolvePolicy defaults to 10m AbortSignal.timeout", () => {
+  const policy = harborSolvePolicy({});
+  expect(policy.timeoutMs).toBe(600_000);
+  expect(policy.maxAttempts).toBe(24);
+  expect(policy.signal).toBeDefined();
+  expect(policy.signal?.aborted).toBe(false);
+});
+
+test("harborSolvePolicy can disable timeout", () => {
+  const policy = harborSolvePolicy({ BARNEY_HARBOR_TIMEOUT_MS: "0" });
+  expect(policy.timeoutMs).toBe(0);
+  expect(policy.signal).toBeUndefined();
+});
 
 test("parses Harbor provider/model the same way OpenCode does", () => {
   const openai = parseHarborModel("openai/gpt-4.1", { OPENAI_API_KEY: "sk-test" });

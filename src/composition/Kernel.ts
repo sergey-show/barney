@@ -31,9 +31,10 @@ import {
 } from "../application/autonomy/agenda.ts";
 import { judgeSoftZpd3, judgeZpd3Proof } from "../application/autonomy/zpdProof.ts";
 import { parseSoftZpdHarness } from "../application/autonomy/softZpdHarness.ts";
+import { AutonomyScheduler } from "../application/autonomy/AutonomyScheduler.ts";
 import { isSoftFailClass } from "../application/context/expectationMatrix.ts";
-import { TextAnalyticsOracle } from "../infrastructure/oracle/TextAnalyticsOracle.ts";
-import { compressSoftOracleRules } from "../application/psyche/dream.ts";
+import { CompositeOracle } from "../infrastructure/oracle/CompositeOracle.ts";
+import type { OraclePort } from "../application/ports.ts";
 import {
   consolidateLearnedBlocks,
   consolidateRuleLines,
@@ -72,10 +73,12 @@ import {
 import {
   applyDreamHeuristics,
   compressShadowLocally,
+  compressSoftOracleRules,
   dreamSystemPrompt,
   dreamUserPrompt,
   mergeFailureRules,
   parseDreamHeuristics,
+  protectOracleHeuristics,
 } from "../application/psyche/dream.ts";
 import { slugKey } from "../domain/memory/MemoryNote.ts";
 import {
@@ -148,6 +151,7 @@ export class Kernel {
   /** Body SPI providers (~/.barney/providers) — not LLM catalog. */
   readonly spiProviders: FsProviderStore;
   readonly verifyPort: CompositeVerifyPort;
+  readonly oracle: OraclePort;
   readonly mcp: McpPort;
   readonly mcpRuntime: McpRuntime;
   readonly browser: PlaywrightBrowser;
@@ -160,11 +164,7 @@ export class Kernel {
   private readonly ensureAgent: EnsureDefaultAgent;
   private seeded = false;
   private recovered = false;
-  private lastIdleAt = 0;
-  private lastStudyAt = 0;
-  private lastSelfRunAt = 0;
-  private lastPlasticSleepAt = 0;
-  private lastInnerThinkAt = 0;
+  private readonly autonomy = new AutonomyScheduler();
   private readonly research = new CompositeResearch(new Context7FirstResearch(), new DuckDuckGoSearch());
   /** Session grants for fs_* paths outside the worktree (prefix → allowed). */
   private readonly outsideGrants = new Map<string, Set<string>>();
@@ -200,6 +200,7 @@ export class Kernel {
     const worktrees = new GitWorktree(home);
     this.llm = new RoleRouter(this.providers);
     this.startRun = new StartRun(this.agents, this.runs, worktrees, this.events);
+    this.oracle = new CompositeOracle();
     this.driveSolve = new DriveSolve(
       this.agents,
       this.runs,
@@ -223,6 +224,8 @@ export class Kernel {
       this.mcpRuntime,
       this.spiProviders,
       this.verifyPort,
+      this.oracle,
+      process.env.BARNEY_SPI_AFFECTS_OUTCOME === "1",
     );
     this.sessionService = new SessionService(
       () => this.boot(),
@@ -282,8 +285,7 @@ export class Kernel {
   async tick(): Promise<string | null> {
     await this.deliverWakes();
     if (this.sessionService.isBusy()) return null;
-    if (Date.now() - this.lastIdleAt < 45_000) return null;
-    this.lastIdleAt = Date.now();
+    if (!this.autonomy.tryBeginIdle()) return null;
     const agent = await this.boot();
     const runs = await this.runs.list();
     const open = runs
@@ -328,10 +330,10 @@ export class Kernel {
       idleMs: lastUserAt ? Date.now() - lastUserAt : 0,
       failHints: fails.map((episode) => episode.nextHint || episode.goal),
       studied,
-      studyCooldownMs: Date.now() - this.lastStudyAt,
-      selfRunCooldownMs: Date.now() - this.lastSelfRunAt,
-      plasticSleepCooldownMs: Date.now() - this.lastPlasticSleepAt,
-      innerThinkCooldownMs: Date.now() - this.lastInnerThinkAt,
+      studyCooldownMs: this.autonomy.cooldownMs("study"),
+      selfRunCooldownMs: this.autonomy.cooldownMs("self_run"),
+      plasticSleepCooldownMs: this.autonomy.cooldownMs("plastic_sleep"),
+      innerThinkCooldownMs: this.autonomy.cooldownMs("inner_think"),
       needsPlasticSleep: needsPlasticSleep(skillRecs),
       waitingOnWake,
       pendingSelfRun: !operatorBusy && pending
@@ -409,7 +411,7 @@ export class Kernel {
         sourceAgentId: agent.id.value,
       }));
     } else if (work.item === "study") {
-      this.lastStudyAt = Date.now();
+      this.autonomy.mark("study");
       const raw = await this.research.search(studyQuery(work.topic));
       const body = raw.replace(/\s+/g, " ").trim().slice(0, 1600);
       await this.memories.save(new MemoryNote({
@@ -571,7 +573,7 @@ export class Kernel {
     skillRecs: ReturnType<typeof parseSkillBody>[],
     recent: MemoryNote[],
   ): Promise<void> {
-    this.lastPlasticSleepAt = Date.now();
+    this.autonomy.mark("plastic_sleep");
     const { next, actions } = planPlasticSleep(skillRecs);
     for (const rec of next) {
       const prev = skillRecs.find((item) => item.name === rec.name);
@@ -617,7 +619,7 @@ export class Kernel {
     goal: string,
     failClass: string,
   ): Promise<void> {
-    this.lastSelfRunAt = Date.now();
+    this.autonomy.mark("self_run");
     const key = agendaMemoryKey(agentId);
     let items = parseAgenda((await this.memories.get(key))?.body ?? "");
     const drill = items.find((item) => item.id === agendaId);
@@ -650,7 +652,7 @@ export class Kernel {
         if (isSoftFailClass(failClass)) {
           const harness = parseSoftZpdHarness(evidence, failClass);
           const soft = harness
-            ? judgeSoftZpd3(new TextAnalyticsOracle(), harness)
+            ? judgeSoftZpd3(this.oracle, harness)
             : {
               ok: false,
               reason: "missing soft-zpd harness JSON (failArtifact/passArtifact/expectations)",
@@ -720,11 +722,19 @@ export class Kernel {
         { role: "user", content: dreamUserPrompt(shadow, mergedRules) },
       ]);
       const parsed = parseDreamHeuristics(result.text || result.thinking || "");
-      if (parsed.length) return mergeFailureRules([...parsed, ...mergedRules, ...softRules]);
+      if (parsed.length) {
+        return protectOracleHeuristics(
+          mergeFailureRules([...parsed, ...mergedRules]),
+          softRules,
+        );
+      }
     } catch {
       /* local fallback */
     }
-    return mergeFailureRules([...compressShadowLocally(shadow), ...mergedRules]);
+    return protectOracleHeuristics(
+      mergeFailureRules([...compressShadowLocally(shadow), ...mergedRules]),
+      softRules,
+    );
   }
 
   /** Bounded self-dialogue: board/memory/existence only — never an operator reply. */
@@ -738,7 +748,7 @@ export class Kernel {
     failHints: string[];
     wakeReasons: string[];
   }): Promise<void> {
-    this.lastInnerThinkAt = Date.now();
+    this.autonomy.mark("inner_think");
     let draft = innerThinkLocalFallback({
       shadow: input.samost.shadow,
       board: input.board,

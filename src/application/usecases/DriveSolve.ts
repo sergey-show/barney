@@ -175,16 +175,19 @@ import {
   synapseKey,
 } from "../plasticity/plasticity.ts";
 import {
-  resolveExpectations,
-  softArtifactFromTranscript,
-} from "../context/expectationMatrix.ts";
-import { formatOracleEvidence } from "../../domain/oracle/Oracle.ts";
-import { TextAnalyticsOracle } from "../../infrastructure/oracle/TextAnalyticsOracle.ts";
+  groundWithOracle,
+  resolveOutcomeOk,
+  resolveReviewFailForPe,
+} from "../context/outcomeGrounding.ts";
+import { oraclePersistHint } from "../context/reviewPersist.ts";
 import {
   computePredictionError,
   formatPredictionErrorLine,
 } from "../experience/predictionError.ts";
 import type { ExperienceRecallBags, ExperienceRecallSignal } from "../experience/experienceRecall.ts";
+import type { ExpectationMatrix, OracleVerdict } from "../../domain/oracle/Oracle.ts";
+import type { OraclePort } from "../ports.ts";
+import { TextAnalyticsOracle } from "../../infrastructure/oracle/TextAnalyticsOracle.ts";
 
 const MAX_TOOL_ROUNDS = 12;
 const WRITE_TOOLS = FILE_TOOLS.filter((tool) => tool.name === "fs_write" || tool.name === "fs_list");
@@ -218,6 +221,8 @@ export class DriveSolve {
     private readonly mcpRuntime: McpRuntimePort,
     private readonly providers: FsProviderStore,
     private readonly verifyPort: VerifyPort,
+    private readonly oracle: OraclePort = new TextAnalyticsOracle(),
+    private readonly spiAffectsOutcome = false,
   ) {
     this.learning = new RunLearningService(agents, memory, graph, skills, home, events);
     this.recall = new TurnRecallService(episodes, memory, graph);
@@ -540,6 +545,33 @@ export class DriveSolve {
       }
     }
 
+    let oracleVerdict: OracleVerdict | null = null;
+    let softExpectations: ExpectationMatrix | null = null;
+    {
+      const grounded = groundWithOracle({
+        oracle: this.oracle,
+        goal: run.goal,
+        failClass: failureClass({ kind: review.failureKind, aborted: false }),
+        transcript: run.transcript,
+        fallbackArtifact: act.text,
+        review,
+      });
+      softExpectations = grounded.expectations;
+      oracleVerdict = grounded.verdict;
+      if (grounded.evidenceLine) run.append("system", grounded.evidenceLine);
+      review = grounded.review;
+      if (oracleVerdict && !oracleVerdict.ok) {
+        this.events.publish(run.submitReview(review));
+        if (oracleVerdict.markers.laziness) {
+          psyche.board = addBoard(psyche.board, {
+            kind: "blocker",
+            text: "Homeostasis: soft artifact too thin — raise fact density / length",
+          });
+          run.append("system", "frustration:soft_laziness · homeostasis anti-evasion");
+        }
+      }
+    }
+
     if (run.status === "ready" && review.verdict !== "pass") {
       const persisted = await this.persistUntilDone({
         run,
@@ -558,9 +590,11 @@ export class DriveSolve {
         progressBag,
         classStats,
         shadowHits: experienceBags.shadow.length,
+        softExpectations,
       });
       act = persisted.act;
       review = persisted.review;
+      oracleVerdict = persisted.oracleVerdict ?? oracleVerdict;
     }
 
     if (run.status === "ready" && review.verdict !== "pass") {
@@ -608,24 +642,33 @@ export class DriveSolve {
       ? Number(priorRule.body.match(/\(v(\d+),/)?.[1] ?? 1) || 1
       : undefined;
     const toolEvidence = artifactEvidence(run);
-    const expectations = resolveExpectations({
-      goal: run.goal,
-      failClass: klass,
-    });
-    let oracleVerdict = null as import("../../domain/oracle/Oracle.ts").OracleVerdict | null;
-    if (expectations) {
-      const artifact = softArtifactFromTranscript(run.transcript) || act.text;
-      oracleVerdict = new TextAnalyticsOracle().verify(artifact, expectations);
-      run.append("system", formatOracleEvidence(oracleVerdict));
-      if (oracleVerdict.markers.laziness) {
+    // Final soft re-ground (artifact may have changed in persist).
+    if (softExpectations) {
+      const grounded = groundWithOracle({
+        oracle: this.oracle,
+        goal: run.goal,
+        failClass: klass,
+        explicit: softExpectations,
+        transcript: run.transcript,
+        fallbackArtifact: act.text,
+        review,
+      });
+      oracleVerdict = grounded.verdict;
+      if (grounded.evidenceLine) run.append("system", grounded.evidenceLine);
+      review = grounded.review;
+      if (oracleVerdict && !oracleVerdict.ok && oracleVerdict.markers.laziness) {
         psyche.board = addBoard(psyche.board, {
           kind: "blocker",
           text: "Homeostasis: soft artifact too thin — raise fact density / length",
         });
-        run.append("system", "frustration:soft_laziness · homeostasis anti-evasion");
       }
     }
-    const outcomeOk = review.verdict === "pass" && !corrected && (!oracleVerdict || oracleVerdict.ok);
+    let outcomeOk = resolveOutcomeOk({
+      soft: Boolean(softExpectations),
+      reviewPass: review.verdict === "pass",
+      corrected,
+      oracle: oracleVerdict,
+    });
     const recallSignal = finalizeRecallSignal({
       bags: experienceBags,
       actText: act.text,
@@ -635,6 +678,7 @@ export class DriveSolve {
     });
     run.append("system", recallSignal.line);
     const activeSpi = this.providers.list().filter((p) => p.port === "verify" && providerEligibleForRun(p));
+    let spiOk: boolean | null = null;
     if (activeSpi.length) {
       try {
         const spiResults = await this.verifyPort.verify({
@@ -642,6 +686,7 @@ export class DriveSolve {
           goal: run.goal,
           evidence: toolEvidence,
         });
+        spiOk = spiResults.every((row) => row.ok);
         for (const row of spiResults) {
           run.append(
             "system",
@@ -649,7 +694,12 @@ export class DriveSolve {
           );
         }
       } catch (err) {
+        spiOk = false;
         run.append("system", `spi_verify: error ${err instanceof Error ? err.message : String(err)}`);
+      }
+      if (this.spiAffectsOutcome && spiOk === false) {
+        outcomeOk = false;
+        run.append("system", "spi_verify: affects_outcome=1 · outcomeOk cleared");
       }
     }
     const learned = lessonRule({
@@ -687,13 +737,20 @@ export class DriveSolve {
     const pinConvention = /<barney-redact-|house (?:JSON )?canon|house redaction tokens/i
       .test(`${run.goal}\n${learned.body}`);
     const pe = computePredictionError({
-      reviewFail: review.verdict !== "pass" || Boolean(corrected) || Boolean(oracleVerdict && !oracleVerdict.ok),
+      reviewFail: resolveReviewFailForPe({
+        soft: Boolean(softExpectations),
+        reviewPass: review.verdict === "pass",
+        corrected,
+        oracleOk: oracleVerdict ? oracleVerdict.ok : null,
+      }),
       hadFailedFamily: Boolean(lessonTrail.failedFamily),
       structuralFail: STRUCTURAL_FAIL_CLASSES.has(String(review.failureKind ?? ""))
         || Boolean(oracleVerdict?.markers.structuralMiss),
       operatorCorrected: corrected,
       oracle: oracleVerdict,
-      plannedSuccess: review.verdict === "pass" && !corrected,
+      plannedSuccess: softExpectations
+        ? true
+        : review.verdict === "pass" && !corrected,
     });
     run.append("system", formatPredictionErrorLine(pe));
     const pressure = plasticWritePressure({
@@ -1226,8 +1283,10 @@ export class DriveSolve {
     progressBag: { prev: ProgressSnapshot | null; last: ProgressSnapshot | null };
     classStats: TaskClassStats;
     shadowHits?: number;
-  }): Promise<{ act: ChatResult; review: Review }> {
+    softExpectations?: ExpectationMatrix | null;
+  }): Promise<{ act: ChatResult; review: Review; oracleVerdict: OracleVerdict | null }> {
     let { act, review } = input;
+    let oracleVerdict: OracleVerdict | null = null;
     rememberFailKlass(input.failKlass, review);
     const trail: ChatMessage[] = [{ role: "assistant", content: act.text }];
     while (true) {
@@ -1243,8 +1302,24 @@ export class DriveSolve {
         newSignal: Boolean(review.needsResearch),
       });
       review = { ...review, progressScore: progress.score };
+      if (input.softExpectations) {
+        const grounded = groundWithOracle({
+          oracle: this.oracle,
+          goal: input.run.goal,
+          explicit: input.softExpectations,
+          transcript: input.run.transcript,
+          fallbackArtifact: act.text,
+          review,
+        });
+        oracleVerdict = grounded.verdict;
+        if (grounded.evidenceLine) input.run.append("system", grounded.evidenceLine);
+        review = grounded.review;
+        if (oracleVerdict?.ok && review.verdict === "pass") {
+          return { act, review, oracleVerdict };
+        }
+      }
       const halt = haltAfterFail(review, input.run, input.extra.n, leftover, input.signal?.aborted, input.familyFails, progress);
-      if (halt === "pass") return { act, review };
+      if (halt === "pass") return { act, review, oracleVerdict };
       if (halt === "abort") throw new DomainError("aborted", "step interrupted");
       if (halt !== "continue") {
         if (halt === "wanting" || halt === "need_user") {
@@ -1355,6 +1430,26 @@ export class DriveSolve {
       act = next;
       review = await this.reviewLatest(input.run, input.latest, next.text, input.signal);
       rememberFailKlass(input.failKlass, review);
+      if (input.softExpectations) {
+        const grounded = groundWithOracle({
+          oracle: this.oracle,
+          goal: input.run.goal,
+          explicit: input.softExpectations,
+          transcript: input.run.transcript,
+          fallbackArtifact: next.text,
+          review,
+        });
+        oracleVerdict = grounded.verdict;
+        if (grounded.evidenceLine) {
+          input.run.append("system", grounded.evidenceLine);
+          const hint = oraclePersistHint(grounded.evidenceLine);
+          if (hint) trail.push({ role: "user", content: hint });
+        }
+        review = grounded.review;
+        if (!oracleVerdict?.ok) {
+          this.events.publish(input.run.submitReview(review));
+        }
+      }
       // Mark second wind if we got a mutate after a research note this approach.
       if (researchNote) {
         refreshProgress(input.progressBag, {
@@ -1368,7 +1463,7 @@ export class DriveSolve {
         });
       }
     }
-    return { act, review };
+    return { act, review, oracleVerdict };
   }
 
   private async reviewLatest(run: Run, latest: string, actText: string, signal?: AbortSignal): Promise<Review> {

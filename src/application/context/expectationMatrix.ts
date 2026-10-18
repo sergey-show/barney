@@ -1,6 +1,7 @@
 /**
  * Soft-domain expectation matrix: declared plan before act.
- * Only explicit matrices (or soft-* goals) enable OraclePort — DevOps stays byte-grounded.
+ * Only explicit / fenced matrices enable OraclePort — DevOps stays byte-grounded.
+ * Never invent default entities (must/deliver).
  */
 
 import type { ExpectationMatrix, OracleDomain } from "../../domain/oracle/Oracle.ts";
@@ -11,10 +12,10 @@ export function isSoftFailClass(failClass: string): boolean {
   return /^soft[-_]/i.test(failClass.trim());
 }
 
+/** Soft path activates only with a declared matrix fence or soft-domain keywords — not bare soft_* tokens. */
 export function looksSoftGoal(goal: string): boolean {
   if (/```expectations?\b/i.test(goal)) return true;
   if (/\bsoft[-_]domain\b|\bExpectationMatrix\b/i.test(goal)) return true;
-  if (/\bsoft[-_][a-z0-9_-]+\b/i.test(goal)) return true;
   return false;
 }
 
@@ -31,6 +32,10 @@ export function parseExpectationMatrix(text: string): ExpectationMatrix | null {
   }
 }
 
+/**
+ * Resolve matrix for a run. Soft failClass alone never invents a matrix —
+ * callers must supply ```expectation``` or an explicit matrix.
+ */
 export function resolveExpectations(input: {
   goal: string;
   failClass?: string;
@@ -39,38 +44,23 @@ export function resolveExpectations(input: {
   if (input.explicit) return input.explicit;
   const fromGoal = parseExpectationMatrix(input.goal);
   if (fromGoal) return fromGoal;
-  if (input.failClass && isSoftFailClass(input.failClass) && looksSoftGoal(input.goal)) {
-    return defaultSoftMatrix(input.goal);
-  }
-  if (looksSoftGoal(input.goal)) return defaultSoftMatrix(input.goal);
   return null;
 }
 
-/** Soft artifact = last assistant reply (visible text), not shell evidence. */
+/**
+ * Soft artifact = last assistant reply.
+ * Strip thinking fences only — keep JSON/code fences (deliverables).
+ */
 export function softArtifactFromTranscript(
   items: Array<{ kind: string; text: string }>,
 ): string {
   for (let i = items.length - 1; i >= 0; i--) {
     const item = items[i]!;
     if (item.kind !== "assistant") continue;
-    const text = stripFenceNoise(item.text).trim();
+    const text = stripThinkingFences(item.text).trim();
     if (text.length > 0) return text;
   }
   return "";
-}
-
-function defaultSoftMatrix(goal: string): ExpectationMatrix {
-  const entities = extractQuotedOrBacktick(goal).slice(0, 8);
-  const forbidden = [/as an ai/i.test(goal) ? "as an ai" : null].filter(Boolean) as string[];
-  return {
-    domain: "text_analytics",
-    requiredEntities: entities.length ? entities : ["must", "deliver"],
-    forbiddenPatterns: forbidden.length ? forbidden : ["as an ai", "i cannot help"],
-    constraints: {
-      minTokens: 40,
-      semanticAnchors: entities.slice(0, 2),
-    },
-  };
 }
 
 function normalizeMatrix(parsed: Record<string, unknown>): ExpectationMatrix | null {
@@ -80,22 +70,24 @@ function normalizeMatrix(parsed: Record<string, unknown>): ExpectationMatrix | n
   const forbidden = asStringList(
     parsed.forbiddenPatterns ?? parsed.forbidden_patterns ?? parsed.forbidden,
   );
-  if (!required.length && !forbidden.length && !parsed.constraints) return null;
   const domainRaw = String(parsed.domain ?? "text_analytics");
   const domain = (DOMAINS.includes(domainRaw as OracleDomain) ? domainRaw : "general") as OracleDomain;
   const constraintsRaw = (parsed.constraints ?? {}) as Record<string, unknown>;
   const minTokens = Number(
     constraintsRaw.minTokens ?? constraintsRaw.min_tokens ?? constraintsRaw.min_fact_density ?? 0,
   );
+  const semanticAnchors = asStringList(
+    constraintsRaw.semanticAnchors ?? constraintsRaw.semantic_anchors,
+  );
+  const min = Number.isFinite(minTokens) && minTokens > 0 ? minTokens : undefined;
+  if (!required.length && !forbidden.length && !min && !semanticAnchors.length) return null;
   return {
     domain,
     requiredEntities: required,
     forbiddenPatterns: forbidden,
     constraints: {
-      minTokens: Number.isFinite(minTokens) && minTokens > 0 ? minTokens : undefined,
-      semanticAnchors: asStringList(
-        constraintsRaw.semanticAnchors ?? constraintsRaw.semantic_anchors,
-      ),
+      minTokens: min,
+      semanticAnchors,
     },
   };
 }
@@ -120,15 +112,8 @@ function extractJsonObject(text: string): string | null {
   return null;
 }
 
-function extractQuotedOrBacktick(goal: string): string[] {
-  const out: string[] = [];
-  for (const match of goal.matchAll(/`([^`]+)`|"([^"]+)"/g)) {
-    const token = (match[1] ?? match[2] ?? "").trim();
-    if (token.length >= 3 && token.length <= 40) out.push(token);
-  }
-  return [...new Set(out)];
-}
-
-function stripFenceNoise(text: string): string {
-  return text.replace(/```[\s\S]*?```/g, " ").replace(/\s+/g, " ");
+function stripThinkingFences(text: string): string {
+  return text
+    .replace(/```(?:thinking|reasoning|thought|scratchpad)[\s\S]*?```/gi, " ")
+    .replace(/\s+/g, " ");
 }

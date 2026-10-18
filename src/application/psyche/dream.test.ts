@@ -5,6 +5,7 @@ import {
   compressSoftOracleRules,
   needsDream,
   parseDreamHeuristics,
+  protectOracleHeuristics,
 } from "./dream.ts";
 import { nextIdleWork } from "./idleTick.ts";
 import { seedSamost } from "./samost.ts";
@@ -60,6 +61,16 @@ test("compressSoftOracleRules builds entity/ban/minTokens heuristics", () => {
   expect(rules.some((line) => /ticket/i.test(line))).toBe(true);
   expect(rules.some((line) => /as an ai/i.test(line))).toBe(true);
   expect(rules.some((line) => /40 tokens|anti-laziness/i.test(line))).toBe(true);
+  expect(rules.some((line) => /^Oracle:/i.test(line))).toBe(true);
+});
+
+test("protectOracleHeuristics keeps oracle lines when LLM drops them", () => {
+  const kept = protectOracleHeuristics(
+    ["Prefer curl over wget for downloads."],
+    ["Oracle: Require soft entities: ticket, refund."],
+  );
+  expect(kept.some((line) => /ticket/i.test(line))).toBe(true);
+  expect(kept.some((line) => /curl/i.test(line))).toBe(true);
 });
 
 test("idle prefers dream over absorb when shadow is bloated", () => {
