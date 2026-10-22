@@ -6,6 +6,8 @@ A plugin is a capability in the **body**, not in the kernel. Barney can read it,
 
 Prefer a plugin or skill over a new MCP server. See [MCP](mcp.md) only when an external stdio process is required.
 
+**Not shell-hooks.** Extensibility is **SPI providers** (`docs/spi.md`) + **skills/plugins** on disk — never dynamic agent JS rewriting the kernel, and not `experimental.hook` process spawns as the plugin model.
+
 ## Where they live
 
 ```

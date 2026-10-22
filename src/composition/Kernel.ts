@@ -33,6 +33,7 @@ import { judgeSoftZpd3, judgeZpd3Proof } from "../application/autonomy/zpdProof.
 import { parseSoftZpdHarness } from "../application/autonomy/softZpdHarness.ts";
 import { AutonomyScheduler } from "../application/autonomy/AutonomyScheduler.ts";
 import { isSoftFailClass } from "../application/context/expectationMatrix.ts";
+import { loadMcpConfig, listRemoteMcpUrls } from "../application/mcp/mcpConfig.ts";
 import { CompositeOracle } from "../infrastructure/oracle/CompositeOracle.ts";
 import type { OraclePort } from "../application/ports.ts";
 import {
@@ -279,7 +280,33 @@ export class Kernel {
     if (!isDesignSealed(designed?.body)) {
       await this.postDesignSession(agent.id.value);
     }
+    await this.bootMcpFromConfig();
     return agent;
+  }
+
+  private async bootMcpFromConfig(): Promise<void> {
+    const remotes = listRemoteMcpUrls(this.home);
+    if (remotes.length) {
+      await this.memories.save(new MemoryNote({
+        key: "mcp/remote-pending",
+        title: "MCP remote URLs (SSE not auto-started yet)",
+        body: remotes.map((r) => `${r.name}: ${r.url}`).join("\n"),
+        tags: ["mcp", "config"],
+      }));
+    }
+    for (const server of loadMcpConfig(this.home)) {
+      try {
+        await this.mcpRuntime.start(server, this.home);
+      } catch (err) {
+        await this.memories.save(new MemoryNote({
+          key: `mcp/boot-fail/${server.name}`,
+          title: `MCP boot failed: ${server.name}`,
+          body: err instanceof Error ? err.message : String(err),
+          tags: ["mcp", "config", "error"],
+        }));
+      }
+    }
+    this.driveSolve.refreshMcpRegistry();
   }
 
   async tick(): Promise<string | null> {
@@ -927,8 +954,12 @@ export class Kernel {
     return this.sessionService.create(goal, agentId, repoDir);
   }
 
-  async send(runId: string, message: string): Promise<Run> {
-    return this.sessionService.prompt(runId, message);
+  async send(
+    runId: string,
+    message: string,
+    opts?: { replaceFromId?: string },
+  ): Promise<Run> {
+    return this.sessionService.prompt(runId, message, opts);
   }
 
   stepRunning(runId: string): boolean {
@@ -937,6 +968,10 @@ export class Kernel {
 
   async resume(runId: string, mode: "continue" | "retry" = "continue"): Promise<Run> {
     return this.sessionService.resume(runId, mode);
+  }
+
+  async compact(runId: string): Promise<Run> {
+    return this.sessionService.compact(runId);
   }
 
   abortStep(runId: string): { ok: boolean } {

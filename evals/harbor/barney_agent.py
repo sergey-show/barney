@@ -1,13 +1,8 @@
 """Harbor installed-agent adapter for Barney.
 
-Not part of the kernel. Same shape as Harbor's OpenCode adapter:
+Not part of the kernel. Same shape as Harbor's AgentSkills adapter:
 
-- OpenCode: ``npm i -g opencode-ai`` then
-  ``opencode --model=provider/model run --format=json --dangerously-skip-permissions -- <instruction>``
-- Barney: upload this repo into the task container, install bun, then
-  ``bun /opt/barney/evals/harbor/run.ts --model provider/model -- <instruction>``
-
-OpenCode already works in the task cwd. Barney's product CLI creates a
+AgentSkills already works in the task cwd. Barney's product CLI creates a
 worktree under ``~/.barney``; the eval runner (``run.ts``) pins the worktree
 to ``cwd`` so the Terminal-Bench verifier sees the files.
 
@@ -128,7 +123,7 @@ class Barney(BaseInstalledAgent):
     ) -> None:
         self._instruction = instruction
         if not self.model_name or "/" not in self.model_name:
-            raise ValueError("model must be provider/model, same as OpenCode (e.g. openai/gpt-4.1)")
+            raise ValueError("model must be provider/model")
 
         env = _model_env(self)
         env["BARNEY_HOME"] = "/tmp/barney-home"

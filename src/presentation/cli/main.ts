@@ -110,6 +110,7 @@ const CLI_HELP = [
   "  /open <id-prefix>    open a previous session",
   "  /continue            continue interrupted work",
   "  /retry               retry the last request",
+  "  /compact             summarize context (summary cursor)",
   "  /close               close the current session",
   "",
   "KNOWLEDGE",
@@ -129,7 +130,7 @@ const CLI_HELP = [
 ].join("\n");
 
 const TUI_HELP = [
-  "TASKS      /new  /sessions [query]  /open <id>  /continue  /retry  /close",
+  "TASKS      /new  /sessions [query]  /open <id>  /continue  /retry  /compact  /close",
   "KNOWLEDGE  /memory [query]  /note <key>  /agents  /agent <name>",
   "CONTROL    /work  /status  /self  /allow <path>  /debug  /quit",
   "STOP       Press Ctrl+C while Barney is working.",
@@ -342,6 +343,19 @@ const cli = defineCommand({
       }
       if (line === "/stop") {
         note("meta", runId && sessions.cancel(runId).ok ? "Stopping the active step…" : "No step is running.");
+        again();
+        continue;
+      }
+      if (line === "/compact") {
+        if (!runId) note("session", "No active session.");
+        else {
+          try {
+            current = await sessions.compact(runId);
+            note("success", "Context compacted (summary cursor set).");
+          } catch (err) {
+            note("session", err instanceof Error ? err.message : String(err));
+          }
+        }
         again();
         continue;
       }

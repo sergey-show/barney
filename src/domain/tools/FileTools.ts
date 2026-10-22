@@ -100,6 +100,44 @@ export const FILE_TOOLS: ToolSpec[] = [
     },
   },
   {
+    name: "grep",
+    description:
+      "Regex search in worktree file contents (ripgrep when available). Prefer over shell grep. Optional include glob e.g. *.ts.",
+    parameters: {
+      type: "object",
+      properties: {
+        pattern: { type: "string", description: "Regex pattern" },
+        path: { type: "string", description: "Relative start directory, default ." },
+        include: { type: "string", description: "Glob filter e.g. *.{ts,tsx}" },
+      },
+      required: ["pattern"],
+    },
+  },
+  {
+    name: "glob",
+    description: "List files matching a glob under the worktree (e.g. **/*.ts). Sorted by mtime, capped.",
+    parameters: {
+      type: "object",
+      properties: {
+        pattern: { type: "string", description: "Glob pattern" },
+        path: { type: "string", description: "Relative start directory, default ." },
+      },
+      required: ["pattern"],
+    },
+  },
+  {
+    name: "patch",
+    description:
+      "Apply a unified diff patch to the worktree. Prefer fs_edit for single-snippet edits; use patch for multi-hunk / multi-file diffs.",
+    parameters: {
+      type: "object",
+      properties: {
+        patchText: { type: "string", description: "Unified diff text" },
+      },
+      required: ["patchText"],
+    },
+  },
+  {
     name: "fs_remove",
     description: "Delete a file or empty directory in the worktree. Cannot delete the worktree root.",
     parameters: {

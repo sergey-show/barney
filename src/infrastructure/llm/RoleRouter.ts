@@ -27,6 +27,7 @@ export class RoleRouter implements LlmPort {
       toolChoice: options?.toolChoice,
       signal: options?.signal,
       onThinking: options?.onThinking,
+      onText: options?.onText,
     });
     return { ...result, model: result.model || model, ms: result.ms ?? Date.now() - started };
   }

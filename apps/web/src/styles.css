@@ -294,6 +294,80 @@ button.item.danger { color: #fecaca; border-color: #7f1d1d; }
   white-space: pre-wrap;
   padding: 0 2px 8px;
 }
+.work-live-text {
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  padding: 0 2px 8px;
+  border-left: 2px solid var(--line);
+  margin: 0 0 8px;
+  padding-left: 8px;
+}
+.row.assistant.live-reply .body {
+  opacity: 0.92;
+}
+.row.assistant.partial {
+  border-left: 2px solid #a67c52;
+  padding-left: 8px;
+}
+.row.assistant.summary {
+  border-left: 2px solid #5a7a8a;
+  padding-left: 8px;
+  opacity: 0.9;
+}
+.live-tool-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0 0 8px;
+}
+.live-tool-card {
+  text-align: left;
+  width: 100%;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: inherit;
+  border-radius: var(--radius-sm);
+  padding: 6px 8px;
+  cursor: pointer;
+  font: inherit;
+}
+.live-tool-card.running { border-color: #5a4d8a; }
+.live-tool-card.ok { border-color: #3d5a4a; }
+.live-tool-card.fail { border-color: #6a3d3d; }
+.live-tool-card-title {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+}
+.live-tool-card-body {
+  display: block;
+  margin-top: 6px;
+  font-size: 11px;
+  white-space: pre-wrap;
+  opacity: 0.85;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.composer-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.composer-chip {
+  border: 1px solid var(--line);
+  background: transparent;
+  color: inherit;
+  border-radius: var(--radius-sm);
+  padding: 4px 8px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.composer-action.stop.armed {
+  outline: 1px solid #a67c52;
+}
 .work-fold .stream-fold { margin: 0 0 8px; }
 .work-fold .row { margin: 0 0 8px; }
 .stream-fold {
@@ -2327,6 +2401,31 @@ button.primary.compact {
   background: rgb(72 180 120 / .1);
 }
 .grounding-chip.fail {
+  border-color: rgb(232 113 113 / .35);
+  background: rgb(232 113 113 / .1);
+}
+
+
+.live-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 4px 0 8px;
+}
+.live-tool {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  border: 1px solid rgb(120 140 160 / .25);
+  background: rgb(120 140 160 / .08);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.live-tool.running { opacity: .85; }
+.live-tool.ok {
+  border-color: rgb(72 180 120 / .35);
+  background: rgb(72 180 120 / .1);
+}
+.live-tool.fail {
   border-color: rgb(232 113 113 / .35);
   background: rgb(232 113 113 / .1);
 }

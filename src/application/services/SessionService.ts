@@ -10,13 +10,16 @@ import type {
 } from "../ports.ts";
 import type { DriveSolve } from "../usecases/DriveSolve.ts";
 import type { StartRun } from "../usecases/StartRun.ts";
+import { BusyError, SessionLock } from "./SessionLock.ts";
+
+export { BusyError };
 
 /**
  * Session lifecycle coordinator. It owns cancellation and cleanup so every
  * presentation transport observes the same concurrency semantics.
  */
 export class SessionService {
-  private readonly inflight = new Map<string, AbortController>();
+  private readonly lock = new SessionLock();
 
   constructor(
     private readonly ensureBooted: () => Promise<unknown>,
@@ -36,37 +39,70 @@ export class SessionService {
     return this.startRun.execute({ goal: this.mask(goal), agentId, repoDir });
   }
 
-  async prompt(runId: string, message: string): Promise<Run> {
+  /**
+   * @param lockMode `replace` (default) aborts the previous step — chat UX.
+   * @param replaceFromId truncate transcript from this item before prompting (edit/resubmit).
+   */
+  async prompt(
+    runId: string,
+    message: string,
+    opts?: { lockMode?: "replace" | "reject"; replaceFromId?: string },
+  ): Promise<Run> {
     await this.ensureBooted();
-    this.inflight.get(runId)?.abort();
-    const controller = new AbortController();
-    this.inflight.set(runId, controller);
+    if (opts?.replaceFromId) {
+      const run = await this.runs.get(runId);
+      if (!run) throw new Error(`run not found: ${runId}`);
+      if (this.lock.isRunning(runId)) this.lock.cancel(runId);
+      this.events.publish(run.truncateFrom(opts.replaceFromId));
+      await this.runs.save(run);
+    }
+    const controller = this.lock.begin(runId, opts?.lockMode ?? "replace");
     try {
-      return await this.driveSolve.execute({
+      const done = await this.driveSolve.execute({
         runId,
         message: this.mask(message),
         signal: controller.signal,
       });
+      this.driveSolve.takeLiveReply(runId);
+      return done;
     } catch (error) {
+      if (error instanceof BusyError) throw error;
       const run = await this.runs.get(runId);
       if (!run) throw error;
       const aborted = isAbort(error);
       const detail = error instanceof Error ? error.message : String(error);
+      const partial = this.driveSolve.takeLiveReply(runId);
       if (run.status === "acting" || run.status === "reviewing" || run.status === "researching") {
-        this.events.publish(run.interrupt(aborted ? "Step interrupted." : `Error: ${detail}`));
+        this.events.publish(run.interrupt(
+          aborted ? "Step interrupted." : `Error: ${detail}`,
+          { partialText: partial || undefined },
+        ));
       } else {
+        if (partial) {
+          run.append("assistant", partial, { tokens: 0, ms: 0, model: "", partial: true });
+        }
         run.append("system", aborted ? "Step interrupted." : `Error: ${detail}`);
       }
       await this.runs.save(run);
       return run;
     } finally {
-      if (this.inflight.get(runId) === controller) this.inflight.delete(runId);
+      this.lock.end(runId, controller);
+    }
+  }
+
+  async compact(runId: string): Promise<Run> {
+    await this.ensureBooted();
+    const controller = this.lock.begin(runId, "reject");
+    try {
+      return await this.driveSolve.compact(runId, controller.signal);
+    } finally {
+      this.lock.end(runId, controller);
     }
   }
 
   async resume(runId: string, mode: "continue" | "retry" = "continue"): Promise<Run> {
     await this.ensureBooted();
-    if (this.inflight.has(runId)) throw new Error("a step is already running");
+    if (this.lock.isRunning(runId)) throw new BusyError(runId);
     const run = await this.runs.get(runId);
     if (!run) throw new Error(`run not found: ${runId}`);
     if (run.status === "done" || run.status === "parked" || run.status === "failed") {
@@ -84,18 +120,15 @@ export class SessionService {
   }
 
   cancel(runId: string): { ok: boolean } {
-    const controller = this.inflight.get(runId);
-    if (!controller) return { ok: false };
-    controller.abort();
-    return { ok: true };
+    return { ok: this.lock.cancel(runId) };
   }
 
   isRunning(runId: string): boolean {
-    return this.inflight.has(runId);
+    return this.lock.isRunning(runId);
   }
 
   isBusy(): boolean {
-    return this.inflight.size > 0;
+    return this.lock.isBusy();
   }
 
   async close(runId: string): Promise<Run> {

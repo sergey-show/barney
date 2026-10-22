@@ -14,12 +14,20 @@ export class KernelAgentSessionApplication implements AgentSessionApplication {
     return snapshotRun(await this.kernel.createRun(input.goal, input.agentId, input.cwd));
   }
 
-  async prompt(sessionId: string, text: string): Promise<RunSnapshot> {
-    return snapshotRun(await this.kernel.send(sessionId, text));
+  async prompt(
+    sessionId: string,
+    text: string,
+    opts?: { replaceFromId?: string },
+  ): Promise<RunSnapshot> {
+    return snapshotRun(await this.kernel.send(sessionId, text, opts));
   }
 
   async resume(sessionId: string, mode: "continue" | "retry" = "continue"): Promise<RunSnapshot> {
     return snapshotRun(await this.kernel.resume(sessionId, mode));
+  }
+
+  async compact(sessionId: string): Promise<RunSnapshot> {
+    return snapshotRun(await this.kernel.compact(sessionId));
   }
 
   async close(sessionId: string): Promise<RunSnapshot> {

@@ -30,6 +30,17 @@ test("clips a huge recent assistant reply", () => {
   expect(packed.recent[1]?.content.length ?? 0).toBeLessThan(2500);
 });
 
+test("pressure opts shrink the recent window", () => {
+  const transcript = [];
+  for (let i = 0; i < 20; i += 1) {
+    transcript.push({ kind: "user", text: `q${i}` });
+    transcript.push({ kind: "assistant", text: `a${i}` });
+  }
+  const packed = packSession(transcript, "goal", { recentCount: 6, maxRecentChars: 6_000 });
+  expect(packed.recent.length).toBeLessThanOrEqual(6);
+  expect(packed.folded).toBeGreaterThan(20);
+});
+
 test("short session still keeps the goal in the digest", () => {
   const packed = packSession([
     { kind: "user", text: "сделай плагин" },

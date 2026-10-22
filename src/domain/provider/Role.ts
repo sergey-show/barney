@@ -21,6 +21,8 @@ export type CompleteOptions = {
   toolChoice?: "auto" | "required";
   signal?: AbortSignal;
   onThinking?: (delta: string) => void;
+  /** Visible assistant text deltas (after think-tag filter). */
+  onText?: (delta: string) => void;
 };
 
 export type ChatResult = {

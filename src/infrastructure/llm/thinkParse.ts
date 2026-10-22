@@ -14,6 +14,7 @@ export class ThinkStreamFilter {
   constructor(
     private readonly onThink?: (delta: string) => void,
     private readonly options: ThinkParseOptions = {},
+    private readonly onText?: (delta: string) => void,
   ) {}
 
   push(chunk: string): void {
@@ -35,6 +36,12 @@ export class ThinkStreamFilter {
     };
   }
 
+  private emitText(delta: string): void {
+    if (!delta) return;
+    this.textAcc += delta;
+    this.onText?.(delta);
+  }
+
   private drain(flush: boolean): void {
     while (this.hold) {
       if (this.mode === "text") {
@@ -42,16 +49,16 @@ export class ThinkStreamFilter {
         if (index < 0) {
           const keep = flush ? 0 : 7;
           if (this.hold.length > keep) {
-            this.textAcc += this.hold.slice(0, this.hold.length - keep);
+            this.emitText(this.hold.slice(0, this.hold.length - keep));
             this.hold = this.hold.slice(this.hold.length - keep);
           }
           if (flush) {
-            this.textAcc += this.hold;
+            this.emitText(this.hold);
             this.hold = "";
           }
           break;
         }
-        this.textAcc += this.hold.slice(0, index);
+        this.emitText(this.hold.slice(0, index));
         this.hold = this.hold.slice(index + 7);
         this.mode = "think";
         continue;

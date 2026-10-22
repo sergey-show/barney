@@ -15,6 +15,7 @@ export type LlmClient = {
     toolChoice?: CompleteOptions["toolChoice"];
     signal?: AbortSignal;
     onThinking?: (delta: string) => void;
+    onText?: (delta: string) => void;
   }): Promise<ChatResult>;
   listModels(): Promise<string[]>;
 };
@@ -30,6 +31,7 @@ export function openaiChatClient(provider: LlmProvider, schema: DialectSchema): 
       input.signal,
       input.onThinking,
       input.toolChoice,
+      input.onText,
     ),
     listModels: () => listOpenAiModels(provider),
   };
@@ -126,9 +128,24 @@ function toOpenAiTools(tools: ToolSpec[]) {
     function: {
       name: tool.name,
       description: tool.description,
-      parameters: tool.parameters,
+      parameters: shapeParametersOptionalNullable(tool.parameters),
     },
   }));
+}
+
+export function shapeParametersOptionalNullable(
+  parameters: ToolSpec["parameters"],
+): Record<string, unknown> {
+  const required = new Set(parameters.required ?? []);
+  const properties: Record<string, unknown> = {};
+  for (const [key, prop] of Object.entries(parameters.properties)) {
+    if (required.has(key)) {
+      properties[key] = prop;
+      continue;
+    }
+    properties[key] = { ...prop, type: [prop.type, "null"] };
+  }
+  return { ...parameters, properties };
 }
 
 type OpenAiMessage = {
@@ -177,6 +194,7 @@ async function openAiCompatComplete(
   signal?: AbortSignal,
   onThinking?: (delta: string) => void,
   toolChoice?: "auto" | "required",
+  onText?: (delta: string) => void,
 ): Promise<ChatResult> {
   const headers: Record<string, string> = { "content-type": "application/json" };
   if (provider.apiKey) headers.authorization = `Bearer ${provider.apiKey}`;
@@ -190,13 +208,13 @@ async function openAiCompatComplete(
     if (toolChoice === "required") body.tool_choice = "required";
   }
 
-  const streamed = await openAiCompatStream(provider, schema, headers, body, signal, onThinking);
+  const streamed = await openAiCompatStream(provider, schema, headers, body, signal, onThinking, onText);
   if (streamed.ok) return withTextTools(streamed.result, tools, messages);
   if (tools?.length && /tool_choice/i.test(streamed.error) && toolChoice === "required") {
-    return openAiCompatComplete(provider, schema, model, messages, tools, signal, onThinking, "auto");
+    return openAiCompatComplete(provider, schema, model, messages, tools, signal, onThinking, "auto", onText);
   }
   if (tools?.length && /tool|function|jinja|template|system message/i.test(streamed.error)) {
-    return openAiCompatComplete(provider, schema, model, messages, undefined, signal, onThinking);
+    return openAiCompatComplete(provider, schema, model, messages, undefined, signal, onThinking, undefined, onText);
   }
   if (streamed.canFallback) {
     return withTextTools(await openAiCompatNonStream(provider, schema, headers, body, signal, onThinking, tools), tools, messages);
@@ -238,6 +256,7 @@ async function openAiCompatStream(
   body: Record<string, unknown>,
   signal: AbortSignal | undefined,
   onThinking?: (delta: string) => void,
+  onText?: (delta: string) => void,
 ): Promise<{ ok: true; result: ChatResult } | { ok: false; error: string; canFallback: boolean }> {
   let res: Response;
   try {
@@ -262,7 +281,7 @@ async function openAiCompatStream(
   const think = new ThinkStreamFilter(onThinking, {
     peelUntagged: schema.think.peelUntagged,
     tagsInContent: schema.think.tagsInContent,
-  });
+  }, onText);
   const toolsAcc: Array<{ id: string; name: string; arguments: string }> = [];
   let reasoning = "";
   let generated = "";

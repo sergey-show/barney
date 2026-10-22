@@ -1,5 +1,11 @@
 export type Agent = { id: string; name: string; version: number; taskClass: string; constitution?: string };
-export type ReplyMeta = { tokens: number; ms: number; model: string };
+export type ReplyMeta = {
+  tokens: number;
+  ms: number;
+  model: string;
+  partial?: boolean;
+  summary?: boolean;
+};
 export type Item = { id: string; kind: string; text: string; at: string; meta?: ReplyMeta };
 export type Run = {
   id: string;

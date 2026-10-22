@@ -2,6 +2,10 @@ export type ReplyMeta = {
   tokens: number;
   ms: number;
   model: string;
+  /** Aborted mid-stream — keep visible partial reply. */
+  partial?: boolean;
+  /** Compaction cursor: packSession starts from this item. */
+  summary?: boolean;
 };
 
 export function replyMetaFrom(input: { tokens?: number; ms?: number; model?: string }): ReplyMeta | undefined {
@@ -15,6 +19,8 @@ export function replyMetaFrom(input: { tokens?: number; ms?: number; model?: str
 export function formatReplyFootnote(meta?: ReplyMeta | null): string {
   if (!meta) return "";
   const parts: string[] = [];
+  if (meta.partial) parts.push("partial");
+  if (meta.summary) parts.push("summary");
   if (meta.tokens > 0) parts.push(`${meta.tokens.toLocaleString("en-US")} tok`);
   if (meta.ms > 0) parts.push(formatDuration(meta.ms));
   if (meta.model) parts.push(meta.model);

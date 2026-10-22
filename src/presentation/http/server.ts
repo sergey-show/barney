@@ -9,7 +9,13 @@ import type { RunSnapshot } from "../../domain/run/Run.ts";
 import type { DomainEvent } from "../../domain/shared/DomainEvent.ts";
 import { visibleAssistantText } from "../../infrastructure/llm/visibleReply.ts";
 
-const clients = new Set<{ send: (data: string) => void }>();
+type WsClient = {
+  send: (data: string) => void;
+  /** When set, only events with matching payload.runId (or no runId) are sent. */
+  runId?: string;
+};
+
+const clients = new Set<WsClient>();
 
 export function createApp() {
   const app = new Hono();
@@ -19,7 +25,11 @@ export function createApp() {
 
   kernel.events.subscribe((event: DomainEvent) => {
     const payload = JSON.stringify({ type: "event", event });
-    for (const client of clients) client.send(payload);
+    const eventRunId = typeof event.payload?.runId === "string" ? event.payload.runId : undefined;
+    for (const client of clients) {
+      if (client.runId && eventRunId && client.runId !== eventRunId) continue;
+      client.send(payload);
+    }
   });
 
   app.get("/api/health", (c) => c.json({ ok: true }));
@@ -250,8 +260,19 @@ function mountSessionRoutes(
 
   app.post(`${prefix}/:id/messages`, async (c) => {
     try {
-      const body = await c.req.json<{ text: string }>();
-      const run = await sessions.prompt(c.req.param("id"), body.text);
+      const body = await c.req.json<{ text: string; replaceFromId?: string }>();
+      const run = await sessions.prompt(c.req.param("id"), body.text, {
+        replaceFromId: body.replaceFromId,
+      });
+      return c.json(sessionView(sessions, run));
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 400);
+    }
+  });
+
+  app.post(`${prefix}/:id/compact`, async (c) => {
+    try {
+      const run = await sessions.compact(c.req.param("id"));
       return c.json(sessionView(sessions, run));
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 400);
@@ -372,15 +393,27 @@ export async function startWeb(opts: { port: number; host: string; open: boolean
     },
     websocket: {
       open(ws) {
-        const client = { send: (data: string) => ws.send(data) };
-        (ws as unknown as { client: typeof client }).client = client;
+        const client: WsClient = { send: (data: string) => ws.send(data) };
+        (ws as unknown as { client: WsClient }).client = client;
         clients.add(client);
       },
       close(ws) {
-        const client = (ws as unknown as { client?: { send: (data: string) => void } }).client;
+        const client = (ws as unknown as { client?: WsClient }).client;
         if (client) clients.delete(client);
       },
-      message() {},
+      message(ws, raw) {
+        const client = (ws as unknown as { client?: WsClient }).client;
+        if (!client) return;
+        try {
+          const data = JSON.parse(String(raw)) as { type?: string; runId?: string | null };
+          if (data.type === "subscribe") {
+            client.runId = data.runId ? String(data.runId) : undefined;
+            client.send(JSON.stringify({ type: "subscribed", runId: client.runId ?? null }));
+          }
+        } catch {
+          /* ignore bad client frames */
+        }
+      },
     },
   });
 
