@@ -16,6 +16,7 @@ export type CreateSessionInput = {
  */
 export type PromptOpts = {
   replaceFromId?: string;
+  whenBusy?: "replace" | "reject" | "steer" | "followUp";
 };
 
 export interface AgentSessionApplication {
@@ -23,6 +24,9 @@ export interface AgentSessionApplication {
   prompt(sessionId: string, text: string, opts?: PromptOpts): Promise<RunSnapshot>;
   resume(sessionId: string, mode?: "continue" | "retry"): Promise<RunSnapshot>;
   compact(sessionId: string): Promise<RunSnapshot>;
+  fork(sessionId: string, title?: string): Promise<RunSnapshot>;
+  switchBranch(sessionId: string, branchId: string): Promise<RunSnapshot>;
+  branches(sessionId: string): Promise<Array<{ id: string; title: string; parentId?: string; active: boolean }>>;
   close(sessionId: string): Promise<RunSnapshot>;
   get(sessionId: string): Promise<RunSnapshot | null>;
   list(): Promise<RunSnapshot[]>;

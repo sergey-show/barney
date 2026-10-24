@@ -83,8 +83,19 @@ import {
   unverifiedPaths,
 } from "../context/validationLedger.ts";
 import { assessContextPressure } from "../context/contextPressure.ts";
+import {
+  extractFileListsFromTranscript,
+  formatFileListsForCompact,
+  structuredCompactSystemPrompt,
+} from "../context/compactStructured.ts";
+import { isContextOverflowError, isOutputLengthFinish } from "../context/overflowRecovery.ts";
 import { clipText, packSession, redactSecrets } from "../context/packSession.ts";
+import { loadProjectContextFiles } from "../context/projectContext.ts";
+import { HTML_OFFLOAD_CHARS, offloadToolOutput } from "../context/toolOutputOffload.ts";
 import { bindFsWriteArgs, extractToolEvidence } from "../context/toolEvidence.ts";
+import { MessageQueue } from "../services/MessageQueue.ts";
+import { CODEMODE_ALLOWED_DEFAULT, runCodemodeScript } from "../tools/codemode.ts";
+import type { McpExposure } from "../mcp/mcpConfig.ts";
 import { visibleAssistantText } from "../../infrastructure/llm/visibleReply.ts";
 import { formatResearchBrief, runDeepResearch } from "../research/DeepResearch.ts";
 import { parseTurnRoute, ROUTE_RULES, shouldEscalateFromShort, type TurnRoute } from "../context/turnMode.ts";
@@ -212,6 +223,8 @@ export class DriveSolve {
   private readonly recall: TurnRecallService;
   /** Mid-stream coder reply text for partial-on-abort. */
   private readonly liveReplies = new Map<string, string>();
+  /** Mid-run steer / follow-up queues. */
+  readonly queues = new MessageQueue();
 
   constructor(
     private readonly agents: AgentRepository,
@@ -241,8 +254,52 @@ export class DriveSolve {
   }
 
   /** Refresh MCP tools merged into the act roster (after mcp_start / config boot). */
-  syncMcpTools(tools: Array<{ server: string; name: string; description: string }>): void {
+  syncMcpTools(tools: Array<{ server: string; name: string; description: string; exposure?: McpExposure }>): void {
     this.toolRegistry.setMcpTools(tools);
+  }
+
+  /** Compact-and-retry once on provider context overflow. */
+  private async actWithToolsOverflowAware(
+    run: Run,
+    messages: ChatMessage[],
+    signal?: AbortSignal,
+    depth = 0,
+    failedCalls = new Set<string>(),
+    psyche?: PsycheState,
+    familyFails = new Map<string, number>(),
+    lessonTrail = emptyTrail(),
+  ): Promise<ChatResult> {
+    try {
+      return await this.actWithTools(run, messages, signal, depth, failedCalls, psyche, familyFails, lessonTrail);
+    } catch (err) {
+      if (depth > 0 || !isContextOverflowError(err) || signal?.aborted) throw err;
+      run.append("system", "context_overflow: compacting and retrying once");
+      run.append("system", "context_edit: omitted failed overflow attempt from model window via summary cursor");
+      await this.runs.save(run);
+      try {
+        await this.compact(run.id.value, signal);
+      } catch {
+        /* still retry with tighter pack */
+      }
+      const { packed } = this.packUnderPressure(run);
+      const retried = messages.map((m, i) =>
+        i === 0 && m.role === "system"
+          ? m
+          : m,
+      );
+      // Prefer packed recent after compact cursor for the retry body
+      const system = messages.find((m) => m.role === "system");
+      const retryMessages: ChatMessage[] = [
+        ...(system ? [system] : []),
+        ...packed.recent,
+        {
+          role: "user",
+          content: "Continue after context compact. Do not repeat finished work. Finish what is still missing.",
+        },
+      ];
+      void retried;
+      return await this.actWithTools(run, retryMessages, signal, depth, failedCalls, psyche, familyFails, lessonTrail);
+    }
   }
 
   takeLiveReply(runId: string): string {
@@ -259,19 +316,14 @@ export class DriveSolve {
       throw new DomainError("run_closed", `run is ${run.status}`);
     }
     const packed = packSession(run.transcript, run.goal, { recentCount: 20, maxRecentChars: 16_000 });
+    const files = extractFileListsFromTranscript(run.transcript);
     const body = [
       packed.digest,
+      formatFileListsForCompact(files),
       ...packed.recent.map((m) => `${m.role}: ${m.content}`),
     ].join("\n\n").slice(0, 24_000);
     const raw = await this.completeRole(run, "planner", [
-      {
-        role: "system",
-        content: [
-          "Summarize this coding session for continuation.",
-          "Keep: goal, key decisions, files touched, open tasks, blockers.",
-          "Omit chatter. Write in the user's language when clear.",
-        ].join(" "),
-      },
+      { role: "system", content: structuredCompactSystemPrompt() },
       { role: "user", content: body || run.goal },
     ], { signal });
     run.budget.charge(raw.tokens, raw.usd);
@@ -284,14 +336,29 @@ export class DriveSolve {
     return run;
   }
 
-  refreshMcpRegistry(): void {
-    const tools: Array<{ server: string; name: string; description: string }> = [];
+  refreshMcpRegistry(exposure: Record<string, McpExposure> = {}): void {
+    const tools: Array<{ server: string; name: string; description: string; exposure?: McpExposure }> = [];
     for (const server of this.mcpRuntime.running()) {
       for (const name of server.tools) {
-        tools.push({ server: server.name, name, description: name });
+        tools.push({
+          server: server.name,
+          name,
+          description: name,
+          exposure: exposure[server.name] ?? "direct",
+        });
       }
     }
     this.syncMcpTools(tools);
+  }
+
+  enqueueSteer(runId: string, text: string): void {
+    this.queues.enqueueSteer(runId, text);
+    this.events.publish([event("run.steer_queued", { runId, text: text.slice(0, 200) })]);
+  }
+
+  enqueueFollowUp(runId: string, text: string): void {
+    this.queues.enqueueFollowUp(runId, text);
+    this.events.publish([event("run.followup_queued", { runId, text: text.slice(0, 200) })]);
   }
 
   /** Optional Body LSP (BARNEY_LSP=1) — diagnostics enter review evidence, not Core. */
@@ -535,6 +602,7 @@ export class DriveSolve {
           depth,
           skills: skillCatalog(this.skills, `${run.goal}\n${input.message}`, quarantinedSkills),
           memory: memoryNote,
+          projectContext: loadProjectContextFiles(run.worktreePath),
         }),
       },
       ...packed.recent,
@@ -552,7 +620,16 @@ export class DriveSolve {
       };
     }
     throwIfAborted();
-    let act = await this.actWithTools(run, actMessages, input.signal, depth, failedCalls, psyche, familyFails, lessonTrail);
+    let act = await this.actWithToolsOverflowAware(
+      run,
+      actMessages,
+      input.signal,
+      depth,
+      failedCalls,
+      psyche,
+      familyFails,
+      lessonTrail,
+    );
     throwIfAborted();
     act = this.sealAct(run, await this.verifyAgainstEvidence(run, act, input.signal), input.message);
     throwIfAborted();
@@ -1124,6 +1201,20 @@ export class DriveSolve {
         last = await this.completeRole(run, "coder", convo, { tools: stepTools, signal });
         tokens += last.tokens;
         usd += last.usd;
+        if (isOutputLengthFinish(last.finishReason) && last.toolCalls?.length) {
+          convo.push({ role: "assistant", content: last.text, toolCalls: last.toolCalls });
+          for (const tc of last.toolCalls) {
+            convo.push({
+              role: "tool",
+              toolCallId: tc.id,
+              name: tc.name,
+              content:
+                "error: assistant truncated (finish_reason=length) before tool args completed — re-issue complete tool arguments",
+            });
+          }
+          last = { ...last, tokens, usd, toolCalls: undefined };
+          return last;
+        }
         if (!last.toolCalls?.length && step === 0 && mode === "normal" && wantsArtifact(userText)) {
           const recovery = await this.completeRole(run, "coder", [
             ...convo,
@@ -1149,7 +1240,10 @@ export class DriveSolve {
         const sanitizeGoal = askedToReplaceSecrets(run.goal)
           || askedToReplaceSecrets(latestUserText(run));
         let doom = false;
-        for (const rawCall of act.toolCalls ?? []) {
+        const rawCalls = act.toolCalls ?? [];
+        const reads = rawCalls.filter((c) => PARALLEL_SAFE_TOOLS.has(c.name));
+        const writes = rawCalls.filter((c) => !PARALLEL_SAFE_TOOLS.has(c.name));
+        const runOne = async (rawCall: (typeof rawCalls)[number]) => {
           const bound = bindToolArgs(rawCall.name, rawCall.arguments ?? {}, anchors);
           const call = {
             ...rawCall,
@@ -1175,7 +1269,23 @@ export class DriveSolve {
             await snapshotBeforeMutate(run.id.value, ws, String(call.arguments?.path ?? ""));
           }
           const preview = applyToolObserve(call, "", failedCalls, familyFails, observeBase);
-          let raw = preview.skip ? preview.out : clipToolOut(await this.dispatchTool(run, ws, call, signal, depth), `${run.goal}\n${userText}`);
+          let raw = preview.skip
+            ? preview.out
+            : await this.dispatchTool(run, ws, call, signal, depth);
+          if (!preview.skip) {
+            const html = /<html|<!doctype|SVELTE_HYDRATER|<\/div>/i.test(raw);
+            const off = offloadToolOutput({
+              text: raw,
+              sessionPath: run.sessionPath,
+              callId: call.id,
+              tool: call.name,
+              maxChars: html ? HTML_OFFLOAD_CHARS : 4_000,
+            });
+            raw = off.forModel;
+            if (html) {
+              raw = `${raw}\n[raw HTML — extract facts only, do not dump markup to the user]`;
+            }
+          }
           if (!preview.skip && call.name === "shell") {
             raw = noteShellRun(run.id.value, call, raw);
           }
@@ -1267,6 +1377,13 @@ export class DriveSolve {
             name: call.name,
             images: shot ? [{ mime: "image/jpeg", base64: shot.jpeg.toString("base64") }] : undefined,
           });
+        };
+        if (reads.length) await Promise.all(reads.map((c) => runOne(c)));
+        for (const c of writes) await runOne(c);
+        for (const steer of this.queues.drainSteer(run.id.value)) {
+          convo.push({ role: "user", content: `[steer] ${steer}` });
+          run.append("user", `[steer] ${steer}`);
+          this.events.publish([event("run.steer_injected", { runId: run.id.value })]);
         }
         return { doom };
       },
@@ -1647,6 +1764,29 @@ export class DriveSolve {
       constitution: agent?.constitution,
     });
     if (gate.blocked) return gate.reason ?? "BLOCKED by Self.";
+
+    if (call.name === "tool_search") {
+      return this.toolRegistry.searchMcp(String(call.arguments?.query ?? ""));
+    }
+    if (call.name === "codemode") {
+      const script = String(call.arguments?.script ?? "");
+      if (!script.trim()) return "error: script required";
+      const result = await runCodemodeScript({
+        script,
+        allowed: CODEMODE_ALLOWED_DEFAULT,
+        call: async (name, args) => {
+          const nested: ToolCall = {
+            id: `${call.id}_${name}_${Date.now()}`,
+            name,
+            arguments: args,
+          };
+          return this.dispatchTool(run, ws, nested, signal, depth);
+        },
+      });
+      return result.ok
+        ? `codemode ok · calls=${result.calls}\n${result.output}`
+        : result.output;
+    }
 
     const mcpDirect = parseMcpToolName(call.name);
     if (mcpDirect) {
@@ -2508,6 +2648,22 @@ function toolCardTitle(name: string, args: Record<string, unknown>): string {
   const detail = path || cmd || url;
   return detail ? `${name} · ${clipText(detail, 48)}` : name;
 }
+
+/** Tools safe to run concurrently in one model step. */
+const PARALLEL_SAFE_TOOLS = new Set([
+  "fs_read",
+  "fs_search",
+  "grep",
+  "glob",
+  "ls",
+  "memory_read",
+  "memory_search",
+  "web_search",
+  "browser_read",
+  "tool_search",
+  "board_read",
+  "self_status",
+]);
 
 function regulationOf(call: ToolCall, goal: string): "task" | "competence" | "wander" {
   if (call.name.startsWith("memory_") || call.name.startsWith("self_")) return "competence";

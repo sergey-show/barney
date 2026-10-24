@@ -243,7 +243,10 @@ export class NodeWorkspace implements WorkspacePort {
         proc.exited,
       ]);
       const raw = [out, err].filter(Boolean).join("\n") || "(no output)";
-      const clipped = raw.length > MAX_SHELL_OUT ? `${raw.slice(0, MAX_SHELL_OUT)}\n…truncated` : raw;
+      // Soft clip here; DriveSolve offloads full body to .barney/tool-out when needed.
+      const clipped = raw.length > MAX_SHELL_OUT
+        ? `${raw.slice(0, MAX_SHELL_OUT)}\n…truncated (${raw.length - MAX_SHELL_OUT} more chars in tool offload if re-run via session)`
+        : raw;
       return `exit ${code}\n${this.mask(clipped)}`;
     } finally {
       clearTimeout(timer);

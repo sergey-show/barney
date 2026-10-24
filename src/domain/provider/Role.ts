@@ -33,4 +33,6 @@ export type ChatResult = {
   thinking?: string;
   model?: string;
   ms?: number;
+  /** Provider finish reason (e.g. stop | length | tool_calls). */
+  finishReason?: string;
 };

@@ -11,8 +11,11 @@ import type {
 import type { DriveSolve } from "../usecases/DriveSolve.ts";
 import type { StartRun } from "../usecases/StartRun.ts";
 import { BusyError, SessionLock } from "./SessionLock.ts";
+import { SessionTreeStore } from "./SessionTreeStore.ts";
 
 export { BusyError };
+
+export type PromptWhenBusy = "replace" | "reject" | "steer" | "followUp";
 
 /**
  * Session lifecycle coordinator. It owns cancellation and cleanup so every
@@ -20,6 +23,7 @@ export { BusyError };
  */
 export class SessionService {
   private readonly lock = new SessionLock();
+  private readonly trees = new SessionTreeStore();
 
   constructor(
     private readonly ensureBooted: () => Promise<unknown>,
@@ -40,15 +44,35 @@ export class SessionService {
   }
 
   /**
-   * @param lockMode `replace` (default) aborts the previous step — chat UX.
+   * @param lockMode / whenBusy — replace aborts; reject BusyError; steer/followUp queue.
    * @param replaceFromId truncate transcript from this item before prompting (edit/resubmit).
    */
   async prompt(
     runId: string,
     message: string,
-    opts?: { lockMode?: "replace" | "reject"; replaceFromId?: string },
+    opts?: {
+      lockMode?: "replace" | "reject";
+      whenBusy?: PromptWhenBusy;
+      replaceFromId?: string;
+    },
   ): Promise<Run> {
     await this.ensureBooted();
+    const whenBusy = opts?.whenBusy ?? opts?.lockMode ?? "replace";
+    if (this.lock.isRunning(runId)) {
+      if (whenBusy === "steer") {
+        this.driveSolve.enqueueSteer(runId, this.mask(message));
+        const run = await this.runs.get(runId);
+        if (!run) throw new Error(`run not found: ${runId}`);
+        return run;
+      }
+      if (whenBusy === "followUp") {
+        this.driveSolve.enqueueFollowUp(runId, this.mask(message));
+        const run = await this.runs.get(runId);
+        if (!run) throw new Error(`run not found: ${runId}`);
+        return run;
+      }
+      if (whenBusy === "reject") throw new BusyError(runId);
+    }
     if (opts?.replaceFromId) {
       const run = await this.runs.get(runId);
       if (!run) throw new Error(`run not found: ${runId}`);
@@ -56,14 +80,25 @@ export class SessionService {
       this.events.publish(run.truncateFrom(opts.replaceFromId));
       await this.runs.save(run);
     }
-    const controller = this.lock.begin(runId, opts?.lockMode ?? "replace");
+    const controller = this.lock.begin(runId, whenBusy === "reject" ? "reject" : "replace");
     try {
-      const done = await this.driveSolve.execute({
+      let done = await this.driveSolve.execute({
         runId,
         message: this.mask(message),
         signal: controller.signal,
       });
       this.driveSolve.takeLiveReply(runId);
+      // Drain follow-ups after settle (one-at-a-time).
+      for (;;) {
+        const next = this.driveSolve.queues.drainFollowUp(runId);
+        if (!next.length) break;
+        done = await this.driveSolve.execute({
+          runId,
+          message: next[0]!,
+          signal: controller.signal,
+        });
+        this.driveSolve.takeLiveReply(runId);
+      }
       return done;
     } catch (error) {
       if (error instanceof BusyError) throw error;
@@ -72,6 +107,13 @@ export class SessionService {
       const aborted = isAbort(error);
       const detail = error instanceof Error ? error.message : String(error);
       const partial = this.driveSolve.takeLiveReply(runId);
+      const returned = this.driveSolve.queues.returnAll(runId);
+      if (returned.steer.length || returned.followUp.length) {
+        run.append(
+          "system",
+          `queue_restored: steer=${returned.steer.length} followUp=${returned.followUp.length}`,
+        );
+      }
       if (run.status === "acting" || run.status === "reviewing" || run.status === "researching") {
         this.events.publish(run.interrupt(
           aborted ? "Step interrupted." : `Error: ${detail}`,
@@ -88,6 +130,42 @@ export class SessionService {
     } finally {
       this.lock.end(runId, controller);
     }
+  }
+
+  async fork(runId: string, title?: string): Promise<Run> {
+    await this.ensureBooted();
+    const run = await this.runs.get(runId);
+    if (!run) throw new Error(`run not found: ${runId}`);
+    const { events } = this.trees.fork(runId, run.sessionPath, run.transcript, title);
+    this.events.publish(events);
+    run.append("system", `branch_forked: ${title?.trim() || "fork"}`);
+    await this.runs.save(run);
+    return run;
+  }
+
+  async switchBranch(runId: string, branchId: string): Promise<Run> {
+    await this.ensureBooted();
+    const run = await this.runs.get(runId);
+    if (!run) throw new Error(`run not found: ${runId}`);
+    if (this.lock.isRunning(runId)) throw new BusyError(runId);
+    const { events, transcript } = this.trees.switchTo(
+      runId,
+      run.sessionPath,
+      run.transcript,
+      branchId,
+    );
+    this.events.publish(events);
+    run.transcript = transcript;
+    run.append("system", `branch_switched: ${branchId}`);
+    await this.runs.save(run);
+    return run;
+  }
+
+  async branches(runId: string) {
+    await this.ensureBooted();
+    const run = await this.runs.get(runId);
+    if (!run) throw new Error(`run not found: ${runId}`);
+    return this.trees.list(runId, run.sessionPath, run.transcript);
   }
 
   async compact(runId: string): Promise<Run> {

@@ -2,6 +2,9 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { McpServer } from "../ports.ts";
 
+/** How MCP tools reach the model. */
+export type McpExposure = "direct" | "deferred" | "hidden";
+
 export type McpConfigEntry = {
   /** Local stdio */
   command?: string;
@@ -10,6 +13,8 @@ export type McpConfigEntry = {
   /** Remote SSE URL (future; stdio preferred today) */
   url?: string;
   enabled?: boolean;
+  /** direct = always in roster; deferred = after tool_search; hidden = registered only */
+  exposure?: McpExposure;
 };
 
 export type McpConfigFile = {
@@ -35,6 +40,7 @@ export function loadMcpConfig(home: string): McpServer[] {
         continue;
       }
       if (!entry.command?.trim()) continue;
+      // hidden servers still boot (runtime), but ToolRegistry may omit tools until tool_search
       out.push({
         name,
         description: "MCP server from config",
@@ -46,6 +52,23 @@ export function loadMcpConfig(home: string): McpServer[] {
     return out;
   } catch {
     return [];
+  }
+}
+
+export function mcpExposureMap(home: string): Record<string, McpExposure> {
+  const path = mcpConfigPath(home);
+  if (!existsSync(path)) return {};
+  try {
+    const raw = JSON.parse(readFileSync(path, "utf8")) as McpConfigFile;
+    const map = raw.mcpServers ?? raw.mcp ?? {};
+    const out: Record<string, McpExposure> = {};
+    for (const [name, entry] of Object.entries(map)) {
+      if (entry.enabled === false) continue;
+      out[name] = entry.exposure ?? "direct";
+    }
+    return out;
+  } catch {
+    return {};
   }
 }
 

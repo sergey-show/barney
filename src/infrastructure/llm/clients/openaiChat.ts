@@ -290,6 +290,7 @@ async function openAiCompatStream(
   let buf = "";
   let mode: "unknown" | "sse" | "json" = "unknown";
   let sawEvent = false;
+  let finishReason: string | undefined;
 
   const applyDelta = (delta: OpenAiDelta | undefined) => {
     if (!delta || looped) return;
@@ -330,6 +331,9 @@ async function openAiCompatStream(
         if (!json) continue;
         sawEvent = true;
         applyDelta(json.choices?.[0]?.delta);
+        if (json.choices?.[0]?.finish_reason) {
+          finishReason = json.choices[0].finish_reason;
+        }
         const used = usageTokens(json.usage);
         if (used) tokens = used;
       }
@@ -376,6 +380,7 @@ async function openAiCompatStream(
       tokens,
       usd: tokens * 0.000002,
       toolCalls: finishToolDeltas(toolsAcc),
+      finishReason,
     }, schema, looped),
   };
 }
@@ -416,12 +421,14 @@ function resultFromCompletion(json: OpenAiCompletion, schema: DialectSchema, onT
   });
   if (split.thinking) onThinking?.(split.thinking);
   const tokens = usageTokens(json.usage);
+  const finishReason = json.choices?.[0]?.finish_reason ?? undefined;
   return finalizeResult({
     text: split.text,
     thinking: split.thinking,
     tokens,
     usd: tokens * 0.000002,
     toolCalls,
+    finishReason: finishReason || undefined,
   }, schema, generationLooped(`${split.thinking}\n${split.text}`));
 }
 

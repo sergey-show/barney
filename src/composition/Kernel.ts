@@ -33,7 +33,7 @@ import { judgeSoftZpd3, judgeZpd3Proof } from "../application/autonomy/zpdProof.
 import { parseSoftZpdHarness } from "../application/autonomy/softZpdHarness.ts";
 import { AutonomyScheduler } from "../application/autonomy/AutonomyScheduler.ts";
 import { isSoftFailClass } from "../application/context/expectationMatrix.ts";
-import { loadMcpConfig, listRemoteMcpUrls } from "../application/mcp/mcpConfig.ts";
+import { loadMcpConfig, listRemoteMcpUrls, mcpExposureMap } from "../application/mcp/mcpConfig.ts";
 import { CompositeOracle } from "../infrastructure/oracle/CompositeOracle.ts";
 import type { OraclePort } from "../application/ports.ts";
 import {
@@ -306,7 +306,7 @@ export class Kernel {
         }));
       }
     }
-    this.driveSolve.refreshMcpRegistry();
+    this.driveSolve.refreshMcpRegistry(mcpExposureMap(this.home));
   }
 
   async tick(): Promise<string | null> {
@@ -957,9 +957,21 @@ export class Kernel {
   async send(
     runId: string,
     message: string,
-    opts?: { replaceFromId?: string },
+    opts?: { replaceFromId?: string; whenBusy?: "replace" | "reject" | "steer" | "followUp" },
   ): Promise<Run> {
     return this.sessionService.prompt(runId, message, opts);
+  }
+
+  async forkSession(runId: string, title?: string): Promise<Run> {
+    return this.sessionService.fork(runId, title);
+  }
+
+  async switchBranch(runId: string, branchId: string): Promise<Run> {
+    return this.sessionService.switchBranch(runId, branchId);
+  }
+
+  async listBranches(runId: string) {
+    return this.sessionService.branches(runId);
   }
 
   stepRunning(runId: string): boolean {

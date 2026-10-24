@@ -17,7 +17,7 @@ export class KernelAgentSessionApplication implements AgentSessionApplication {
   async prompt(
     sessionId: string,
     text: string,
-    opts?: { replaceFromId?: string },
+    opts?: { replaceFromId?: string; whenBusy?: "replace" | "reject" | "steer" | "followUp" },
   ): Promise<RunSnapshot> {
     return snapshotRun(await this.kernel.send(sessionId, text, opts));
   }
@@ -28,6 +28,18 @@ export class KernelAgentSessionApplication implements AgentSessionApplication {
 
   async compact(sessionId: string): Promise<RunSnapshot> {
     return snapshotRun(await this.kernel.compact(sessionId));
+  }
+
+  async fork(sessionId: string, title?: string): Promise<RunSnapshot> {
+    return snapshotRun(await this.kernel.forkSession(sessionId, title));
+  }
+
+  async switchBranch(sessionId: string, branchId: string): Promise<RunSnapshot> {
+    return snapshotRun(await this.kernel.switchBranch(sessionId, branchId));
+  }
+
+  async branches(sessionId: string) {
+    return this.kernel.listBranches(sessionId);
   }
 
   async close(sessionId: string): Promise<RunSnapshot> {

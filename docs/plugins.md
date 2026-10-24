@@ -22,7 +22,7 @@ Legacy overlays are also scanned (Barney plugins win on a name clash):
 
 - `~/.barney/skills/`
 - `~/.barney/mcp/`
-- AgentSkills from Claude / OpenCode / Codex / Claw if those folders exist on the host
+- AgentSkills from Claude / Codex / Claw (and similar host folders) if present
 
 The Web **Settings → Plugins** list is this catalog. There is no separate “install plugin” form: drop files into the body, or ask Barney to write them.
 

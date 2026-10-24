@@ -260,9 +260,14 @@ function mountSessionRoutes(
 
   app.post(`${prefix}/:id/messages`, async (c) => {
     try {
-      const body = await c.req.json<{ text: string; replaceFromId?: string }>();
+      const body = await c.req.json<{
+        text: string;
+        replaceFromId?: string;
+        whenBusy?: "replace" | "reject" | "steer" | "followUp";
+      }>();
       const run = await sessions.prompt(c.req.param("id"), body.text, {
         replaceFromId: body.replaceFromId,
+        whenBusy: body.whenBusy,
       });
       return c.json(sessionView(sessions, run));
     } catch (err) {
@@ -273,6 +278,33 @@ function mountSessionRoutes(
   app.post(`${prefix}/:id/compact`, async (c) => {
     try {
       const run = await sessions.compact(c.req.param("id"));
+      return c.json(sessionView(sessions, run));
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 400);
+    }
+  });
+
+  app.post(`${prefix}/:id/fork`, async (c) => {
+    try {
+      const body = await c.req.json<{ title?: string }>().catch(() => ({ title: undefined }));
+      const run = await sessions.fork(c.req.param("id"), body.title);
+      return c.json(sessionView(sessions, run));
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 400);
+    }
+  });
+
+  app.get(`${prefix}/:id/branches`, async (c) => {
+    try {
+      return c.json({ branches: await sessions.branches(c.req.param("id")) });
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 400);
+    }
+  });
+
+  app.post(`${prefix}/:id/branches/:branchId/switch`, async (c) => {
+    try {
+      const run = await sessions.switchBranch(c.req.param("id"), c.req.param("branchId"));
       return c.json(sessionView(sessions, run));
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 400);

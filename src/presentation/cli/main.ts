@@ -111,6 +111,9 @@ const CLI_HELP = [
   "  /continue            continue interrupted work",
   "  /retry               retry the last request",
   "  /compact             summarize context (summary cursor)",
+  "  /fork [title]        fork session branch",
+  "  /branches            list session branches",
+  "  /branch <id>         switch to a branch",
   "  /close               close the current session",
   "",
   "KNOWLEDGE",
@@ -352,6 +355,51 @@ const cli = defineCommand({
           try {
             current = await sessions.compact(runId);
             note("success", "Context compacted (summary cursor set).");
+          } catch (err) {
+            note("session", err instanceof Error ? err.message : String(err));
+          }
+        }
+        again();
+        continue;
+      }
+      if (line === "/branches") {
+        if (!runId) note("session", "No active session.");
+        else {
+          try {
+            const rows = await sessions.branches(runId);
+            note("session", rows.map((b) => `${b.active ? "*" : " "} ${b.id.slice(0, 8)} ${b.title}`).join("\n") || "(none)");
+          } catch (err) {
+            note("session", err instanceof Error ? err.message : String(err));
+          }
+        }
+        again();
+        continue;
+      }
+      if (line.startsWith("/fork")) {
+        if (!runId) note("session", "No active session.");
+        else {
+          try {
+            current = await sessions.fork(runId, line.slice(5).trim() || undefined);
+            note("success", "Branch forked.");
+          } catch (err) {
+            note("session", err instanceof Error ? err.message : String(err));
+          }
+        }
+        again();
+        continue;
+      }
+      if (line.startsWith("/branch ")) {
+        if (!runId) note("session", "No active session.");
+        else {
+          try {
+            const id = line.slice(8).trim();
+            const rows = await sessions.branches(runId);
+            const hit = rows.find((b) => b.id === id || b.id.startsWith(id));
+            if (!hit) note("session", "branch not found");
+            else {
+              current = await sessions.switchBranch(runId, hit.id);
+              note("success", `Switched to ${hit.title}`);
+            }
           } catch (err) {
             note("session", err instanceof Error ? err.message : String(err));
           }

@@ -39,6 +39,21 @@
 | Context pressure | ~70%/~~90% → tighter `packSession` before hard budget fail |
 | Tool JSON Schema | Optional params → `type: [t,"null"]` for OpenAI-compat |
 
+## Session harness
+
+| Piece | Behavior |
+|---|---|
+| Overflow retry | context overflow → compact + one retry |
+| Tool offload | long tool stdout → `.barney/tool-out/*` + `full_output_path` |
+| Steer / followUp | `whenBusy: steer\|followUp` queues mid-run / after settle |
+| Parallel tools | read-safe tools run concurrently in one step |
+| Truncated tools | `finish_reason=length` → fail tool calls, ask re-issue |
+| Structured compact | Goal/Progress/Decisions + read/modified file lists |
+| AGENTS.md | auto-ingest from worktree into act system |
+| MCP exposure | `direct` / `deferred` / `hidden` + `tool_search` |
+| Codemode | `codemode` tool — short JS calling allowlisted reads |
+| Session tree | `POST …/fork`, `…/branches`, switch — alternate paths |
+
 **Later:** models.dev catalog; full SSE MCP transport.
 
 ## LSP (optional Body)
