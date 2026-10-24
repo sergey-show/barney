@@ -171,6 +171,14 @@ import {
   renderExperienceRecall,
 } from "../experience/experienceRecall.ts";
 import {
+  isGreetingRoute,
+  planStudyWrite,
+  shouldForceTaskStudy,
+  studyNoteKey,
+  studyRuleKey,
+  TASK_STUDY_ACT_NUDGE,
+} from "../experience/taskStudy.ts";
+import {
   decideExperienceWrite,
   STRUCTURAL_FAIL_CLASSES,
 } from "../experience/experienceLayers.ts";
@@ -409,6 +417,7 @@ export class DriveSolve {
       query: `${run.goal}\n${input.message}`,
     });
     let routed: TurnRoute | undefined;
+    let taskStudyForced = false;
     if (depth === 0) {
       routed = await this.routeTurn(run, throwIfAborted, input.signal);
       const earlyShadowHits = recall.relevantEpisodes.filter((episode) => episode.outcome === "fail").length
@@ -431,6 +440,33 @@ export class DriveSolve {
           shadowHits: earlyShadowHits,
           frustration: earlyFrustration,
         }));
+      }
+      // Study-before-act: fresh goal + empty body recall → research (SolvePolicy new_task_class).
+      if (currentKernelAblation().recallExperience) {
+        const prelimBags = buildExperienceBags(recall, {
+          query: `${run.goal}\n${input.message}`,
+          topK: 5,
+        });
+        const prelimReuse = classifyReuse({
+          goalHash: goalHash(run.goal),
+          priorGoalHashes: extractGoalHashes([...recall.past, ...recall.recentAll]),
+          currentClass: run.taskClass,
+          recalledFromClasses: [
+            ...recall.pickedRules.map((rule) => rule.sourceClass),
+            ...recall.relevantEpisodes.map((episode) => episode.taskClass),
+          ],
+        });
+        const study = shouldForceTaskStudy({
+          reuse: prelimReuse,
+          bags: prelimBags,
+          researchOn: agent.solvePolicy.researchOn,
+          allowSkip: routed.short && !routed.needResearch && isGreetingRoute(routed.topic, input.message),
+        });
+        if (study.force) {
+          taskStudyForced = true;
+          routed = { ...routed, short: false, needResearch: true };
+          run.append("system", study.line);
+        }
       }
       if (!input.forceFull && routed.short) {
         const short = await this.executeShort(run, agent, input.message, recall, throwIfAborted, input.signal);
@@ -562,6 +598,32 @@ export class DriveSolve {
     if (ablation.recallExperience) {
       run.append("system", `experience_recall_ready · ${formatBagsCount(experienceBags)}`);
     }
+    // Re-check after skill bags: still fresh+empty → force study even if planner said no.
+    if (depth === 0 && ablation.recallExperience && !taskStudyForced) {
+      const lateReuse = classifyReuse({
+        goalHash: goalHash(run.goal),
+        priorGoalHashes: priorHashes,
+        currentClass: run.taskClass,
+        recalledFromClasses: [
+          ...recalledMeta.map((r) => r.sourceClass),
+          ...relevantEpisodes.map((episode) => episode.taskClass),
+          ...skillBodyRecs
+            .filter((r) => r.status === "frozen" || r.status === "quarantine" || r.status === "verified")
+            .map((r) => r.bornFromClass || run.taskClass),
+        ],
+      });
+      const lateStudy = shouldForceTaskStudy({
+        reuse: lateReuse,
+        bags: experienceBags,
+        researchOn: agent.solvePolicy.researchOn,
+        allowSkip: isGreetingRoute(routed?.topic ?? "", input.message),
+      });
+      if (lateStudy.force) {
+        taskStudyForced = true;
+        routed = { ...(routed ?? { topic: "", short: false, needResearch: true, analysis: "", plan: [] }), short: false, needResearch: true };
+        run.append("system", lateStudy.line);
+      }
+    }
     const failedCalls = new Set<string>();
     const familyFails = new Map<string, number>();
     const extra = { n: 0 };
@@ -613,10 +675,20 @@ export class DriveSolve {
     if (routed?.needResearch) {
       const brief = await this.collectResearch(run, input.message, input.signal);
       run.append("research", brief);
+      if (taskStudyForced && ablation.learnBody) {
+        await this.persistTaskStudy(run, agent.id.value, brief);
+      }
       await this.runs.save(run);
+      const studyNudge = taskStudyForced ? `\n\n${TASK_STUDY_ACT_NUDGE}` : "";
       actMessages[0] = {
         role: "system",
-        content: `${actMessages[0]?.content ?? ""}\n\nDeep research brief (verify before answering; copy URLs exactly):\n${brief}`,
+        content: `${actMessages[0]?.content ?? ""}${studyNudge}\n\nDeep research brief (verify before answering; copy URLs exactly):\n${brief}`,
+      };
+    } else if (taskStudyForced) {
+      // Policy demanded study but research short-circuited — still forbid invent-from-training.
+      actMessages[0] = {
+        role: "system",
+        content: `${actMessages[0]?.content ?? ""}\n\n${TASK_STUDY_ACT_NUDGE}`,
       };
     }
     throwIfAborted();
@@ -2031,6 +2103,49 @@ export class DriveSolve {
       tags: ["research", run.taskClass],
     });
     return text;
+  }
+
+  /**
+   * After forced task study: crystallise the brief into body memory so the next
+   * turn recalls it as rules/study notes instead of re-guessing from weights.
+   */
+  private async persistTaskStudy(run: Run, agentId: string, brief: string): Promise<void> {
+    const plan = planStudyWrite({
+      brief,
+      goal: run.goal,
+      runId: run.id.value,
+    });
+    if (plan.skipReason === "brief_too_thin") {
+      run.append("system", `study_write: skip · ${plan.skipReason}`);
+      return;
+    }
+    const noteKey = studyNoteKey(run.taskClass, run.goal);
+    await this.remember(run, agentId, {
+      key: noteKey,
+      title: `Study: ${clipText(run.goal, 80)}`,
+      body: redactSecrets(plan.studyBody),
+      tags: ["study", "experience", "learned", run.taskClass],
+    });
+    await this.graph.link(classKey(run.taskClass), noteKey, "learned");
+    let written = 0;
+    for (let i = 0; i < plan.directives.length; i += 1) {
+      const line = plan.directives[i]!;
+      const key = studyRuleKey(run.taskClass, line, i);
+      await this.remember(run, agentId, {
+        key,
+        title: `Study rule: ${clipText(line, 60)}`,
+        body: redactSecrets(line),
+        tags: ["rule", "study", "experience", "learned", run.taskClass],
+      });
+      await this.graph.link(classKey(run.taskClass), key, "learned");
+      written += 1;
+    }
+    run.append(
+      "system",
+      `study_write: note=1 directives=${written}`
+        + (plan.skipReason ? ` · ${plan.skipReason}` : "")
+        + ` · key=${noteKey}`,
+    );
   }
 
   private async verifyAgainstEvidence(run: Run, act: ChatResult, signal?: AbortSignal): Promise<ChatResult> {

@@ -53,6 +53,10 @@ recall_helped: 0/1/? # causal help only (four-hand); never inferred from pass al
 
 Also always log `experience_recall_ready` (including empty bags). The same hit/used/?helped markers are persisted on the episode. Short chat with skill/rule bags escalates to the full path so the exam cannot be skipped. Idle writes `experience_pulse` (hit/used/pe rates + transfer ledger) into memory and the psyche snapshot.
 
+**Task study (unknown task):** if `classifyReuse` is `fresh` and recall bags are empty, and `SolvePolicy.researchOn` includes `new_task_class`, DriveSolve forces `need_research` before the first act (`force_research: … study task before act`). The act prompt forbids inventing APIs/URLs from training — evidence first. Greetings are exempt.
+
+After forced study, the brief is written into the body: `study/<class>/…` (full note) plus provisional `rule/<class>/study/…` directives (`study_write: note=1 directives=N`). Next turns recall them via rule bags instead of re-guessing.
+
 Code: `src/application/experience/experienceRecall.ts`, `experiencePulse.ts`, `weightedRecall.ts` (wired in `DriveSolve` / `Kernel.tick`).
 
 ## Four-hand hard transfer
