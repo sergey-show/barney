@@ -51,7 +51,9 @@ recall_used: 0/1     # plan/act/tools actually echoed the lesson
 recall_helped: 0/1/? # causal help only (four-hand); never inferred from pass alone
 ```
 
-Code: `src/application/experience/experienceRecall.ts`, `weightedRecall.ts` (wired in `DriveSolve`).
+Also always log `experience_recall_ready` (including empty bags). The same hit/used/?helped markers are persisted on the episode. Short chat with skill/rule bags escalates to the full path so the exam cannot be skipped. Idle writes `experience_pulse` (hit/used/pe rates + transfer ledger) into memory and the psyche snapshot.
+
+Code: `src/application/experience/experienceRecall.ts`, `experiencePulse.ts`, `weightedRecall.ts` (wired in `DriveSolve` / `Kernel.tick`).
 
 ## Four-hand hard transfer
 

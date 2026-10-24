@@ -17,12 +17,16 @@ test("gaps require repeated failure modes", () => {
   expect(gapsFromBacklogRows([{ klass: "secret-leak", count: 1 }])).toHaveLength(0);
   expect(gapsFromBacklogRows([{ klass: "secret-leak", count: AGENDA_MIN_GAP_COUNT }])).toHaveLength(1);
   expect(gapsFromFailEpisodes([
+    { outcome: "fail", failureMode: "missing-artifact", nextHint: "write the file", markers: ["pe:1"] },
+    { outcome: "fail", failureMode: "missing-artifact", nextHint: "write the file first", markers: ["pe:1"] },
+  ])).toHaveLength(1);
+  expect(gapsFromFailEpisodes([
     { outcome: "fail", failureMode: "missing-artifact", nextHint: "write the file" },
     { outcome: "fail", failureMode: "missing-artifact", nextHint: "write the file first" },
-  ])).toHaveLength(1);
+  ])).toHaveLength(0);
 });
 
-test("proposeAgendaItem builds a local drill goal", () => {
+test("proposeAgendaItem builds a ZPD-3 local drill goal", () => {
   const item = proposeAgendaItem({
     failClass: "secret-leak",
     hint: "do not echo live keys",
@@ -30,10 +34,11 @@ test("proposeAgendaItem builds a local drill goal", () => {
     source: "backlog",
   });
   expect(item.status).toBe("pending");
-  expect(item.zpdLevel).toBe(1);
+  expect(item.zpdLevel).toBe(3);
   expect(item.goal).toContain("recovery-secret-leak.md");
   expect(item.goal).toContain("What failed");
-  expect(item.goal).toMatch(/ZPD-1/);
+  expect(item.goal).toMatch(/ZPD-3/);
+  expect(item.goal).toContain("ZPD_PROOF");
 });
 
 test("mergeAgenda dedupes by class and nextPending respects order", () => {

@@ -45,8 +45,12 @@ import {
   buildCapabilityMap,
   capabilityMapKey,
   formatCapabilityMap,
-  gapsFromCapabilityMap,
 } from "../application/context/capabilityMap.ts";
+import { pulseFromEpisodes } from "../application/experience/experiencePulse.ts";
+import {
+  parseTransferStats,
+  transferMemoryKey,
+} from "../application/context/transferLedger.ts";
 import {
   cancelWakesForRun,
   dueWakes,
@@ -332,6 +336,7 @@ export class Kernel {
       .filter((ms) => Number.isFinite(ms))
       .sort((a, b) => b - a)[0];
     const agenda = await this.refreshAgenda(agent.id.value, fails, recent);
+    await this.writeExperiencePulse(agent.id.value);
     const pending = nextPending(agenda);
     const operatorBusy = Boolean(
       open
@@ -548,9 +553,26 @@ export class Kernel {
     return resumed;
   }
 
+  private async writeExperiencePulse(agentId: string): Promise<void> {
+    const episodes = await this.episodes.findRecent(20);
+    const transferNote = await this.memories.get(transferMemoryKey(agentId));
+    const transfer = transferNote ? parseTransferStats(transferNote.body) : null;
+    const pulse = pulseFromEpisodes(episodes, transfer);
+    const key = `metrics/experience/${agentId}`;
+    const prev = await this.memories.get(key);
+    if (prev?.body === pulse.line) return;
+    await this.memories.save(new MemoryNote({
+      key,
+      title: "Experience pulse",
+      body: pulse.line,
+      tags: ["metrics", "experience", "pulse"],
+      sourceAgentId: agentId,
+    }));
+  }
+
   private async refreshAgenda(
     agentId: string,
-    fails: Array<{ failureMode?: string | null; nextHint?: string | null; outcome: string }>,
+    fails: Array<{ failureMode?: string | null; nextHint?: string | null; outcome: string; markers?: string[] }>,
     recent: MemoryNote[],
   ): Promise<AgendaItem[]> {
     const key = agendaMemoryKey(agentId);
@@ -580,8 +602,8 @@ export class Kernel {
       tags: ["capability", "self-model", "autonomy"],
       sourceAgentId: agentId,
     }));
-    const capabilityGaps = gapsFromCapabilityMap(capMap);
-    const proposed = [...backlogGaps, ...episodeGaps, ...capabilityGaps].map((gap) => proposeAgendaItem(gap));
+    // Autonomy closure: agenda only from repeated backlog / PE episode gaps (not capability/inner).
+    const proposed = [...backlogGaps, ...episodeGaps].map((gap) => proposeAgendaItem(gap));
     const merged = mergeAgenda(existing, proposed);
     if (JSON.stringify(merged) !== JSON.stringify(existing)) {
       await this.memories.save(new MemoryNote({
@@ -650,7 +672,7 @@ export class Kernel {
     const key = agendaMemoryKey(agentId);
     let items = parseAgenda((await this.memories.get(key))?.body ?? "");
     const drill = items.find((item) => item.id === agendaId);
-    const zpd = drill?.zpdLevel ?? 1;
+    const zpd = drill?.zpdLevel ?? 3;
     items = markAgenda(items, agendaId, { status: "running" });
     await this.memories.save(new MemoryNote({
       key,
@@ -672,7 +694,12 @@ export class Kernel {
       const done = await this.send(created.id.value, goal);
       let ok = done.status === "done";
       let dropReason = "";
-      if (ok && zpd === 3) {
+      // Autonomy closure: self_run done ≡ ZPD-3 proof markers; else drop.
+      if (ok && zpd !== 3) {
+        ok = false;
+        dropReason = "self_run requires ZPD-3";
+        done.append("system", `zpd3_proof: fail · ${dropReason}`);
+      } else if (ok) {
         const evidence = done.transcript
           .map((item) => `${item.kind}: ${item.text}`)
           .join("\n");
@@ -719,7 +746,7 @@ export class Kernel {
           "autonomy",
           failClass,
           ok ? "done" : "dropped",
-          ...(zpd === 3 ? ["zpd3"] : []),
+          "zpd3",
           ...(dropReason ? ["zpd3-unproven"] : []),
         ],
         sourceAgentId: agentId,
@@ -847,26 +874,16 @@ export class Kernel {
           sourceAgentId: input.agentId,
         }));
       }
+      // Autonomy closure: inner think must not invent agenda items.
       if (directives.agenda) {
-        const key = agendaMemoryKey(input.agentId);
-        const existing = parseAgenda((await this.memories.get(key))?.body ?? "");
-        const proposed = proposeAgendaItem({
-          failClass: directives.agenda.failClass,
-          hint: directives.agenda.hint,
-          count: 2,
-          source: "inner",
-          zpdLevel: 1,
-        });
-        const merged = mergeAgenda(existing, [proposed]);
-        if (JSON.stringify(merged) !== JSON.stringify(existing)) {
-          await this.memories.save(new MemoryNote({
-            key,
-            title: "Autonomy agenda",
-            body: formatAgenda(merged),
-            tags: ["agenda", "autonomy", "inner"],
-            sourceAgentId: input.agentId,
-          }));
-        }
+        await this.memories.save(new MemoryNote({
+          key: slugKey(`inner/agenda-ignored/${Date.now()}`),
+          title: "Inner agenda ignored",
+          body: `${directives.agenda.failClass}: ${directives.agenda.hint}`,
+          tags: ["inner", "agenda", "ignored"],
+          sourceAgentId: input.agentId,
+          sourceRunId: input.runId ?? "",
+        }));
       }
     }
 
@@ -1146,6 +1163,7 @@ export class Kernel {
         frustrationSource = "transcript";
       }
     }
+    const experiencePulse = (await this.memories.get(`metrics/experience/${agent.id.value}`))?.body ?? null;
     return buildPsycheEvolution({
       shadow: samost.shadow,
       light: samost.light,
@@ -1156,6 +1174,7 @@ export class Kernel {
       frustrationSource,
       dreamBody: dream?.body,
       dreamUpdatedAt: dream?.updatedAt,
+      experiencePulse,
     });
   }
 

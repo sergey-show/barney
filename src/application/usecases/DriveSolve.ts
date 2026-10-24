@@ -559,7 +559,7 @@ export class DriveSolve {
         }, { includeRules: false })
         : "",
     ].filter(Boolean).join("\n\n");
-    if (ablation.recallExperience && (experienceBags.shadow.length || experienceBags.rules.length || experienceBags.skills.length)) {
+    if (ablation.recallExperience) {
       run.append("system", `experience_recall_ready · ${formatBagsCount(experienceBags)}`);
     }
     const failedCalls = new Set<string>();
@@ -736,6 +736,7 @@ export class DriveSolve {
       }
     }
 
+    let spiOk: boolean | null = null;
     if (run.status === "ready" && review.verdict !== "pass") {
       const persisted = await this.persistUntilDone({
         run,
@@ -759,6 +760,36 @@ export class DriveSolve {
       act = persisted.act;
       review = persisted.review;
       oracleVerdict = persisted.oracleVerdict ?? oracleVerdict;
+      spiOk = persisted.spiOk;
+    } else if (run.status === "ready" && review.verdict === "pass") {
+      const gated = await this.gateSpiVerify(run, artifactEvidence(run));
+      spiOk = gated.ok;
+      if (gated.ok === false) {
+        review = { ...review, verdict: "fail", missing: gated.detail || "SPI verify failed" };
+        const persisted = await this.persistUntilDone({
+          run,
+          actMessages,
+          act,
+          review,
+          latest: input.message,
+          depth,
+          signal: input.signal,
+          failedCalls,
+          familyFails,
+          extra,
+          psyche,
+          lessonTrail,
+          failKlass,
+          progressBag,
+          classStats,
+          shadowHits: experienceBags.shadow.length,
+          softExpectations,
+        });
+        act = persisted.act;
+        review = persisted.review;
+        oracleVerdict = persisted.oracleVerdict ?? oracleVerdict;
+        spiOk = persisted.spiOk;
+      }
     }
 
     if (run.status === "ready" && review.verdict !== "pass") {
@@ -841,30 +872,9 @@ export class DriveSolve {
       outcomeOk,
     });
     run.append("system", recallSignal.line);
-    const activeSpi = this.providers.list().filter((p) => p.port === "verify" && providerEligibleForRun(p));
-    let spiOk: boolean | null = null;
-    if (activeSpi.length) {
-      try {
-        const spiResults = await this.verifyPort.verify({
-          worktree: run.worktreePath,
-          goal: run.goal,
-          evidence: toolEvidence,
-        });
-        spiOk = spiResults.every((row) => row.ok);
-        for (const row of spiResults) {
-          run.append(
-            "system",
-            `spi_verify: ${row.provider} ok=${row.ok ? 1 : 0} status=${row.status} · ${clipText(row.detail, 160)}`,
-          );
-        }
-      } catch (err) {
-        spiOk = false;
-        run.append("system", `spi_verify: error ${err instanceof Error ? err.message : String(err)}`);
-      }
-      if (this.spiAffectsOutcome && spiOk === false) {
-        outcomeOk = false;
-        run.append("system", "spi_verify: affects_outcome=1 · outcomeOk cleared");
-      }
+    if (this.spiAffectsOutcome && spiOk === false) {
+      outcomeOk = false;
+      run.append("system", "spi_verify: affects_outcome=1 · outcomeOk cleared");
     }
     const learned = lessonRule({
       taskClass: run.taskClass,
@@ -999,11 +1009,13 @@ export class DriveSolve {
       body: JSON.stringify(nextTransfer),
       tags: ["metrics", "transfer"],
     });
-    await this.touchSkillBodies(run, agent, skillBodyRecs, {
-      success: outcomeOk,
-      transfer: reuse === "transfer",
-      skipNames: recalledSkillNames,
-    });
+    if (ablation.learnBody) {
+      await this.touchSkillBodies(run, agent, skillBodyRecs, {
+        success: outcomeOk,
+        transfer: reuse === "transfer",
+        skipNames: recalledSkillNames,
+      });
+    }
     const turnFrustration = frustrationScore({
       extraApproaches: extra.n,
       sameFailureCount: run.sameFailureCount,
@@ -1027,6 +1039,9 @@ export class DriveSolve {
       confPredicted: calib.predicted,
       calibBrier: calib.brier,
       overconfident: calib.overconfident,
+      recallHit: recallSignal.recallHit,
+      recallUsed: recallSignal.recallUsed,
+      recallHelped: recallSignal.recallHelped,
     });
     const ruleTags = [
       "rule",
@@ -1540,6 +1555,37 @@ export class DriveSolve {
     this.events.publish(run.finishAct(act.text, act.tokens, act.usd, replyMetaFrom(act)));
   }
 
+  /** Verify-before-done: SPI providers must pass before accept, else reopen persist. */
+  private async gateSpiVerify(
+    run: Run,
+    evidence: string,
+  ): Promise<{ ok: boolean | null; detail: string }> {
+    const activeSpi = this.providers.list().filter((p) => p.port === "verify" && providerEligibleForRun(p));
+    if (!activeSpi.length) return { ok: null, detail: "" };
+    try {
+      const spiResults = await this.verifyPort.verify({
+        worktree: run.worktreePath,
+        goal: run.goal,
+        evidence,
+      });
+      const ok = spiResults.every((row) => row.ok);
+      for (const row of spiResults) {
+        run.append(
+          "system",
+          `spi_verify: ${row.provider} ok=${row.ok ? 1 : 0} status=${row.status} · ${clipText(row.detail, 160)}`,
+        );
+      }
+      return {
+        ok,
+        detail: ok ? "" : spiResults.filter((r) => !r.ok).map((r) => `${r.provider}: ${r.detail}`).join("; "),
+      };
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      run.append("system", `spi_verify: error ${detail}`);
+      return { ok: false, detail };
+    }
+  }
+
   private async persistUntilDone(input: {
     run: Run;
     actMessages: ChatMessage[];
@@ -1558,9 +1604,11 @@ export class DriveSolve {
     classStats: TaskClassStats;
     shadowHits?: number;
     softExpectations?: ExpectationMatrix | null;
-  }): Promise<{ act: ChatResult; review: Review; oracleVerdict: OracleVerdict | null }> {
+  }): Promise<{ act: ChatResult; review: Review; oracleVerdict: OracleVerdict | null; spiOk: boolean | null }> {
     let { act, review } = input;
     let oracleVerdict: OracleVerdict | null = null;
+    let spiOk: boolean | null = null;
+    let lastPrefer: string[] = [];
     rememberFailKlass(input.failKlass, review);
     const trail: ChatMessage[] = [{ role: "assistant", content: act.text }];
     while (true) {
@@ -1589,11 +1637,23 @@ export class DriveSolve {
         if (grounded.evidenceLine) input.run.append("system", grounded.evidenceLine);
         review = grounded.review;
         if (oracleVerdict?.ok && review.verdict === "pass") {
-          return { act, review, oracleVerdict };
+          const gated = await this.gateSpiVerify(input.run, evidence);
+          spiOk = gated.ok;
+          if (gated.ok !== false) return { act, review, oracleVerdict, spiOk };
+          review = { ...review, verdict: "fail", missing: gated.detail || "SPI verify failed" };
+          this.events.publish(input.run.submitReview(review));
+          // fall through to continue / tactic shift
         }
       }
-      const halt = haltAfterFail(review, input.run, input.extra.n, leftover, input.signal?.aborted, input.familyFails, progress);
-      if (halt === "pass") return { act, review, oracleVerdict };
+      let halt = haltAfterFail(review, input.run, input.extra.n, leftover, input.signal?.aborted, input.familyFails, progress);
+      if (halt === "pass") {
+        const gated = await this.gateSpiVerify(input.run, evidence);
+        spiOk = gated.ok;
+        if (gated.ok !== false) return { act, review, oracleVerdict, spiOk };
+        review = { ...review, verdict: "fail", missing: gated.detail || "SPI verify failed" };
+        this.events.publish(input.run.submitReview(review));
+        halt = "continue";
+      }
       if (halt === "abort") throw new DomainError("aborted", "step interrupted");
       if (halt !== "continue") {
         if (halt === "wanting" || halt === "need_user") {
@@ -1645,12 +1705,20 @@ export class DriveSolve {
       ];
       const strategy = cycleStrategy(input.run.usedStrategies, input.run.attempts, localFiles, prefer);
       const saturatedNames = [...input.familyFails.entries()].filter(([, n]) => familySaturated(n)).map(([k]) => k);
+      const stalled = progress.delta === "flat" && !progress.secondWind && input.extra.n >= 1;
       const tactic = pickTactic({
         strategy,
         saturated: saturatedNames,
         progress,
         failedFamily: input.lessonTrail.failedFamily,
+        priorPrefer: lastPrefer,
+        stalled,
       });
+      lastPrefer = tactic.preferFamilies;
+      if (stalled && input.lessonTrail.failedFamily) {
+        const fam = input.lessonTrail.failedFamily;
+        input.familyFails.set(fam, Math.max(input.familyFails.get(fam) ?? 0, 3));
+      }
       let learnedSkill = "";
       if (strategy === "write_capability") {
         const klass = failureClass({ kind: review.failureKind });
@@ -1737,7 +1805,7 @@ export class DriveSolve {
         });
       }
     }
-    return { act, review, oracleVerdict };
+    return { act, review, oracleVerdict, spiOk };
   }
 
   private async reviewLatest(run: Run, latest: string, actText: string, signal?: AbortSignal): Promise<Review> {
@@ -2214,7 +2282,22 @@ export class DriveSolve {
   ): Promise<Run | "full"> {
     const { packed } = this.packUnderPressure(run);
     const psyche = await this.loadPsyche(run, agent.id.value);
+    const ablation = currentKernelAblation();
+    const shortBags = ablation.recallExperience
+      ? buildExperienceBags(recall, { query: `${run.goal}\n${message}`, topK: 5 })
+      : { shadow: [], rules: [], skills: [], episodeLines: [] };
+    // Experience closure: non-empty skill/rule bags need the full exam path.
+    if (ablation.recallExperience && (shortBags.skills.length > 0 || shortBags.rules.length > 0)) {
+      run.append("thinking", "short chat → full turn: experience recall present");
+      run.append("system", `experience_recall_ready · ${formatBagsCount(shortBags)}`);
+      await this.runs.save(run);
+      return "full";
+    }
+    if (ablation.recallExperience) {
+      run.append("system", `experience_recall_ready · ${formatBagsCount(shortBags)}`);
+    }
     throwIfAborted();
+    const experienceBlock = ablation.recallExperience ? renderExperienceRecall(shortBags) : "";
     const raw = await this.completeRole(run, "planner", [
       {
         role: "system",
@@ -2223,6 +2306,7 @@ export class DriveSolve {
           turnLawFromConstitution(agent.constitution),
           renderSamostPrompt(psyche.samost, message),
           renderExistencePrompt(psyche.existence),
+          experienceBlock,
           renderConversationalRecall(recall),
           `Session goal: ${run.goal}`,
           workspaceLines(run.worktreePath, run.sessionPath),
@@ -2237,6 +2321,12 @@ export class DriveSolve {
       await this.runs.save(run);
       return "full";
     }
+    const recallSignal = finalizeRecallSignal({
+      bags: shortBags,
+      actText: act.text,
+      outcomeOk: true,
+    });
+    run.append("system", recallSignal.line);
     psyche.existence = appendExistence(psyche.existence, { kind: "act", text: clipText(message, 180) });
     await this.flushPsyche(run, agent.id.value, psyche);
     try {
@@ -2287,6 +2377,9 @@ export class DriveSolve {
         reuse: shortReuse,
         rulesRecalled: recall.pickedRules.map((rule) => rule.key),
         progressScore: 100,
+        recallHit: recallSignal.recallHit,
+        recallUsed: recallSignal.recallUsed,
+        recallHelped: recallSignal.recallHelped,
       }),
       nextHint: redactSecrets(`Short exchange: ${clipText(act.text, 240)}`),
       worktreeRef: run.worktreePath,

@@ -1,6 +1,13 @@
 import type { LlmPort, ProviderCatalog } from "../../application/ports.ts";
 import { LlmProvider } from "../../domain/provider/LlmProvider.ts";
-import { ROLES, type ChatMessage, type ChatResult, type CompleteOptions, type Role } from "../../domain/provider/Role.ts";
+import {
+  FAST_ROLES,
+  ROLES,
+  type ChatMessage,
+  type ChatResult,
+  type CompleteOptions,
+  type Role,
+} from "../../domain/provider/Role.ts";
 import { clientFor } from "./clients/clientFor.ts";
 import { requestBodyExtras, schemaFor } from "./clients/schema.ts";
 import { fetchEmbeddings } from "./embed.ts";
@@ -104,18 +111,30 @@ export async function seedBuiltinProviders(catalog: ProviderCatalog): Promise<vo
       (await catalog.findByName("stub"));
     if (preferred) await catalog.setDefault(preferred.id, preferred.defaultModel ?? "default");
   }
-  await seedUnifiedRoleBindings(catalog);
+  await seedPhaseRoleBindings(catalog);
 }
 
-/** Planner, reviewer, and coder share the bound model. A lighter second model degrades review. */
+/**
+ * Default: all roles share the coder model (review quality).
+ * Optional: BARNEY_FAST_MODEL binds planner/reviewer/embedder to a cheaper model
+ * on the same provider (phase-aware routing).
+ */
 export async function seedUnifiedRoleBindings(catalog: ProviderCatalog): Promise<void> {
+  await seedPhaseRoleBindings(catalog);
+}
+
+export async function seedPhaseRoleBindings(catalog: ProviderCatalog): Promise<void> {
   const bindings = await catalog.bindings();
   const coder = bindings.find((item) => item.role === "coder") ?? bindings[0];
   if (!coder) return;
   const provider = await catalog.get(coder.providerId);
   if (!provider) return;
-  const model = coder.model || provider.defaultModel || "default";
+  const slowModel = coder.model || provider.defaultModel || "default";
+  const fastRaw = (process.env.BARNEY_FAST_MODEL || "").trim();
+  const fastModel = fastRaw && fastRaw !== slowModel ? fastRaw : null;
   for (const role of ROLES) {
+    const useFast = Boolean(fastModel && (FAST_ROLES as readonly string[]).includes(role));
+    const model = useFast ? fastModel! : slowModel;
     const current = bindings.find((item) => item.role === role);
     if (current?.providerId === coder.providerId && current.model === model) continue;
     await catalog.setBinding(role, coder.providerId, model);

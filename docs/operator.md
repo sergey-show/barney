@@ -54,6 +54,17 @@
 | Codemode | `codemode` tool — short JS calling allowlisted reads |
 | Session tree | `POST …/fork`, `…/branches`, switch — alternate paths |
 
+## Competence closures (A → C → B)
+
+| Piece | Behavior |
+|---|---|
+| Experience recall | Always `experience_recall_ready` + episode `recall_*`; short→full when skill/rule bags present |
+| Experience pulse | Idle `metrics/experience/*` + psyche `experiencePulse` |
+| SPI verify-before-done | Active verify providers gate pass inside persist (reopen on fail) |
+| Stall → tactic | Flat progress rotates Prefer / can saturate failed family |
+| Phase models | Optional `BARNEY_FAST_MODEL` for planner/reviewer/embedder |
+| Autonomy agenda | Only PE/backlog gaps; ZPD-3 proof or drop; no inner invent |
+
 **Later:** models.dev catalog; full SSE MCP transport.
 
 ## LSP (optional Body)

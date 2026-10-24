@@ -22,6 +22,10 @@ export function buildEpisodeMarkers(input: {
   /** Brier (p−o)² for this turn. */
   calibBrier?: number;
   overconfident?: boolean;
+  /** Experience recall markers (mirrors transcript recall_* lines). */
+  recallHit?: boolean;
+  recallUsed?: boolean;
+  recallHelped?: boolean | null;
 }): string[] {
   const markers: string[] = [];
   if (input.source) markers.push(`source:${input.source}`);
@@ -31,6 +35,10 @@ export function buildEpisodeMarkers(input: {
   if (input.failureMode) markers.push(`failureMode:${input.failureMode}`);
   if (input.progressScore != null) markers.push(`progress:${Math.round(input.progressScore)}`);
   if (input.predictionError != null) markers.push(`pe:${input.predictionError}`);
+  if (input.recallHit != null) markers.push(`recall_hit:${input.recallHit ? 1 : 0}`);
+  if (input.recallUsed != null) markers.push(`recall_used:${input.recallUsed ? 1 : 0}`);
+  if (input.recallHelped != null) markers.push(`recall_helped:${input.recallHelped ? 1 : 0}`);
+  else if (input.recallHit != null) markers.push("recall_helped:?");
   if (input.frustration != null && input.frustration > 0) {
     markers.push(`frustration:${Math.round(input.frustration)}`);
   }

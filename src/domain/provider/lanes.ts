@@ -1,5 +1,5 @@
 import type { RoleBinding } from "./LlmProvider.ts";
-import { ROLES, type Role } from "./Role.ts";
+import { FAST_ROLES, SLOW_ROLES, type Role } from "./Role.ts";
 
 export type LaneName = "large" | "small";
 
@@ -13,12 +13,19 @@ export type Lanes = {
   small: LanePick | null;
 };
 
-export function rolesForLane(_lane: LaneName): readonly Role[] {
-  return ROLES;
+export function rolesForLane(lane: LaneName): readonly Role[] {
+  return lane === "small" ? FAST_ROLES : SLOW_ROLES;
 }
 
 export function lanesFromBindings(bindings: RoleBinding[]): Lanes {
-  const bound = bindings.find((item) => item.role === "coder") ?? bindings[0];
-  const large = bound ? { providerId: bound.providerId, model: bound.model } : null;
-  return { large, small: null };
+  const coder = bindings.find((item) => item.role === "coder") ?? bindings[0];
+  const large = coder ? { providerId: coder.providerId, model: coder.model } : null;
+  const fast =
+    bindings.find((item) => item.role === "planner")
+    ?? bindings.find((item) => item.role === "reviewer");
+  const small =
+    fast && large && (fast.providerId !== large.providerId || fast.model !== large.model)
+      ? { providerId: fast.providerId, model: fast.model }
+      : null;
+  return { large, small };
 }

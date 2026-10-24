@@ -51,7 +51,9 @@ recall_used: 0/1     # план/акт/инструменты реально о�
 recall_helped: 0/1/? # помог ли каузально (только four-hand); из одного pass не выводят
 ```
 
-Код: `experienceRecall.ts`, `weightedRecall.ts` (проводка в `DriveSolve`).
+Также всегда пишется `experience_recall_ready` (даже при пустых корзинах). Те же hit/used/?helped попадают в маркеры эпизода. Short-chat с skill/rule-корзинами уходит в полный путь. В idle пишется `experience_pulse` (hit/used/pe + transfer ledger) в память и psyche.
+
+Код: `experienceRecall.ts`, `experiencePulse.ts`, `weightedRecall.ts` (проводка в `DriveSolve` / `Kernel.tick`).
 
 ## Четыре руки (жёсткий перенос)
 
