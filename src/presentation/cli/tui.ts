@@ -225,7 +225,7 @@ export function openTui(header: { agent: string; model?: string; onInterrupt?: (
       return {
         onEvent(type, payload) {
           if (payload.runId && payload.runId !== runId()) return;
-          if (type === "run.thinking_delta") {
+          if (type === "run.thinking_delta" || type === "run.text_delta") {
             const raw = String(payload.delta ?? "");
             if (!raw) return;
             work += raw;

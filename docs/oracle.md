@@ -14,7 +14,7 @@ goal (+ optional ```expectation JSON```)
 resolveExpectations ──null──► DevOps path unchanged
         │
         ▼ (soft)
-TextAnalyticsOracle.verify(last assistant)
+CompositeOracle / OraclePort.verify(last assistant)  ← inside persist loop
         │
         ├─► transcript: oracle: ok=… evidence
         ├─► laziness → board blocker + frustration bump
@@ -31,7 +31,9 @@ Agenda ZPD-3 soft-* ──► harness JSON → judgeSoftZpd3 → SkillsLock mark
 |---|---|
 | `ExpectationMatrix` | Declared plan (entities, bans, min tokens, anchors) |
 | `OraclePort.verify` | Deterministic / API fact → `OracleVerdict` |
-| `DriveSolve` | Soft goals only; devops goals never invent a matrix |
+| `DriveSolve` | Soft goals only; devops never invent a matrix; oracle in-loop |
+| `JsonSchemaOracle` | `api_contract` domain JSON Schema subset |
+| `AutonomyScheduler` | Idle/study/self_run cooldowns (Kernel composition) |
 | `computePredictionError` | PE = plan≠fact when oracle rejects |
 | `judgeSoftZpd3` | Fail artifact must fail; pass must pass; emits `ZPD_PROOF fail/pass` |
 | `compressSoftOracleRules` | Dream offline compression into samost heuristics |

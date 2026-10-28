@@ -38,7 +38,7 @@ async function main(): Promise<void> {
 
   const kernel = new Kernel(home);
   const ports = kernel as unknown as KernelInternals;
-  const draft = { ...canonDraft(), language: "ru" };
+  const draft = canonDraft();
   const agent = await new EnsureDefaultAgent(kernel.agents).execute();
   agent.constitution = constitutionFromDesign(draft);
   await kernel.agents.save(agent);

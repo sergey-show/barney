@@ -51,7 +51,13 @@ recall_used: 0/1     # план/акт/инструменты реально о�
 recall_helped: 0/1/? # помог ли каузально (только four-hand); из одного pass не выводят
 ```
 
-Код: `experienceRecall.ts`, `weightedRecall.ts` (проводка в `DriveSolve`).
+Также всегда пишется `experience_recall_ready` (даже при пустых корзинах). Те же hit/used/?helped попадают в маркеры эпизода. Short-chat с skill/rule-корзинами уходит в полный путь. В idle пишется `experience_pulse` (hit/used/pe + transfer ledger) в память и psyche.
+
+**Изучение задачи:** если `reuse=fresh` и корзины recall пусты, а в `SolvePolicy.researchOn` есть `new_task_class`, до первого act принудительно включается deep research (`force_research: … study task before act`). Ответ из «знаний модели» без evidence запрещён. Приветствия — исключение.
+
+После forced study brief пишется в тело: `study/<class>/…` и черновые `rule/<class>/study/…` (`study_write: note=1 directives=N`). На следующих ходах они поднимаются в rule bags — без повторного угадывания.
+
+Код: `experienceRecall.ts`, `experiencePulse.ts`, `weightedRecall.ts` (проводка в `DriveSolve` / `Kernel.tick`).
 
 ## Четыре руки (жёсткий перенос)
 

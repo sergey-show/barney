@@ -154,9 +154,12 @@ export class Run {
   finishAct(output: string, tokens: number, usd: number, meta?: ReplyMeta): DomainEvent[] {
     if (this.status !== "acting") throw new DomainError("invalid_state", "not acting");
     this.budget.charge(tokens, usd);
-    this.append("assistant", output, meta);
+    const item = this.append("assistant", output, meta);
     this.status = this.reviewRequired ? "reviewing" : "ready";
-    return [event("run.act_finished", { runId: this.id.value })];
+    return [
+      event("run.transcript_item", { runId: this.id.value, item }),
+      event("run.act_finished", { runId: this.id.value }),
+    ];
   }
 
   submitReview(review: Review): DomainEvent[] {
@@ -197,14 +200,43 @@ export class Run {
     return this.beginAct(strategy, whyDifferent);
   }
 
-  interrupt(reason = "Step interrupted."): DomainEvent[] {
+  interrupt(reason = "Step interrupted.", opts?: { partialText?: string }): DomainEvent[] {
     if (this.status === "done" || this.status === "parked" || this.status === "failed") {
       throw new DomainError("run_closed", `run is ${this.status}`);
     }
     this.status = "ready";
     this.pendingReview = false;
+    const partial = opts?.partialText?.trim();
+    const events: DomainEvent[] = [];
+    if (partial) {
+      const item = this.append("assistant", partial, {
+        tokens: 0,
+        ms: 0,
+        model: "",
+        partial: true,
+      });
+      events.push(event("run.transcript_item", { runId: this.id.value, item }));
+    }
     this.append("system", reason.trim() || "Step interrupted.");
-    return [event("run.interrupted", { runId: this.id.value })];
+    events.push(event("run.interrupted", { runId: this.id.value, partial: Boolean(partial) }));
+    return events;
+  }
+
+  /** Drop this item and everything after (edit/resubmit from a user turn). */
+  truncateFrom(itemId: string): DomainEvent[] {
+    if (this.status === "done" || this.status === "parked" || this.status === "failed") {
+      throw new DomainError("run_closed", `run is ${this.status}`);
+    }
+    const idx = this.transcript.findIndex((item) => item.id === itemId);
+    if (idx < 0) throw new DomainError("not_found", `transcript item ${itemId}`);
+    this.transcript = this.transcript.slice(0, idx);
+    this.status = "ready";
+    this.pendingReview = false;
+    return [event("run.truncated", { runId: this.id.value, fromId: itemId })];
+  }
+
+  markSummary(text: string): TranscriptItem {
+    return this.append("assistant", text, { tokens: 0, ms: 0, model: "", summary: true });
   }
 
   close(): DomainEvent[] {

@@ -99,6 +99,25 @@ export function applyDreamHeuristics(samost: Samost, heuristics: string[]): Samo
  * Compress soft-oracle failures into imperative samost rules (no second LLM required).
  * Lines like `oracle: … missing required entity: "ticket"` → `Require entity ticket in soft replies.`
  */
+export function isOracleHeuristic(line: string): boolean {
+  return /^(Oracle:|Require soft entities:|Ban soft lubrication:|Soft replies must have)/i.test(
+    line.replace(/\s+/g, " ").trim(),
+  );
+}
+
+/**
+ * Keep oracle-derived heuristics even when the LLM dream rewrite drops them.
+ */
+export function protectOracleHeuristics(
+  proposed: string[],
+  oracleRules: string[],
+  limit = DREAM_KEEP,
+): string[] {
+  const protectedRules = oracleRules.filter(isOracleHeuristic);
+  const rest = proposed.filter((line) => !isOracleHeuristic(line));
+  return mergeFailureRules([...protectedRules, ...rest], limit);
+}
+
 export function compressSoftOracleRules(
   shadow: string[],
   limit = DREAM_KEEP,
@@ -113,7 +132,7 @@ export function compressSoftOracleRules(
     for (const match of text.matchAll(/missing required entity:\s*"([^"]+)"/gi)) {
       entities.add(match[1]!.trim());
     }
-    for (const match of text.matchAll(/forbidden (?:pattern|literal):\s*(?:\/([^/]+)\/i|"([^"]+)")/gi)) {
+    for (const match of text.matchAll(/forbidden (?:pattern|literal)s?:\s*(?:\/([^/]+)\/[a-z]*|"([^"]+)")/gi)) {
       forbidden.add((match[1] ?? match[2] ?? "").trim());
     }
     for (const match of text.matchAll(/missing semantic anchor:\s*"([^"]+)"/gi)) {
@@ -127,15 +146,20 @@ export function compressSoftOracleRules(
     if (/LAZINESS=1|laziness:/i.test(text) && minTokens < 40) minTokens = 40;
   }
   if (entities.size) {
-    rules.push(`Require soft entities: ${[...entities].slice(0, 6).join(", ")}.`);
+    rules.push(`Oracle: Require soft entities: ${[...entities].slice(0, 6).join(", ")}.`);
   }
   if (forbidden.size) {
-    rules.push(`Ban soft lubrication: ${[...forbidden].slice(0, 6).join(", ")}.`);
+    rules.push(`Oracle: Ban soft lubrication: ${[...forbidden].slice(0, 6).join(", ")}.`);
   }
   if (minTokens > 0) {
-    rules.push(`Soft replies must have at least ${minTokens} tokens (anti-laziness).`);
+    rules.push(`Oracle: Soft replies must have at least ${minTokens} tokens (anti-laziness).`);
   }
-  return mergeFailureRules([...rules, ...shadow.filter((l) => /soft[-_]|oracle:/i.test(l))], limit);
+  // Do not mergeFailureRules across Oracle:* lines — they share tokens and collapse.
+  const rest = mergeFailureRules(
+    shadow.filter((l) => /soft[-_]|oracle:/i.test(l) && !isOracleHeuristic(l)),
+    Math.max(1, limit - rules.length),
+  );
+  return [...rules, ...rest].slice(0, limit);
 }
 
 function seedShadows(shadow: string[]): string[] {

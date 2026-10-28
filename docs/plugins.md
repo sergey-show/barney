@@ -6,6 +6,8 @@ A plugin is a capability in the **body**, not in the kernel. Barney can read it,
 
 Prefer a plugin or skill over a new MCP server. See [MCP](mcp.md) only when an external stdio process is required.
 
+**Not shell-hooks.** Extensibility is **SPI providers** (`docs/spi.md`) + **skills/plugins** on disk — never dynamic agent JS rewriting the kernel, and not `experimental.hook` process spawns as the plugin model.
+
 ## Where they live
 
 ```
@@ -20,7 +22,7 @@ Legacy overlays are also scanned (Barney plugins win on a name clash):
 
 - `~/.barney/skills/`
 - `~/.barney/mcp/`
-- AgentSkills from Claude / OpenCode / Codex / Claw if those folders exist on the host
+- AgentSkills from Claude / Codex / Claw (and similar host folders) if present
 
 The Web **Settings → Plugins** list is this catalog. There is no separate “install plugin” form: drop files into the body, or ask Barney to write them.
 

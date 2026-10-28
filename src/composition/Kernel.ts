@@ -31,9 +31,11 @@ import {
 } from "../application/autonomy/agenda.ts";
 import { judgeSoftZpd3, judgeZpd3Proof } from "../application/autonomy/zpdProof.ts";
 import { parseSoftZpdHarness } from "../application/autonomy/softZpdHarness.ts";
+import { AutonomyScheduler } from "../application/autonomy/AutonomyScheduler.ts";
 import { isSoftFailClass } from "../application/context/expectationMatrix.ts";
-import { TextAnalyticsOracle } from "../infrastructure/oracle/TextAnalyticsOracle.ts";
-import { compressSoftOracleRules } from "../application/psyche/dream.ts";
+import { loadMcpConfig, listRemoteMcpUrls, mcpExposureMap } from "../application/mcp/mcpConfig.ts";
+import { CompositeOracle } from "../infrastructure/oracle/CompositeOracle.ts";
+import type { OraclePort } from "../application/ports.ts";
 import {
   consolidateLearnedBlocks,
   consolidateRuleLines,
@@ -43,8 +45,12 @@ import {
   buildCapabilityMap,
   capabilityMapKey,
   formatCapabilityMap,
-  gapsFromCapabilityMap,
 } from "../application/context/capabilityMap.ts";
+import { pulseFromEpisodes } from "../application/experience/experiencePulse.ts";
+import {
+  parseTransferStats,
+  transferMemoryKey,
+} from "../application/context/transferLedger.ts";
 import {
   cancelWakesForRun,
   dueWakes,
@@ -72,10 +78,12 @@ import {
 import {
   applyDreamHeuristics,
   compressShadowLocally,
+  compressSoftOracleRules,
   dreamSystemPrompt,
   dreamUserPrompt,
   mergeFailureRules,
   parseDreamHeuristics,
+  protectOracleHeuristics,
 } from "../application/psyche/dream.ts";
 import { slugKey } from "../domain/memory/MemoryNote.ts";
 import {
@@ -148,6 +156,7 @@ export class Kernel {
   /** Body SPI providers (~/.barney/providers) — not LLM catalog. */
   readonly spiProviders: FsProviderStore;
   readonly verifyPort: CompositeVerifyPort;
+  readonly oracle: OraclePort;
   readonly mcp: McpPort;
   readonly mcpRuntime: McpRuntime;
   readonly browser: PlaywrightBrowser;
@@ -160,11 +169,7 @@ export class Kernel {
   private readonly ensureAgent: EnsureDefaultAgent;
   private seeded = false;
   private recovered = false;
-  private lastIdleAt = 0;
-  private lastStudyAt = 0;
-  private lastSelfRunAt = 0;
-  private lastPlasticSleepAt = 0;
-  private lastInnerThinkAt = 0;
+  private readonly autonomy = new AutonomyScheduler();
   private readonly research = new CompositeResearch(new Context7FirstResearch(), new DuckDuckGoSearch());
   /** Session grants for fs_* paths outside the worktree (prefix → allowed). */
   private readonly outsideGrants = new Map<string, Set<string>>();
@@ -200,6 +205,7 @@ export class Kernel {
     const worktrees = new GitWorktree(home);
     this.llm = new RoleRouter(this.providers);
     this.startRun = new StartRun(this.agents, this.runs, worktrees, this.events);
+    this.oracle = new CompositeOracle();
     this.driveSolve = new DriveSolve(
       this.agents,
       this.runs,
@@ -223,6 +229,8 @@ export class Kernel {
       this.mcpRuntime,
       this.spiProviders,
       this.verifyPort,
+      this.oracle,
+      process.env.BARNEY_SPI_AFFECTS_OUTCOME === "1",
     );
     this.sessionService = new SessionService(
       () => this.boot(),
@@ -276,14 +284,39 @@ export class Kernel {
     if (!isDesignSealed(designed?.body)) {
       await this.postDesignSession(agent.id.value);
     }
+    await this.bootMcpFromConfig();
     return agent;
+  }
+
+  private async bootMcpFromConfig(): Promise<void> {
+    const remotes = listRemoteMcpUrls(this.home);
+    if (remotes.length) {
+      await this.memories.save(new MemoryNote({
+        key: "mcp/remote-pending",
+        title: "MCP remote URLs (SSE not auto-started yet)",
+        body: remotes.map((r) => `${r.name}: ${r.url}`).join("\n"),
+        tags: ["mcp", "config"],
+      }));
+    }
+    for (const server of loadMcpConfig(this.home)) {
+      try {
+        await this.mcpRuntime.start(server, this.home);
+      } catch (err) {
+        await this.memories.save(new MemoryNote({
+          key: `mcp/boot-fail/${server.name}`,
+          title: `MCP boot failed: ${server.name}`,
+          body: err instanceof Error ? err.message : String(err),
+          tags: ["mcp", "config", "error"],
+        }));
+      }
+    }
+    this.driveSolve.refreshMcpRegistry(mcpExposureMap(this.home));
   }
 
   async tick(): Promise<string | null> {
     await this.deliverWakes();
     if (this.sessionService.isBusy()) return null;
-    if (Date.now() - this.lastIdleAt < 45_000) return null;
-    this.lastIdleAt = Date.now();
+    if (!this.autonomy.tryBeginIdle()) return null;
     const agent = await this.boot();
     const runs = await this.runs.list();
     const open = runs
@@ -303,6 +336,7 @@ export class Kernel {
       .filter((ms) => Number.isFinite(ms))
       .sort((a, b) => b - a)[0];
     const agenda = await this.refreshAgenda(agent.id.value, fails, recent);
+    await this.writeExperiencePulse(agent.id.value);
     const pending = nextPending(agenda);
     const operatorBusy = Boolean(
       open
@@ -328,10 +362,10 @@ export class Kernel {
       idleMs: lastUserAt ? Date.now() - lastUserAt : 0,
       failHints: fails.map((episode) => episode.nextHint || episode.goal),
       studied,
-      studyCooldownMs: Date.now() - this.lastStudyAt,
-      selfRunCooldownMs: Date.now() - this.lastSelfRunAt,
-      plasticSleepCooldownMs: Date.now() - this.lastPlasticSleepAt,
-      innerThinkCooldownMs: Date.now() - this.lastInnerThinkAt,
+      studyCooldownMs: this.autonomy.cooldownMs("study"),
+      selfRunCooldownMs: this.autonomy.cooldownMs("self_run"),
+      plasticSleepCooldownMs: this.autonomy.cooldownMs("plastic_sleep"),
+      innerThinkCooldownMs: this.autonomy.cooldownMs("inner_think"),
       needsPlasticSleep: needsPlasticSleep(skillRecs),
       waitingOnWake,
       pendingSelfRun: !operatorBusy && pending
@@ -409,7 +443,7 @@ export class Kernel {
         sourceAgentId: agent.id.value,
       }));
     } else if (work.item === "study") {
-      this.lastStudyAt = Date.now();
+      this.autonomy.mark("study");
       const raw = await this.research.search(studyQuery(work.topic));
       const body = raw.replace(/\s+/g, " ").trim().slice(0, 1600);
       await this.memories.save(new MemoryNote({
@@ -519,9 +553,26 @@ export class Kernel {
     return resumed;
   }
 
+  private async writeExperiencePulse(agentId: string): Promise<void> {
+    const episodes = await this.episodes.findRecent(20);
+    const transferNote = await this.memories.get(transferMemoryKey(agentId));
+    const transfer = transferNote ? parseTransferStats(transferNote.body) : null;
+    const pulse = pulseFromEpisodes(episodes, transfer);
+    const key = `metrics/experience/${agentId}`;
+    const prev = await this.memories.get(key);
+    if (prev?.body === pulse.line) return;
+    await this.memories.save(new MemoryNote({
+      key,
+      title: "Experience pulse",
+      body: pulse.line,
+      tags: ["metrics", "experience", "pulse"],
+      sourceAgentId: agentId,
+    }));
+  }
+
   private async refreshAgenda(
     agentId: string,
-    fails: Array<{ failureMode?: string | null; nextHint?: string | null; outcome: string }>,
+    fails: Array<{ failureMode?: string | null; nextHint?: string | null; outcome: string; markers?: string[] }>,
     recent: MemoryNote[],
   ): Promise<AgendaItem[]> {
     const key = agendaMemoryKey(agentId);
@@ -551,8 +602,8 @@ export class Kernel {
       tags: ["capability", "self-model", "autonomy"],
       sourceAgentId: agentId,
     }));
-    const capabilityGaps = gapsFromCapabilityMap(capMap);
-    const proposed = [...backlogGaps, ...episodeGaps, ...capabilityGaps].map((gap) => proposeAgendaItem(gap));
+    // Autonomy closure: agenda only from repeated backlog / PE episode gaps (not capability/inner).
+    const proposed = [...backlogGaps, ...episodeGaps].map((gap) => proposeAgendaItem(gap));
     const merged = mergeAgenda(existing, proposed);
     if (JSON.stringify(merged) !== JSON.stringify(existing)) {
       await this.memories.save(new MemoryNote({
@@ -571,7 +622,7 @@ export class Kernel {
     skillRecs: ReturnType<typeof parseSkillBody>[],
     recent: MemoryNote[],
   ): Promise<void> {
-    this.lastPlasticSleepAt = Date.now();
+    this.autonomy.mark("plastic_sleep");
     const { next, actions } = planPlasticSleep(skillRecs);
     for (const rec of next) {
       const prev = skillRecs.find((item) => item.name === rec.name);
@@ -617,11 +668,11 @@ export class Kernel {
     goal: string,
     failClass: string,
   ): Promise<void> {
-    this.lastSelfRunAt = Date.now();
+    this.autonomy.mark("self_run");
     const key = agendaMemoryKey(agentId);
     let items = parseAgenda((await this.memories.get(key))?.body ?? "");
     const drill = items.find((item) => item.id === agendaId);
-    const zpd = drill?.zpdLevel ?? 1;
+    const zpd = drill?.zpdLevel ?? 3;
     items = markAgenda(items, agendaId, { status: "running" });
     await this.memories.save(new MemoryNote({
       key,
@@ -643,14 +694,19 @@ export class Kernel {
       const done = await this.send(created.id.value, goal);
       let ok = done.status === "done";
       let dropReason = "";
-      if (ok && zpd === 3) {
+      // Autonomy closure: self_run done ≡ ZPD-3 proof markers; else drop.
+      if (ok && zpd !== 3) {
+        ok = false;
+        dropReason = "self_run requires ZPD-3";
+        done.append("system", `zpd3_proof: fail · ${dropReason}`);
+      } else if (ok) {
         const evidence = done.transcript
           .map((item) => `${item.kind}: ${item.text}`)
           .join("\n");
         if (isSoftFailClass(failClass)) {
           const harness = parseSoftZpdHarness(evidence, failClass);
           const soft = harness
-            ? judgeSoftZpd3(new TextAnalyticsOracle(), harness)
+            ? judgeSoftZpd3(this.oracle, harness)
             : {
               ok: false,
               reason: "missing soft-zpd harness JSON (failArtifact/passArtifact/expectations)",
@@ -690,7 +746,7 @@ export class Kernel {
           "autonomy",
           failClass,
           ok ? "done" : "dropped",
-          ...(zpd === 3 ? ["zpd3"] : []),
+          "zpd3",
           ...(dropReason ? ["zpd3-unproven"] : []),
         ],
         sourceAgentId: agentId,
@@ -720,11 +776,19 @@ export class Kernel {
         { role: "user", content: dreamUserPrompt(shadow, mergedRules) },
       ]);
       const parsed = parseDreamHeuristics(result.text || result.thinking || "");
-      if (parsed.length) return mergeFailureRules([...parsed, ...mergedRules, ...softRules]);
+      if (parsed.length) {
+        return protectOracleHeuristics(
+          mergeFailureRules([...parsed, ...mergedRules]),
+          softRules,
+        );
+      }
     } catch {
       /* local fallback */
     }
-    return mergeFailureRules([...compressShadowLocally(shadow), ...mergedRules]);
+    return protectOracleHeuristics(
+      mergeFailureRules([...compressShadowLocally(shadow), ...mergedRules]),
+      softRules,
+    );
   }
 
   /** Bounded self-dialogue: board/memory/existence only — never an operator reply. */
@@ -738,7 +802,7 @@ export class Kernel {
     failHints: string[];
     wakeReasons: string[];
   }): Promise<void> {
-    this.lastInnerThinkAt = Date.now();
+    this.autonomy.mark("inner_think");
     let draft = innerThinkLocalFallback({
       shadow: input.samost.shadow,
       board: input.board,
@@ -810,26 +874,16 @@ export class Kernel {
           sourceAgentId: input.agentId,
         }));
       }
+      // Autonomy closure: inner think must not invent agenda items.
       if (directives.agenda) {
-        const key = agendaMemoryKey(input.agentId);
-        const existing = parseAgenda((await this.memories.get(key))?.body ?? "");
-        const proposed = proposeAgendaItem({
-          failClass: directives.agenda.failClass,
-          hint: directives.agenda.hint,
-          count: 2,
-          source: "inner",
-          zpdLevel: 1,
-        });
-        const merged = mergeAgenda(existing, [proposed]);
-        if (JSON.stringify(merged) !== JSON.stringify(existing)) {
-          await this.memories.save(new MemoryNote({
-            key,
-            title: "Autonomy agenda",
-            body: formatAgenda(merged),
-            tags: ["agenda", "autonomy", "inner"],
-            sourceAgentId: input.agentId,
-          }));
-        }
+        await this.memories.save(new MemoryNote({
+          key: slugKey(`inner/agenda-ignored/${Date.now()}`),
+          title: "Inner agenda ignored",
+          body: `${directives.agenda.failClass}: ${directives.agenda.hint}`,
+          tags: ["inner", "agenda", "ignored"],
+          sourceAgentId: input.agentId,
+          sourceRunId: input.runId ?? "",
+        }));
       }
     }
 
@@ -917,8 +971,24 @@ export class Kernel {
     return this.sessionService.create(goal, agentId, repoDir);
   }
 
-  async send(runId: string, message: string): Promise<Run> {
-    return this.sessionService.prompt(runId, message);
+  async send(
+    runId: string,
+    message: string,
+    opts?: { replaceFromId?: string; whenBusy?: "replace" | "reject" | "steer" | "followUp" },
+  ): Promise<Run> {
+    return this.sessionService.prompt(runId, message, opts);
+  }
+
+  async forkSession(runId: string, title?: string): Promise<Run> {
+    return this.sessionService.fork(runId, title);
+  }
+
+  async switchBranch(runId: string, branchId: string): Promise<Run> {
+    return this.sessionService.switchBranch(runId, branchId);
+  }
+
+  async listBranches(runId: string) {
+    return this.sessionService.branches(runId);
   }
 
   stepRunning(runId: string): boolean {
@@ -927,6 +997,10 @@ export class Kernel {
 
   async resume(runId: string, mode: "continue" | "retry" = "continue"): Promise<Run> {
     return this.sessionService.resume(runId, mode);
+  }
+
+  async compact(runId: string): Promise<Run> {
+    return this.sessionService.compact(runId);
   }
 
   abortStep(runId: string): { ok: boolean } {
@@ -1089,6 +1163,7 @@ export class Kernel {
         frustrationSource = "transcript";
       }
     }
+    const experiencePulse = (await this.memories.get(`metrics/experience/${agent.id.value}`))?.body ?? null;
     return buildPsycheEvolution({
       shadow: samost.shadow,
       light: samost.light,
@@ -1099,6 +1174,7 @@ export class Kernel {
       frustrationSource,
       dreamBody: dream?.body,
       dreamUpdatedAt: dream?.updatedAt,
+      experiencePulse,
     });
   }
 

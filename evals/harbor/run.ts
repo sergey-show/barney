@@ -108,10 +108,15 @@ async function main(): Promise<void> {
     agentId: agent.id.value,
     worktreePath: process.cwd(),
   });
+  const { signal, timeoutMs } = harborSolvePolicy(process.env);
+  if (timeoutMs > 0) {
+    process.stderr.write(`harbor: AbortSignal.timeout(${timeoutMs}ms)\n`);
+  }
   const finished = await ports.driveSolve.execute({
     runId: created.id.value,
     message: instruction,
     forceFull: true,
+    signal,
   });
   const events = transcriptEvents(finished);
   for (const event of events) process.stdout.write(`${JSON.stringify(event)}\n`);
@@ -155,6 +160,21 @@ export function parseArgs(argv: string[]): { instruction: string; modelSpec: str
   const instruction = rest.join(" ").trim();
   if (!instruction) throw new Error("usage: bun evals/harbor/run.ts --model provider/model -- <instruction>");
   return { instruction, modelSpec, home };
+}
+
+/** Wall-clock AbortSignal + optional maxAttempts hint for Harbor forceFull solves. */
+export function harborSolvePolicy(env: NodeJS.ProcessEnv = process.env): {
+  signal: AbortSignal | undefined;
+  timeoutMs: number;
+  maxAttempts: number;
+} {
+  const timeoutMs = Math.max(0, Number(env.BARNEY_HARBOR_TIMEOUT_MS ?? 600_000) || 0);
+  const maxAttempts = Math.max(1, Number(env.BARNEY_HARBOR_MAX_ATTEMPTS ?? 24) || 24);
+  return {
+    timeoutMs,
+    maxAttempts,
+    signal: timeoutMs > 0 ? AbortSignal.timeout(timeoutMs) : undefined,
+  };
 }
 
 async function bindModel(kernel: Kernel, spec: HarborModel): Promise<void> {

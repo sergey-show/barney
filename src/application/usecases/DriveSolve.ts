@@ -60,7 +60,7 @@ import {
   statsMemoryKey,
   type TaskClassStats,
 } from "../context/taskClassStats.ts";
-import { applyToolObserve, attachObserve, classifyToolResult } from "../context/observeTool.ts";
+import { applyToolObserve, attachObserve, classifyToolResult, toolSignature } from "../context/observeTool.ts";
 import { permissionPrefix } from "../../domain/guard/outsideAccess.ts";
 import { rememberGood, rememberPrevious, restoreBody, pathsWithRestore } from "../context/fileCheckpoint.ts";
 import {
@@ -82,8 +82,20 @@ import {
   wasPassedRun,
   unverifiedPaths,
 } from "../context/validationLedger.ts";
+import { assessContextPressure } from "../context/contextPressure.ts";
+import {
+  extractFileListsFromTranscript,
+  formatFileListsForCompact,
+  structuredCompactSystemPrompt,
+} from "../context/compactStructured.ts";
+import { isContextOverflowError, isOutputLengthFinish } from "../context/overflowRecovery.ts";
 import { clipText, packSession, redactSecrets } from "../context/packSession.ts";
+import { loadProjectContextFiles } from "../context/projectContext.ts";
+import { HTML_OFFLOAD_CHARS, offloadToolOutput } from "../context/toolOutputOffload.ts";
 import { bindFsWriteArgs, extractToolEvidence } from "../context/toolEvidence.ts";
+import { MessageQueue } from "../services/MessageQueue.ts";
+import { CODEMODE_ALLOWED_DEFAULT, runCodemodeScript } from "../tools/codemode.ts";
+import type { McpExposure } from "../mcp/mcpConfig.ts";
 import { visibleAssistantText } from "../../infrastructure/llm/visibleReply.ts";
 import { formatResearchBrief, runDeepResearch } from "../research/DeepResearch.ts";
 import { parseTurnRoute, ROUTE_RULES, shouldEscalateFromShort, type TurnRoute } from "../context/turnMode.ts";
@@ -114,7 +126,7 @@ import { replyMetaFrom } from "../../domain/run/replyMeta.ts";
 import type { StrategyName } from "../../domain/run/Strategy.ts";
 import { event } from "../../domain/shared/DomainEvent.ts";
 import { DomainError } from "../../domain/shared/DomainError.ts";
-import { AGENT_TOOLS, CHILD_TOOLS, FILE_TOOLS, type ToolCall } from "../../domain/tools/FileTools.ts";
+import { FILE_TOOLS, type ToolCall } from "../../domain/tools/FileTools.ts";
 import type {
   AgentRepository,
   BrowserPort,
@@ -159,6 +171,14 @@ import {
   renderExperienceRecall,
 } from "../experience/experienceRecall.ts";
 import {
+  isGreetingRoute,
+  planStudyWrite,
+  shouldForceTaskStudy,
+  studyNoteKey,
+  studyRuleKey,
+  TASK_STUDY_ACT_NUDGE,
+} from "../experience/taskStudy.ts";
+import {
   decideExperienceWrite,
   STRUCTURAL_FAIL_CLASSES,
 } from "../experience/experienceLayers.ts";
@@ -175,18 +195,29 @@ import {
   synapseKey,
 } from "../plasticity/plasticity.ts";
 import {
-  resolveExpectations,
-  softArtifactFromTranscript,
-} from "../context/expectationMatrix.ts";
-import { formatOracleEvidence } from "../../domain/oracle/Oracle.ts";
-import { TextAnalyticsOracle } from "../../infrastructure/oracle/TextAnalyticsOracle.ts";
+  groundWithOracle,
+  resolveOutcomeOk,
+  resolveReviewFailForPe,
+} from "../context/outcomeGrounding.ts";
+import { oraclePersistHint } from "../context/reviewPersist.ts";
 import {
   computePredictionError,
   formatPredictionErrorLine,
 } from "../experience/predictionError.ts";
 import type { ExperienceRecallBags, ExperienceRecallSignal } from "../experience/experienceRecall.ts";
+import type { ExpectationMatrix, OracleVerdict } from "../../domain/oracle/Oracle.ts";
+import type { OraclePort } from "../ports.ts";
+import { TextAnalyticsOracle } from "../../infrastructure/oracle/TextAnalyticsOracle.ts";
+import {
+  DEFAULT_AGENT_LOOP,
+  partToEventType,
+  runAgentToolLoop,
+} from "../loop/AgentLoop.ts";
+import { formatLspEvidence, lspEnabled } from "../lsp/LspDiagnostics.ts";
+import { ShellLspDiagnostics } from "../../infrastructure/lsp/ShellLspDiagnostics.ts";
+import { createDefaultToolRegistry, parseMcpToolName, type ToolRegistry } from "../tools/ToolRegistry.ts";
 
-const MAX_TOOL_ROUNDS = 12;
+const MAX_TOOL_ROUNDS = DEFAULT_AGENT_LOOP.maxSteps;
 const WRITE_TOOLS = FILE_TOOLS.filter((tool) => tool.name === "fs_write" || tool.name === "fs_list");
 
 type PsycheState = {
@@ -198,6 +229,10 @@ type PsycheState = {
 export class DriveSolve {
   private readonly learning: RunLearningService;
   private readonly recall: TurnRecallService;
+  /** Mid-stream coder reply text for partial-on-abort. */
+  private readonly liveReplies = new Map<string, string>();
+  /** Mid-run steer / follow-up queues. */
+  readonly queues = new MessageQueue();
 
   constructor(
     private readonly agents: AgentRepository,
@@ -218,9 +253,138 @@ export class DriveSolve {
     private readonly mcpRuntime: McpRuntimePort,
     private readonly providers: FsProviderStore,
     private readonly verifyPort: VerifyPort,
+    private readonly oracle: OraclePort = new TextAnalyticsOracle(),
+    private readonly spiAffectsOutcome = false,
+    private readonly toolRegistry: ToolRegistry = createDefaultToolRegistry(),
   ) {
     this.learning = new RunLearningService(agents, memory, graph, skills, home, events);
     this.recall = new TurnRecallService(episodes, memory, graph);
+  }
+
+  /** Refresh MCP tools merged into the act roster (after mcp_start / config boot). */
+  syncMcpTools(tools: Array<{ server: string; name: string; description: string; exposure?: McpExposure }>): void {
+    this.toolRegistry.setMcpTools(tools);
+  }
+
+  /** Compact-and-retry once on provider context overflow. */
+  private async actWithToolsOverflowAware(
+    run: Run,
+    messages: ChatMessage[],
+    signal?: AbortSignal,
+    depth = 0,
+    failedCalls = new Set<string>(),
+    psyche?: PsycheState,
+    familyFails = new Map<string, number>(),
+    lessonTrail = emptyTrail(),
+  ): Promise<ChatResult> {
+    try {
+      return await this.actWithTools(run, messages, signal, depth, failedCalls, psyche, familyFails, lessonTrail);
+    } catch (err) {
+      if (depth > 0 || !isContextOverflowError(err) || signal?.aborted) throw err;
+      run.append("system", "context_overflow: compacting and retrying once");
+      run.append("system", "context_edit: omitted failed overflow attempt from model window via summary cursor");
+      await this.runs.save(run);
+      try {
+        await this.compact(run.id.value, signal);
+      } catch {
+        /* still retry with tighter pack */
+      }
+      const { packed } = this.packUnderPressure(run);
+      const retried = messages.map((m, i) =>
+        i === 0 && m.role === "system"
+          ? m
+          : m,
+      );
+      // Prefer packed recent after compact cursor for the retry body
+      const system = messages.find((m) => m.role === "system");
+      const retryMessages: ChatMessage[] = [
+        ...(system ? [system] : []),
+        ...packed.recent,
+        {
+          role: "user",
+          content: "Continue after context compact. Do not repeat finished work. Finish what is still missing.",
+        },
+      ];
+      void retried;
+      return await this.actWithTools(run, retryMessages, signal, depth, failedCalls, psyche, familyFails, lessonTrail);
+    }
+  }
+
+  takeLiveReply(runId: string): string {
+    const text = (this.liveReplies.get(runId) ?? "").trim();
+    this.liveReplies.delete(runId);
+    return text;
+  }
+
+  /** Manual or auto context compact — inserts a summary cursor into the transcript. */
+  async compact(runId: string, signal?: AbortSignal): Promise<Run> {
+    const run = await this.runs.get(runId);
+    if (!run) throw new DomainError("not_found", `run ${runId}`);
+    if (run.status === "done" || run.status === "parked" || run.status === "failed") {
+      throw new DomainError("run_closed", `run is ${run.status}`);
+    }
+    const packed = packSession(run.transcript, run.goal, { recentCount: 20, maxRecentChars: 16_000 });
+    const files = extractFileListsFromTranscript(run.transcript);
+    const body = [
+      packed.digest,
+      formatFileListsForCompact(files),
+      ...packed.recent.map((m) => `${m.role}: ${m.content}`),
+    ].join("\n\n").slice(0, 24_000);
+    const raw = await this.completeRole(run, "planner", [
+      { role: "system", content: structuredCompactSystemPrompt() },
+      { role: "user", content: body || run.goal },
+    ], { signal });
+    run.budget.charge(raw.tokens, raw.usd);
+    const item = run.markSummary(raw.text.trim() || "(empty summary)");
+    this.events.publish([
+      event("run.transcript_item", { runId: run.id.value, item }),
+      event("run.compacted", { runId: run.id.value }),
+    ]);
+    await this.runs.save(run);
+    return run;
+  }
+
+  refreshMcpRegistry(exposure: Record<string, McpExposure> = {}): void {
+    const tools: Array<{ server: string; name: string; description: string; exposure?: McpExposure }> = [];
+    for (const server of this.mcpRuntime.running()) {
+      for (const name of server.tools) {
+        tools.push({
+          server: server.name,
+          name,
+          description: name,
+          exposure: exposure[server.name] ?? "direct",
+        });
+      }
+    }
+    this.syncMcpTools(tools);
+  }
+
+  enqueueSteer(runId: string, text: string): void {
+    this.queues.enqueueSteer(runId, text);
+    this.events.publish([event("run.steer_queued", { runId, text: text.slice(0, 200) })]);
+  }
+
+  enqueueFollowUp(runId: string, text: string): void {
+    this.queues.enqueueFollowUp(runId, text);
+    this.events.publish([event("run.followup_queued", { runId, text: text.slice(0, 200) })]);
+  }
+
+  /** Optional Body LSP (BARNEY_LSP=1) — diagnostics enter review evidence, not Core. */
+  private async maybeAppendLspEvidence(run: Run): Promise<void> {
+    if (!lspEnabled()) return;
+    try {
+      const rows = await new ShellLspDiagnostics().collect(run.worktreePath);
+      const line = formatLspEvidence(rows);
+      if (line) {
+        run.append("system", line);
+        await this.runs.save(run);
+      }
+    } catch (err) {
+      run.append(
+        "system",
+        `lsp_diagnostics: error ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   async execute(input: { runId: string; message: string; signal?: AbortSignal; depth?: number; forceFull?: boolean }): Promise<Run> {
@@ -239,6 +403,8 @@ export class DriveSolve {
       return this.sealDesign(run, agent, input.message);
     }
     if (depth === 0) {
+      throwIfAborted();
+      await this.maybeAutoCompact(run, input.signal);
       const healed = await this.learning.healSkillLocks(agent);
       if (healed > 0) {
         run.append("system", `skill_lock_heal: pinned=${healed}`);
@@ -251,6 +417,7 @@ export class DriveSolve {
       query: `${run.goal}\n${input.message}`,
     });
     let routed: TurnRoute | undefined;
+    let taskStudyForced = false;
     if (depth === 0) {
       routed = await this.routeTurn(run, throwIfAborted, input.signal);
       const earlyShadowHits = recall.relevantEpisodes.filter((episode) => episode.outcome === "fail").length
@@ -274,12 +441,39 @@ export class DriveSolve {
           frustration: earlyFrustration,
         }));
       }
+      // Study-before-act: fresh goal + empty body recall → research (SolvePolicy new_task_class).
+      if (currentKernelAblation().recallExperience) {
+        const prelimBags = buildExperienceBags(recall, {
+          query: `${run.goal}\n${input.message}`,
+          topK: 5,
+        });
+        const prelimReuse = classifyReuse({
+          goalHash: goalHash(run.goal),
+          priorGoalHashes: extractGoalHashes([...recall.past, ...recall.recentAll]),
+          currentClass: run.taskClass,
+          recalledFromClasses: [
+            ...recall.pickedRules.map((rule) => rule.sourceClass),
+            ...recall.relevantEpisodes.map((episode) => episode.taskClass),
+          ],
+        });
+        const study = shouldForceTaskStudy({
+          reuse: prelimReuse,
+          bags: prelimBags,
+          researchOn: agent.solvePolicy.researchOn,
+          allowSkip: routed.short && !routed.needResearch && isGreetingRoute(routed.topic, input.message),
+        });
+        if (study.force) {
+          taskStudyForced = true;
+          routed = { ...routed, short: false, needResearch: true };
+          run.append("system", study.line);
+        }
+      }
       if (!input.forceFull && routed.short) {
         const short = await this.executeShort(run, agent, input.message, recall, throwIfAborted, input.signal);
         if (short !== "full") return short;
       }
     }
-    const packed = packSession(run.transcript, run.goal);
+    const { packed } = this.packUnderPressure(run);
     await this.remember(run, agent.id.value, {
       key: `session/${run.id.value}/digest`,
       title: `Session: ${run.goal.slice(0, 80)}`,
@@ -401,8 +595,34 @@ export class DriveSolve {
         }, { includeRules: false })
         : "",
     ].filter(Boolean).join("\n\n");
-    if (ablation.recallExperience && (experienceBags.shadow.length || experienceBags.rules.length || experienceBags.skills.length)) {
+    if (ablation.recallExperience) {
       run.append("system", `experience_recall_ready · ${formatBagsCount(experienceBags)}`);
+    }
+    // Re-check after skill bags: still fresh+empty → force study even if planner said no.
+    if (depth === 0 && ablation.recallExperience && !taskStudyForced) {
+      const lateReuse = classifyReuse({
+        goalHash: goalHash(run.goal),
+        priorGoalHashes: priorHashes,
+        currentClass: run.taskClass,
+        recalledFromClasses: [
+          ...recalledMeta.map((r) => r.sourceClass),
+          ...relevantEpisodes.map((episode) => episode.taskClass),
+          ...skillBodyRecs
+            .filter((r) => r.status === "frozen" || r.status === "quarantine" || r.status === "verified")
+            .map((r) => r.bornFromClass || run.taskClass),
+        ],
+      });
+      const lateStudy = shouldForceTaskStudy({
+        reuse: lateReuse,
+        bags: experienceBags,
+        researchOn: agent.solvePolicy.researchOn,
+        allowSkip: isGreetingRoute(routed?.topic ?? "", input.message),
+      });
+      if (lateStudy.force) {
+        taskStudyForced = true;
+        routed = { ...(routed ?? { topic: "", short: false, needResearch: true, analysis: "", plan: [] }), short: false, needResearch: true };
+        run.append("system", lateStudy.line);
+      }
     }
     const failedCalls = new Set<string>();
     const familyFails = new Map<string, number>();
@@ -444,6 +664,7 @@ export class DriveSolve {
           depth,
           skills: skillCatalog(this.skills, `${run.goal}\n${input.message}`, quarantinedSkills),
           memory: memoryNote,
+          projectContext: loadProjectContextFiles(run.worktreePath),
         }),
       },
       ...packed.recent,
@@ -454,18 +675,38 @@ export class DriveSolve {
     if (routed?.needResearch) {
       const brief = await this.collectResearch(run, input.message, input.signal);
       run.append("research", brief);
+      if (taskStudyForced && ablation.learnBody) {
+        await this.persistTaskStudy(run, agent.id.value, brief);
+      }
       await this.runs.save(run);
+      const studyNudge = taskStudyForced ? `\n\n${TASK_STUDY_ACT_NUDGE}` : "";
       actMessages[0] = {
         role: "system",
-        content: `${actMessages[0]?.content ?? ""}\n\nDeep research brief (verify before answering; copy URLs exactly):\n${brief}`,
+        content: `${actMessages[0]?.content ?? ""}${studyNudge}\n\nDeep research brief (verify before answering; copy URLs exactly):\n${brief}`,
+      };
+    } else if (taskStudyForced) {
+      // Policy demanded study but research short-circuited — still forbid invent-from-training.
+      actMessages[0] = {
+        role: "system",
+        content: `${actMessages[0]?.content ?? ""}\n\n${TASK_STUDY_ACT_NUDGE}`,
       };
     }
     throwIfAborted();
-    let act = await this.actWithTools(run, actMessages, input.signal, depth, failedCalls, psyche, familyFails, lessonTrail);
+    let act = await this.actWithToolsOverflowAware(
+      run,
+      actMessages,
+      input.signal,
+      depth,
+      failedCalls,
+      psyche,
+      familyFails,
+      lessonTrail,
+    );
     throwIfAborted();
     act = this.sealAct(run, await this.verifyAgainstEvidence(run, act, input.signal), input.message);
     throwIfAborted();
     this.commitAct(run, act);
+    await this.maybeAppendLspEvidence(run);
 
     const reviewPrompt: ChatMessage[] = [
       { role: "system", content: REVIEWER_SYSTEM },
@@ -540,6 +781,34 @@ export class DriveSolve {
       }
     }
 
+    let oracleVerdict: OracleVerdict | null = null;
+    let softExpectations: ExpectationMatrix | null = null;
+    {
+      const grounded = groundWithOracle({
+        oracle: this.oracle,
+        goal: run.goal,
+        failClass: failureClass({ kind: review.failureKind, aborted: false }),
+        transcript: run.transcript,
+        fallbackArtifact: act.text,
+        review,
+      });
+      softExpectations = grounded.expectations;
+      oracleVerdict = grounded.verdict;
+      if (grounded.evidenceLine) run.append("system", grounded.evidenceLine);
+      review = grounded.review;
+      if (oracleVerdict && !oracleVerdict.ok) {
+        this.events.publish(run.submitReview(review));
+        if (oracleVerdict.markers.laziness) {
+          psyche.board = addBoard(psyche.board, {
+            kind: "blocker",
+            text: "Homeostasis: soft artifact too thin — raise fact density / length",
+          });
+          run.append("system", "frustration:soft_laziness · homeostasis anti-evasion");
+        }
+      }
+    }
+
+    let spiOk: boolean | null = null;
     if (run.status === "ready" && review.verdict !== "pass") {
       const persisted = await this.persistUntilDone({
         run,
@@ -558,9 +827,41 @@ export class DriveSolve {
         progressBag,
         classStats,
         shadowHits: experienceBags.shadow.length,
+        softExpectations,
       });
       act = persisted.act;
       review = persisted.review;
+      oracleVerdict = persisted.oracleVerdict ?? oracleVerdict;
+      spiOk = persisted.spiOk;
+    } else if (run.status === "ready" && review.verdict === "pass") {
+      const gated = await this.gateSpiVerify(run, artifactEvidence(run));
+      spiOk = gated.ok;
+      if (gated.ok === false) {
+        review = { ...review, verdict: "fail", missing: gated.detail || "SPI verify failed" };
+        const persisted = await this.persistUntilDone({
+          run,
+          actMessages,
+          act,
+          review,
+          latest: input.message,
+          depth,
+          signal: input.signal,
+          failedCalls,
+          familyFails,
+          extra,
+          psyche,
+          lessonTrail,
+          failKlass,
+          progressBag,
+          classStats,
+          shadowHits: experienceBags.shadow.length,
+          softExpectations,
+        });
+        act = persisted.act;
+        review = persisted.review;
+        oracleVerdict = persisted.oracleVerdict ?? oracleVerdict;
+        spiOk = persisted.spiOk;
+      }
     }
 
     if (run.status === "ready" && review.verdict !== "pass") {
@@ -608,24 +909,33 @@ export class DriveSolve {
       ? Number(priorRule.body.match(/\(v(\d+),/)?.[1] ?? 1) || 1
       : undefined;
     const toolEvidence = artifactEvidence(run);
-    const expectations = resolveExpectations({
-      goal: run.goal,
-      failClass: klass,
-    });
-    let oracleVerdict = null as import("../../domain/oracle/Oracle.ts").OracleVerdict | null;
-    if (expectations) {
-      const artifact = softArtifactFromTranscript(run.transcript) || act.text;
-      oracleVerdict = new TextAnalyticsOracle().verify(artifact, expectations);
-      run.append("system", formatOracleEvidence(oracleVerdict));
-      if (oracleVerdict.markers.laziness) {
+    // Final soft re-ground (artifact may have changed in persist).
+    if (softExpectations) {
+      const grounded = groundWithOracle({
+        oracle: this.oracle,
+        goal: run.goal,
+        failClass: klass,
+        explicit: softExpectations,
+        transcript: run.transcript,
+        fallbackArtifact: act.text,
+        review,
+      });
+      oracleVerdict = grounded.verdict;
+      if (grounded.evidenceLine) run.append("system", grounded.evidenceLine);
+      review = grounded.review;
+      if (oracleVerdict && !oracleVerdict.ok && oracleVerdict.markers.laziness) {
         psyche.board = addBoard(psyche.board, {
           kind: "blocker",
           text: "Homeostasis: soft artifact too thin — raise fact density / length",
         });
-        run.append("system", "frustration:soft_laziness · homeostasis anti-evasion");
       }
     }
-    const outcomeOk = review.verdict === "pass" && !corrected && (!oracleVerdict || oracleVerdict.ok);
+    let outcomeOk = resolveOutcomeOk({
+      soft: Boolean(softExpectations),
+      reviewPass: review.verdict === "pass",
+      corrected,
+      oracle: oracleVerdict,
+    });
     const recallSignal = finalizeRecallSignal({
       bags: experienceBags,
       actText: act.text,
@@ -634,23 +944,9 @@ export class DriveSolve {
       outcomeOk,
     });
     run.append("system", recallSignal.line);
-    const activeSpi = this.providers.list().filter((p) => p.port === "verify" && providerEligibleForRun(p));
-    if (activeSpi.length) {
-      try {
-        const spiResults = await this.verifyPort.verify({
-          worktree: run.worktreePath,
-          goal: run.goal,
-          evidence: toolEvidence,
-        });
-        for (const row of spiResults) {
-          run.append(
-            "system",
-            `spi_verify: ${row.provider} ok=${row.ok ? 1 : 0} status=${row.status} · ${clipText(row.detail, 160)}`,
-          );
-        }
-      } catch (err) {
-        run.append("system", `spi_verify: error ${err instanceof Error ? err.message : String(err)}`);
-      }
+    if (this.spiAffectsOutcome && spiOk === false) {
+      outcomeOk = false;
+      run.append("system", "spi_verify: affects_outcome=1 · outcomeOk cleared");
     }
     const learned = lessonRule({
       taskClass: run.taskClass,
@@ -687,13 +983,20 @@ export class DriveSolve {
     const pinConvention = /<barney-redact-|house (?:JSON )?canon|house redaction tokens/i
       .test(`${run.goal}\n${learned.body}`);
     const pe = computePredictionError({
-      reviewFail: review.verdict !== "pass" || Boolean(corrected) || Boolean(oracleVerdict && !oracleVerdict.ok),
+      reviewFail: resolveReviewFailForPe({
+        soft: Boolean(softExpectations),
+        reviewPass: review.verdict === "pass",
+        corrected,
+        oracleOk: oracleVerdict ? oracleVerdict.ok : null,
+      }),
       hadFailedFamily: Boolean(lessonTrail.failedFamily),
       structuralFail: STRUCTURAL_FAIL_CLASSES.has(String(review.failureKind ?? ""))
         || Boolean(oracleVerdict?.markers.structuralMiss),
       operatorCorrected: corrected,
       oracle: oracleVerdict,
-      plannedSuccess: review.verdict === "pass" && !corrected,
+      plannedSuccess: softExpectations
+        ? true
+        : review.verdict === "pass" && !corrected,
     });
     run.append("system", formatPredictionErrorLine(pe));
     const pressure = plasticWritePressure({
@@ -778,11 +1081,13 @@ export class DriveSolve {
       body: JSON.stringify(nextTransfer),
       tags: ["metrics", "transfer"],
     });
-    await this.touchSkillBodies(run, agent, skillBodyRecs, {
-      success: outcomeOk,
-      transfer: reuse === "transfer",
-      skipNames: recalledSkillNames,
-    });
+    if (ablation.learnBody) {
+      await this.touchSkillBodies(run, agent, skillBodyRecs, {
+        success: outcomeOk,
+        transfer: reuse === "transfer",
+        skipNames: recalledSkillNames,
+      });
+    }
     const turnFrustration = frustrationScore({
       extraApproaches: extra.n,
       sameFailureCount: run.sameFailureCount,
@@ -806,6 +1111,9 @@ export class DriveSolve {
       confPredicted: calib.predicted,
       calibBrier: calib.brier,
       overconfident: calib.overconfident,
+      recallHit: recallSignal.recallHit,
+      recallUsed: recallSignal.recallUsed,
+      recallHelped: recallSignal.recallHelped,
     });
     const ruleTags = [
       "rule",
@@ -935,33 +1243,31 @@ export class DriveSolve {
   ): Promise<ChatResult> {
     const started = Date.now();
     const ws = this.workspaceFor(run.worktreePath, run.id.value);
-    const tools = depth > 0 ? CHILD_TOOLS : AGENT_TOOLS;
+    const tools = this.toolRegistry.specsFor(depth);
     const userText = [...messages].reverse().find((message) => message.role === "user")?.content ?? "";
     const convo = [...messages];
     let last: ChatResult = { text: "", tokens: 0, usd: 0 };
     let tokens = 0;
     let usd = 0;
-    let keepWritingN = 0;
     const askedOutside = new Set<string>();
-    for (let i = 0; i < MAX_TOOL_ROUNDS; i++) {
-      if (signal?.aborted) throw new DomainError("aborted", "step interrupted");
-      last = await this.completeRole(run, "coder", convo, { tools, signal });
-      tokens += last.tokens;
-      usd += last.usd;
-      if (!last.toolCalls?.length && i === 0 && wantsArtifact(userText)) {
-        const recovery = await this.completeRole(run, "coder", [
-          ...convo,
-          { role: "assistant", content: last.text || "(no tool call)" },
-          { role: "user", content: RECOVERY_NUDGE },
-        ], { tools: WRITE_TOOLS, toolChoice: "required", signal });
-        tokens += recovery.tokens;
-        usd += recovery.usd;
-        last = { ...recovery, tokens, usd };
-      }
-      if (!last.toolCalls?.length) {
-        const leftover = leftoverWork(run.goal, artifactEvidence(run));
-        if (hasLeftover(leftover) && keepWritingN < 3) {
-          keepWritingN += 1;
+
+    const looped = await runAgentToolLoop<ChatResult>({
+      config: { maxSteps: MAX_TOOL_ROUNDS, maxKeepWriting: DEFAULT_AGENT_LOOP.maxKeepWriting },
+      hooks: {
+        isAborted: () => Boolean(signal?.aborted),
+        onPart: (part) => {
+          this.events.publish([event(partToEventType(part), {
+            runId: run.id.value,
+            ...part,
+          })]);
+        },
+      },
+      seed: last,
+      hasLeftover: () => hasLeftover(leftoverWork(run.goal, artifactEvidence(run))),
+      complete: async (step, mode) => {
+        if (signal?.aborted) throw new DomainError("aborted", "step interrupted");
+        if (mode === "keep_writing") {
+          const leftover = leftoverWork(run.goal, artifactEvidence(run));
           convo.push({ role: "assistant", content: last.text || "(no tool call)" });
           convo.push({
             role: "user",
@@ -970,100 +1276,212 @@ export class DriveSolve {
               extractToolEvidence(...run.transcript.filter((item) => item.kind === "console").map((item) => item.text)),
             ),
           });
-          continue;
         }
-        break;
-      }
-      convo.push({ role: "assistant", content: last.text, toolCalls: last.toolCalls });
-      const packed = packSession(run.transcript, run.goal);
-      const anchors = packed.anchors;
-      const toolEvidence = extractToolEvidence(
-        ...run.transcript.filter((item) => item.kind === "console").map((item) => item.text),
-      );
-      const leftoverNow = leftoverWork(run.goal, artifactEvidence(run));
-      const sanitizeGoal = askedToReplaceSecrets(run.goal)
-        || askedToReplaceSecrets(latestUserText(run));
-      for (const rawCall of last.toolCalls) {
-        const bound = bindToolArgs(rawCall.name, rawCall.arguments ?? {}, anchors);
-        const call = {
-          ...rawCall,
-          arguments: bindFsWriteArgs(rawCall.name, bound, toolEvidence),
-        };
-        if (signal?.aborted) throw new DomainError("aborted", "step interrupted");
-        const observeBase = {
-          leftoverUnwritten: leftoverNow.unwritten,
-          restorePaths: pathsWithRestore(run.id.value),
-          secretSanitize: sanitizeGoal,
-        };
-        if (isFsMutate(call.name)) {
-          await snapshotBeforeMutate(run.id.value, ws, String(call.arguments?.path ?? ""));
-        }
-        const preview = applyToolObserve(call, "", failedCalls, familyFails, observeBase);
-        let raw = preview.skip ? preview.out : clipToolOut(await this.dispatchTool(run, ws, call, signal, depth), `${run.goal}\n${userText}`);
-        if (!preview.skip && call.name === "shell") {
-          raw = noteShellRun(run.id.value, call, raw);
-        }
-        if (!preview.skip && isFsMutate(call.name) && !/^error:/i.test(raw)) {
-          raw = await withWriteCheckpoint(run.id.value, ws, call, raw);
-          noteMutateSuccess(run.id.value, call);
-        } else if (!preview.skip && call.name === "fs_edit" && classifyToolResult(raw, "fs_edit").error) {
-          const editPath = String(call.arguments?.path ?? "");
-          if (editPath) markFailedEdit(run.id.value, editPath);
-        }
-        const observeOpts = {
-          ...observeBase,
-          failedEditPaths: failedEditPaths(run.id.value),
-          checkFailedPaths: checkFailedPaths(run.id.value),
-        };
-        const observed = preview.skip ? preview : applyToolObserve(call, raw, failedCalls, familyFails, observeOpts);
-        const out = observed.out;
-        if (/permission required:.*path escapes worktree/i.test(out)) {
-          const fromMsg = /\(([^)\n]+)\)/.exec(out)?.[1];
-          const abs = fromMsg || String(call.arguments?.path ?? "");
-          const prefix = permissionPrefix(abs) || abs;
-          if (prefix && !askedOutside.has(prefix)) {
-            askedOutside.add(prefix);
-            this.events.publish([event("run.permission_needed", {
-              runId: run.id.value,
-              path: abs,
-              prefix,
-              tool: call.name,
-            })]);
-            run.append(
-              "system",
-              `Outside path needs permission: ${abs}. Allow with /allow ${prefix} (portal: Allow), then /continue.`,
-            );
-          }
-        }
-        const failed = observed.skip || /BLOCKED:/.test(out) || classifyToolResult(out, call.name).error;
-        noteTrail(lessonTrail, familyKey(call), failed);
-        if (psyche) {
-          psyche.board = addBoard(psyche.board, { kind: "operation", text: call.name });
-          if (regulationOf(call, run.goal) === "wander") {
-            psyche.existence = appendExistence(psyche.existence, { kind: "observe", text: "regulation: wandering — return to the motive" });
-          }
-        }
-        if (psyche && /Observe:|BLOCKED:/.test(out)) {
-          const line = clipText(out.split("Observe:")[1] ?? out.split("BLOCKED:")[1] ?? out, 180);
-          psyche.existence = appendExistence(psyche.existence, {
-            kind: "observe",
-            text: clipText(`agency: I called ${call.name}; prediction error — change the action or the model. ${line}`, 180),
+        if (mode === "final") {
+          convo.push({
+            role: "user",
+            content:
+              "Final step: no more tools. Write the user-visible answer now from what you already gathered.",
           });
-          psyche.board = addBoard(psyche.board, { kind: "blocker", text: line });
-          await this.flushPsyche(run, run.agentId, psyche);
         }
-        run.append("console", `${call.name} ${JSON.stringify(call.arguments)}\n${out}`);
-        this.events.publish([event("run.console", { runId: run.id.value, tool: call.name })]);
-        await this.runs.save(run);
-        const shot = this.browser.consumeShot(run.id.value);
-        convo.push({
-          role: "tool",
-          content: out,
-          toolCallId: call.id,
-          name: call.name,
-          images: shot ? [{ mime: "image/jpeg", base64: shot.jpeg.toString("base64") }] : undefined,
-        });
-      }
+        const stepTools = mode === "final" ? undefined : tools;
+        last = await this.completeRole(run, "coder", convo, { tools: stepTools, signal });
+        tokens += last.tokens;
+        usd += last.usd;
+        if (isOutputLengthFinish(last.finishReason) && last.toolCalls?.length) {
+          convo.push({ role: "assistant", content: last.text, toolCalls: last.toolCalls });
+          for (const tc of last.toolCalls) {
+            convo.push({
+              role: "tool",
+              toolCallId: tc.id,
+              name: tc.name,
+              content:
+                "error: assistant truncated (finish_reason=length) before tool args completed — re-issue complete tool arguments",
+            });
+          }
+          last = { ...last, tokens, usd, toolCalls: undefined };
+          return last;
+        }
+        if (!last.toolCalls?.length && step === 0 && mode === "normal" && wantsArtifact(userText)) {
+          const recovery = await this.completeRole(run, "coder", [
+            ...convo,
+            { role: "assistant", content: last.text || "(no tool call)" },
+            { role: "user", content: RECOVERY_NUDGE },
+          ], { tools: WRITE_TOOLS, toolChoice: "required", signal });
+          tokens += recovery.tokens;
+          usd += recovery.usd;
+          last = { ...recovery, tokens, usd };
+        } else {
+          last = { ...last, tokens, usd };
+        }
+        return last;
+      },
+      executeTools: async (act, step, doomTracker) => {
+        convo.push({ role: "assistant", content: act.text, toolCalls: act.toolCalls });
+        const { packed } = this.packUnderPressure(run);
+        const anchors = packed.anchors;
+        const toolEvidence = extractToolEvidence(
+          ...run.transcript.filter((item) => item.kind === "console").map((item) => item.text),
+        );
+        const leftoverNow = leftoverWork(run.goal, artifactEvidence(run));
+        const sanitizeGoal = askedToReplaceSecrets(run.goal)
+          || askedToReplaceSecrets(latestUserText(run));
+        let doom = false;
+        const rawCalls = act.toolCalls ?? [];
+        const reads = rawCalls.filter((c) => PARALLEL_SAFE_TOOLS.has(c.name));
+        const writes = rawCalls.filter((c) => !PARALLEL_SAFE_TOOLS.has(c.name));
+        const runOne = async (rawCall: (typeof rawCalls)[number]) => {
+          const bound = bindToolArgs(rawCall.name, rawCall.arguments ?? {}, anchors);
+          const call = {
+            ...rawCall,
+            arguments: bindFsWriteArgs(rawCall.name, bound, toolEvidence),
+          };
+          if (signal?.aborted) throw new DomainError("aborted", "step interrupted");
+          const toolStartedAt = Date.now();
+          this.events.publish([event("run.tool_started", {
+            runId: run.id.value,
+            step,
+            tool: call.name,
+            callId: call.id,
+            signature: toolSignature(call),
+            title: toolCardTitle(call.name, call.arguments ?? {}),
+            argsPreview: clipText(JSON.stringify(call.arguments ?? {}), 180),
+          })]);
+          const observeBase = {
+            leftoverUnwritten: leftoverNow.unwritten,
+            restorePaths: pathsWithRestore(run.id.value),
+            secretSanitize: sanitizeGoal,
+          };
+          if (isFsMutate(call.name)) {
+            await snapshotBeforeMutate(run.id.value, ws, String(call.arguments?.path ?? ""));
+          }
+          const preview = applyToolObserve(call, "", failedCalls, familyFails, observeBase);
+          let raw = preview.skip
+            ? preview.out
+            : await this.dispatchTool(run, ws, call, signal, depth);
+          if (!preview.skip) {
+            const html = /<html|<!doctype|SVELTE_HYDRATER|<\/div>/i.test(raw);
+            const off = offloadToolOutput({
+              text: raw,
+              sessionPath: run.sessionPath,
+              callId: call.id,
+              tool: call.name,
+              maxChars: html ? HTML_OFFLOAD_CHARS : 4_000,
+            });
+            raw = off.forModel;
+            if (html) {
+              raw = `${raw}\n[raw HTML — extract facts only, do not dump markup to the user]`;
+            }
+          }
+          if (!preview.skip && call.name === "shell") {
+            raw = noteShellRun(run.id.value, call, raw);
+          }
+          if (!preview.skip && isFsMutate(call.name) && !/^error:/i.test(raw)) {
+            raw = await withWriteCheckpoint(run.id.value, ws, call, raw);
+            noteMutateSuccess(run.id.value, call);
+          } else if (!preview.skip && call.name === "fs_edit" && classifyToolResult(raw, "fs_edit").error) {
+            const editPath = String(call.arguments?.path ?? "");
+            if (editPath) markFailedEdit(run.id.value, editPath);
+          }
+          const observeOpts = {
+            ...observeBase,
+            failedEditPaths: failedEditPaths(run.id.value),
+            checkFailedPaths: checkFailedPaths(run.id.value),
+          };
+          const observed = preview.skip ? preview : applyToolObserve(call, raw, failedCalls, familyFails, observeOpts);
+          const out = observed.out;
+          if (/permission required:.*path escapes worktree/i.test(out)) {
+            const fromMsg = /\(([^)\n]+)\)/.exec(out)?.[1];
+            const abs = fromMsg || String(call.arguments?.path ?? "");
+            const prefix = permissionPrefix(abs) || abs;
+            if (prefix && !askedOutside.has(prefix)) {
+              askedOutside.add(prefix);
+              this.events.publish([event("run.permission_needed", {
+                runId: run.id.value,
+                path: abs,
+                prefix,
+                tool: call.name,
+              })]);
+              run.append(
+                "system",
+                `Outside path needs permission: ${abs}. Allow with /allow ${prefix} (portal: Allow), then /continue.`,
+              );
+            }
+          }
+          const failed = observed.skip || /BLOCKED:/.test(out) || classifyToolResult(out, call.name).error;
+          noteTrail(lessonTrail, familyKey(call), failed);
+          if (failed) {
+            if (doomTracker.noteFailure(call)) {
+              doom = true;
+              // Align doom_loop with saturated-family permission: force family budget trip.
+              const fam = familyKey(call);
+              familyFails.set(fam, Math.max(familyFails.get(fam) ?? 0, 3));
+              run.append(
+                "system",
+                `agent_loop: doom_loop · family=${fam} · selfGate/observe will block repeats`,
+              );
+            }
+          } else {
+            doomTracker.noteSuccess(call);
+          }
+          const resultPreview = clipText(out, 240);
+          this.events.publish([event("run.tool_result", {
+            runId: run.id.value,
+            step,
+            tool: call.name,
+            callId: call.id,
+            ok: !failed,
+            durationMs: Date.now() - toolStartedAt,
+            title: toolCardTitle(call.name, call.arguments ?? {}),
+            preview: resultPreview,
+          })]);
+          if (psyche) {
+            psyche.board = addBoard(psyche.board, { kind: "operation", text: call.name });
+            if (regulationOf(call, run.goal) === "wander") {
+              psyche.existence = appendExistence(psyche.existence, { kind: "observe", text: "regulation: wandering — return to the motive" });
+            }
+          }
+          if (psyche && /Observe:|BLOCKED:/.test(out)) {
+            const line = clipText(out.split("Observe:")[1] ?? out.split("BLOCKED:")[1] ?? out, 180);
+            psyche.existence = appendExistence(psyche.existence, {
+              kind: "observe",
+              text: clipText(`agency: I called ${call.name}; prediction error — change the action or the model. ${line}`, 180),
+            });
+            psyche.board = addBoard(psyche.board, { kind: "blocker", text: line });
+            await this.flushPsyche(run, run.agentId, psyche);
+          }
+          const consoleItem = run.append("console", `${call.name} ${JSON.stringify(call.arguments)}\n${out}`);
+          this.events.publish([
+            event("run.transcript_item", { runId: run.id.value, item: consoleItem }),
+            event("run.console", { runId: run.id.value, tool: call.name }),
+          ]);
+          await this.runs.save(run);
+          const shot = this.browser.consumeShot(run.id.value);
+          convo.push({
+            role: "tool",
+            content: out,
+            toolCallId: call.id,
+            name: call.name,
+            images: shot ? [{ mime: "image/jpeg", base64: shot.jpeg.toString("base64") }] : undefined,
+          });
+        };
+        if (reads.length) await Promise.all(reads.map((c) => runOne(c)));
+        for (const c of writes) await runOne(c);
+        for (const steer of this.queues.drainSteer(run.id.value)) {
+          convo.push({ role: "user", content: `[steer] ${steer}` });
+          run.append("user", `[steer] ${steer}`);
+          this.events.publish([event("run.steer_injected", { runId: run.id.value })]);
+        }
+        return { doom };
+      },
+    });
+
+    last = looped.act;
+    if (looped.halt === "aborted") throw new DomainError("aborted", "step interrupted");
+    if (looped.halt === "doom_loop") {
+      run.append("system", `agent_loop: doom_loop · ${looped.reason ?? "repeated tool failures"}`);
+    } else if (looped.halt === "max_steps") {
+      run.append("system", `agent_loop: max_steps=${MAX_TOOL_ROUNDS}`);
     }
     if (!visibleAssistantText(last.text).trim()) {
       if (signal?.aborted) throw new DomainError("aborted", "step interrupted");
@@ -1209,6 +1627,37 @@ export class DriveSolve {
     this.events.publish(run.finishAct(act.text, act.tokens, act.usd, replyMetaFrom(act)));
   }
 
+  /** Verify-before-done: SPI providers must pass before accept, else reopen persist. */
+  private async gateSpiVerify(
+    run: Run,
+    evidence: string,
+  ): Promise<{ ok: boolean | null; detail: string }> {
+    const activeSpi = this.providers.list().filter((p) => p.port === "verify" && providerEligibleForRun(p));
+    if (!activeSpi.length) return { ok: null, detail: "" };
+    try {
+      const spiResults = await this.verifyPort.verify({
+        worktree: run.worktreePath,
+        goal: run.goal,
+        evidence,
+      });
+      const ok = spiResults.every((row) => row.ok);
+      for (const row of spiResults) {
+        run.append(
+          "system",
+          `spi_verify: ${row.provider} ok=${row.ok ? 1 : 0} status=${row.status} · ${clipText(row.detail, 160)}`,
+        );
+      }
+      return {
+        ok,
+        detail: ok ? "" : spiResults.filter((r) => !r.ok).map((r) => `${r.provider}: ${r.detail}`).join("; "),
+      };
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      run.append("system", `spi_verify: error ${detail}`);
+      return { ok: false, detail };
+    }
+  }
+
   private async persistUntilDone(input: {
     run: Run;
     actMessages: ChatMessage[];
@@ -1226,8 +1675,12 @@ export class DriveSolve {
     progressBag: { prev: ProgressSnapshot | null; last: ProgressSnapshot | null };
     classStats: TaskClassStats;
     shadowHits?: number;
-  }): Promise<{ act: ChatResult; review: Review }> {
+    softExpectations?: ExpectationMatrix | null;
+  }): Promise<{ act: ChatResult; review: Review; oracleVerdict: OracleVerdict | null; spiOk: boolean | null }> {
     let { act, review } = input;
+    let oracleVerdict: OracleVerdict | null = null;
+    let spiOk: boolean | null = null;
+    let lastPrefer: string[] = [];
     rememberFailKlass(input.failKlass, review);
     const trail: ChatMessage[] = [{ role: "assistant", content: act.text }];
     while (true) {
@@ -1243,8 +1696,36 @@ export class DriveSolve {
         newSignal: Boolean(review.needsResearch),
       });
       review = { ...review, progressScore: progress.score };
-      const halt = haltAfterFail(review, input.run, input.extra.n, leftover, input.signal?.aborted, input.familyFails, progress);
-      if (halt === "pass") return { act, review };
+      if (input.softExpectations) {
+        const grounded = groundWithOracle({
+          oracle: this.oracle,
+          goal: input.run.goal,
+          explicit: input.softExpectations,
+          transcript: input.run.transcript,
+          fallbackArtifact: act.text,
+          review,
+        });
+        oracleVerdict = grounded.verdict;
+        if (grounded.evidenceLine) input.run.append("system", grounded.evidenceLine);
+        review = grounded.review;
+        if (oracleVerdict?.ok && review.verdict === "pass") {
+          const gated = await this.gateSpiVerify(input.run, evidence);
+          spiOk = gated.ok;
+          if (gated.ok !== false) return { act, review, oracleVerdict, spiOk };
+          review = { ...review, verdict: "fail", missing: gated.detail || "SPI verify failed" };
+          this.events.publish(input.run.submitReview(review));
+          // fall through to continue / tactic shift
+        }
+      }
+      let halt = haltAfterFail(review, input.run, input.extra.n, leftover, input.signal?.aborted, input.familyFails, progress);
+      if (halt === "pass") {
+        const gated = await this.gateSpiVerify(input.run, evidence);
+        spiOk = gated.ok;
+        if (gated.ok !== false) return { act, review, oracleVerdict, spiOk };
+        review = { ...review, verdict: "fail", missing: gated.detail || "SPI verify failed" };
+        this.events.publish(input.run.submitReview(review));
+        halt = "continue";
+      }
       if (halt === "abort") throw new DomainError("aborted", "step interrupted");
       if (halt !== "continue") {
         if (halt === "wanting" || halt === "need_user") {
@@ -1296,12 +1777,20 @@ export class DriveSolve {
       ];
       const strategy = cycleStrategy(input.run.usedStrategies, input.run.attempts, localFiles, prefer);
       const saturatedNames = [...input.familyFails.entries()].filter(([, n]) => familySaturated(n)).map(([k]) => k);
+      const stalled = progress.delta === "flat" && !progress.secondWind && input.extra.n >= 1;
       const tactic = pickTactic({
         strategy,
         saturated: saturatedNames,
         progress,
         failedFamily: input.lessonTrail.failedFamily,
+        priorPrefer: lastPrefer,
+        stalled,
       });
+      lastPrefer = tactic.preferFamilies;
+      if (stalled && input.lessonTrail.failedFamily) {
+        const fam = input.lessonTrail.failedFamily;
+        input.familyFails.set(fam, Math.max(input.familyFails.get(fam) ?? 0, 3));
+      }
       let learnedSkill = "";
       if (strategy === "write_capability") {
         const klass = failureClass({ kind: review.failureKind });
@@ -1355,6 +1844,26 @@ export class DriveSolve {
       act = next;
       review = await this.reviewLatest(input.run, input.latest, next.text, input.signal);
       rememberFailKlass(input.failKlass, review);
+      if (input.softExpectations) {
+        const grounded = groundWithOracle({
+          oracle: this.oracle,
+          goal: input.run.goal,
+          explicit: input.softExpectations,
+          transcript: input.run.transcript,
+          fallbackArtifact: next.text,
+          review,
+        });
+        oracleVerdict = grounded.verdict;
+        if (grounded.evidenceLine) {
+          input.run.append("system", grounded.evidenceLine);
+          const hint = oraclePersistHint(grounded.evidenceLine);
+          if (hint) trail.push({ role: "user", content: hint });
+        }
+        review = grounded.review;
+        if (!oracleVerdict?.ok) {
+          this.events.publish(input.run.submitReview(review));
+        }
+      }
       // Mark second wind if we got a mutate after a research note this approach.
       if (researchNote) {
         refreshProgress(input.progressBag, {
@@ -1368,7 +1877,7 @@ export class DriveSolve {
         });
       }
     }
-    return { act, review };
+    return { act, review, oracleVerdict, spiOk };
   }
 
   private async reviewLatest(run: Run, latest: string, actText: string, signal?: AbortSignal): Promise<Review> {
@@ -1395,6 +1904,52 @@ export class DriveSolve {
       constitution: agent?.constitution,
     });
     if (gate.blocked) return gate.reason ?? "BLOCKED by Self.";
+
+    if (call.name === "tool_search") {
+      return this.toolRegistry.searchMcp(String(call.arguments?.query ?? ""));
+    }
+    if (call.name === "codemode") {
+      const script = String(call.arguments?.script ?? "");
+      if (!script.trim()) return "error: script required";
+      const result = await runCodemodeScript({
+        script,
+        allowed: CODEMODE_ALLOWED_DEFAULT,
+        call: async (name, args) => {
+          const nested: ToolCall = {
+            id: `${call.id}_${name}_${Date.now()}`,
+            name,
+            arguments: args,
+          };
+          return this.dispatchTool(run, ws, nested, signal, depth);
+        },
+      });
+      return result.ok
+        ? `codemode ok · calls=${result.calls}\n${result.output}`
+        : result.output;
+    }
+
+    const mcpDirect = parseMcpToolName(call.name);
+    if (mcpDirect) {
+      let rawArgs: Record<string, unknown> = {};
+      const argField = call.arguments?.arguments ?? call.arguments?.args;
+      if (typeof argField === "string" && argField.trim()) {
+        try {
+          rawArgs = JSON.parse(argField) as Record<string, unknown>;
+        } catch {
+          return "error: arguments must be a JSON object string";
+        }
+      } else if (argField && typeof argField === "object") {
+        rawArgs = argField as Record<string, unknown>;
+      } else {
+        const { arguments: _a, args: _b, ...rest } = call.arguments ?? {};
+        rawArgs = rest;
+      }
+      return runMcpTool(this.mcp, this.mcpRuntime, {
+        id: call.id,
+        name: "mcp_call",
+        arguments: { server: mcpDirect.server, tool: mcpDirect.tool, arguments: rawArgs },
+      }, { cwd: run.worktreePath, signal });
+    }
 
     const inventGate = call.name === "mcp_write"
       || call.name === "plugin_write"
@@ -1448,6 +2003,9 @@ export class DriveSolve {
           }
           await this.become(`become: mcp ${name}`);
         }
+      }
+      if (call.name === "mcp_start" || call.name === "mcp_stop") {
+        this.refreshMcpRegistry();
       }
       return out;
     }
@@ -1547,6 +2105,49 @@ export class DriveSolve {
     return text;
   }
 
+  /**
+   * After forced task study: crystallise the brief into body memory so the next
+   * turn recalls it as rules/study notes instead of re-guessing from weights.
+   */
+  private async persistTaskStudy(run: Run, agentId: string, brief: string): Promise<void> {
+    const plan = planStudyWrite({
+      brief,
+      goal: run.goal,
+      runId: run.id.value,
+    });
+    if (plan.skipReason === "brief_too_thin") {
+      run.append("system", `study_write: skip · ${plan.skipReason}`);
+      return;
+    }
+    const noteKey = studyNoteKey(run.taskClass, run.goal);
+    await this.remember(run, agentId, {
+      key: noteKey,
+      title: `Study: ${clipText(run.goal, 80)}`,
+      body: redactSecrets(plan.studyBody),
+      tags: ["study", "experience", "learned", run.taskClass],
+    });
+    await this.graph.link(classKey(run.taskClass), noteKey, "learned");
+    let written = 0;
+    for (let i = 0; i < plan.directives.length; i += 1) {
+      const line = plan.directives[i]!;
+      const key = studyRuleKey(run.taskClass, line, i);
+      await this.remember(run, agentId, {
+        key,
+        title: `Study rule: ${clipText(line, 60)}`,
+        body: redactSecrets(line),
+        tags: ["rule", "study", "experience", "learned", run.taskClass],
+      });
+      await this.graph.link(classKey(run.taskClass), key, "learned");
+      written += 1;
+    }
+    run.append(
+      "system",
+      `study_write: note=1 directives=${written}`
+        + (plan.skipReason ? ` · ${plan.skipReason}` : "")
+        + ` · key=${noteKey}`,
+    );
+  }
+
   private async verifyAgainstEvidence(run: Run, act: ChatResult, signal?: AbortSignal): Promise<ChatResult> {
     const pages = pageEvidence(run.transcript, run.goal);
     if (!pages.trim() && requestedArtifacts(run.goal).length) return act;
@@ -1583,19 +2184,34 @@ export class DriveSolve {
     messages: ChatMessage[],
     options?: { tools?: ToolSpec[]; toolChoice?: "auto" | "required"; signal?: AbortSignal },
   ): Promise<ChatResult> {
-    const sink = this.thinkingSink(run);
+    const think = this.deltaSink(run, "run.thinking_delta", 4000);
+    const text = role === "coder" ? this.deltaSink(run, "run.text_delta", 6000, true) : null;
     try {
-      const result = await this.llm.complete(role, messages, { ...options, onThinking: sink.push });
-      sink.flush();
+      const result = await this.llm.complete(role, messages, {
+        ...options,
+        onThinking: think.push,
+        onText: text?.push,
+      });
+      think.flush();
+      text?.flush();
       if (result.thinking) await this.noteThinking(run, result.thinking);
+      if (role === "coder" && result.text) {
+        this.liveReplies.set(run.id.value, result.text);
+      }
       return result;
     } catch (err) {
-      sink.flush();
+      think.flush();
+      text?.flush();
       throw err;
     }
   }
 
-  private thinkingSink(run: Run): { push: (delta: string) => void; flush: () => void } {
+  private deltaSink(
+    run: Run,
+    eventType: "run.thinking_delta" | "run.text_delta",
+    cap: number,
+    trackLive = false,
+  ): { push: (delta: string) => void; flush: () => void } {
     let buf = "";
     let published = "";
     let stopped = false;
@@ -1609,14 +2225,17 @@ export class DriveSolve {
       const delta = buf;
       buf = "";
       published += delta;
-      this.events.publish([event("run.thinking_delta", { runId: run.id.value, delta })]);
+      if (trackLive) {
+        this.liveReplies.set(run.id.value, (this.liveReplies.get(run.id.value) ?? "") + delta);
+      }
+      this.events.publish([event(eventType, { runId: run.id.value, delta })]);
     };
     return {
       push: (delta: string) => {
         if (!delta || stopped) return;
-        if (published.length + buf.length + delta.length > 4000) {
+        if (published.length + buf.length + delta.length > cap) {
           stopped = true;
-          buf += "\n[thinking capped]";
+          buf += eventType === "run.thinking_delta" ? "\n[thinking capped]" : "\n[text capped]";
           flush();
           return;
         }
@@ -1631,8 +2250,11 @@ export class DriveSolve {
     const clipped = text.length > 4000 ? `${text.slice(0, 4000)}\n[thinking capped]` : text;
     const last = [...run.transcript].reverse().find((item) => item.kind === "thinking");
     if (last && last.text === clipped) return;
-    run.append("thinking", clipped);
-    this.events.publish([event("run.thinking", { runId: run.id.value, text: clipped })]);
+    const item = run.append("thinking", clipped);
+    this.events.publish([
+      event("run.transcript_item", { runId: run.id.value, item }),
+      event("run.thinking", { runId: run.id.value, text: clipped }),
+    ]);
     await this.runs.save(run);
   }
 
@@ -1696,12 +2318,60 @@ export class DriveSolve {
     };
   }
 
+  private packUnderPressure(run: Run) {
+    const durable = run.transcript.filter((item) =>
+      item.kind === "user" || item.kind === "assistant" || item.kind === "console"
+    );
+    const pressure = assessContextPressure({
+      transcriptChars: run.transcript.reduce((n, item) => n + item.text.length, 0),
+      durableTurns: durable.length,
+      tokensUsed: run.budget.tokensUsed,
+      tokenLimit: run.budget.tokenLimit,
+    });
+    if (pressure.level !== "ok") {
+      const marker = `context_pressure: ${pressure.level}`;
+      const already = run.transcript.some((item) =>
+        item.kind === "system" && item.text.startsWith(marker),
+      );
+      if (!already) {
+        run.append("system", `${marker} (${pressure.reason}) — packing tighter`);
+      }
+    }
+    return {
+      packed: packSession(run.transcript, run.goal, {
+        recentCount: pressure.recentCount,
+        maxRecentChars: pressure.maxRecentChars,
+      }),
+      pressure,
+    };
+  }
+
+  private async maybeAutoCompact(run: Run, signal?: AbortSignal): Promise<void> {
+    const { pressure } = this.packUnderPressure(run);
+    if (pressure.level !== "critical") return;
+    const sinceSummary = (() => {
+      let n = 0;
+      for (let i = run.transcript.length - 1; i >= 0; i -= 1) {
+        const item = run.transcript[i]!;
+        if (item.meta?.summary) return n;
+        if (item.kind === "user" || item.kind === "assistant" || item.kind === "console") n += 1;
+      }
+      return n;
+    })();
+    if (sinceSummary < 12) return;
+    try {
+      await this.compact(run.id.value, signal);
+    } catch {
+      /* keep packing knobs; compact is best-effort */
+    }
+  }
+
   private async routeTurn(
     run: Run,
     throwIfAborted: () => void,
     signal?: AbortSignal,
   ): Promise<TurnRoute> {
-    const packed = packSession(run.transcript, run.goal);
+    const { packed } = this.packUnderPressure(run);
     throwIfAborted();
     const raw = await this.completeRole(run, "planner", [
       { role: "system", content: ROUTE_RULES },
@@ -1725,9 +2395,24 @@ export class DriveSolve {
     throwIfAborted: () => void,
     signal?: AbortSignal,
   ): Promise<Run | "full"> {
-    const packed = packSession(run.transcript, run.goal);
+    const { packed } = this.packUnderPressure(run);
     const psyche = await this.loadPsyche(run, agent.id.value);
+    const ablation = currentKernelAblation();
+    const shortBags = ablation.recallExperience
+      ? buildExperienceBags(recall, { query: `${run.goal}\n${message}`, topK: 5 })
+      : { shadow: [], rules: [], skills: [], episodeLines: [] };
+    // Experience closure: non-empty skill/rule bags need the full exam path.
+    if (ablation.recallExperience && (shortBags.skills.length > 0 || shortBags.rules.length > 0)) {
+      run.append("thinking", "short chat → full turn: experience recall present");
+      run.append("system", `experience_recall_ready · ${formatBagsCount(shortBags)}`);
+      await this.runs.save(run);
+      return "full";
+    }
+    if (ablation.recallExperience) {
+      run.append("system", `experience_recall_ready · ${formatBagsCount(shortBags)}`);
+    }
     throwIfAborted();
+    const experienceBlock = ablation.recallExperience ? renderExperienceRecall(shortBags) : "";
     const raw = await this.completeRole(run, "planner", [
       {
         role: "system",
@@ -1736,6 +2421,7 @@ export class DriveSolve {
           turnLawFromConstitution(agent.constitution),
           renderSamostPrompt(psyche.samost, message),
           renderExistencePrompt(psyche.existence),
+          experienceBlock,
           renderConversationalRecall(recall),
           `Session goal: ${run.goal}`,
           workspaceLines(run.worktreePath, run.sessionPath),
@@ -1750,6 +2436,12 @@ export class DriveSolve {
       await this.runs.save(run);
       return "full";
     }
+    const recallSignal = finalizeRecallSignal({
+      bags: shortBags,
+      actText: act.text,
+      outcomeOk: true,
+    });
+    run.append("system", recallSignal.line);
     psyche.existence = appendExistence(psyche.existence, { kind: "act", text: clipText(message, 180) });
     await this.flushPsyche(run, agent.id.value, psyche);
     try {
@@ -1800,6 +2492,9 @@ export class DriveSolve {
         reuse: shortReuse,
         rulesRecalled: recall.pickedRules.map((rule) => rule.key),
         progressScore: 100,
+        recallHit: recallSignal.recallHit,
+        recallUsed: recallSignal.recallUsed,
+        recallHelped: recallSignal.recallHelped,
       }),
       nextHint: redactSecrets(`Short exchange: ${clipText(act.text, 240)}`),
       worktreeRef: run.worktreePath,
@@ -2057,7 +2752,10 @@ function clipToolOut(out: string, query: string): string {
 
 function artifactEvidence(run: { transcript: Array<{ kind: string; text: string }> }): string {
   return run.transcript
-    .filter((item) => item.kind === "console")
+    .filter((item) =>
+      item.kind === "console"
+      || (item.kind === "system" && /^lsp_diagnostics:/i.test(item.text)),
+    )
     .map((item) => item.text)
     .join("\n");
 }
@@ -2150,6 +2848,30 @@ function latestUserText(run: { transcript: Array<{ kind: string; text: string }>
   }
   return "";
 }
+
+function toolCardTitle(name: string, args: Record<string, unknown>): string {
+  const path = String(args.path ?? args.file ?? args.glob ?? args.pattern ?? "").trim();
+  const cmd = String(args.command ?? "").trim();
+  const url = String(args.url ?? "").trim();
+  const detail = path || cmd || url;
+  return detail ? `${name} · ${clipText(detail, 48)}` : name;
+}
+
+/** Tools safe to run concurrently in one model step. */
+const PARALLEL_SAFE_TOOLS = new Set([
+  "fs_read",
+  "fs_search",
+  "grep",
+  "glob",
+  "ls",
+  "memory_read",
+  "memory_search",
+  "web_search",
+  "browser_read",
+  "tool_search",
+  "board_read",
+  "self_status",
+]);
 
 function regulationOf(call: ToolCall, goal: string): "task" | "competence" | "wander" {
   if (call.name.startsWith("memory_") || call.name.startsWith("self_")) return "competence";

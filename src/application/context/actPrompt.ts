@@ -13,6 +13,8 @@ export type ActPromptInput = {
   depth: number;
   skills: string;
   memory: string;
+  /** AGENTS.md / CLAUDE.md style project files. */
+  projectContext?: string;
 };
 
 /** Operator turn law still stored on constitution: language + Never. Not the Self essay. */
@@ -51,6 +53,8 @@ export function buildActSystem(input: ActPromptInput): string {
     "Secrets in tool output are DETECTED_SECRET_<KIND>_<HASH>. Use that token in edits; do not ask for the value.",
     "Sanitize law: replace every mask with the user's exact <your-…> placeholders (not house/barney-redact tokens), then tree-verify with grep -r DETECTED_SECRET_ . — do not stop at inventory or wait for go-ahead.",
     "Visible reply: Markdown. mermaid or canvas fences when they help.",
+    "Deferred MCP: call tool_search before mcp__* tools that are not listed. Codemode: short JS via call()/store()/load() for read-only fan-out.",
+    input.projectContext ?? "",
     input.skills,
     input.memory ? `Shared memory and past episodes:\n${input.memory}` : "",
   ]

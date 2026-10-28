@@ -221,11 +221,11 @@ export function createLivePrinter(runId: () => string | undefined): { onEvent: (
 
   const onEvent = (type: string, payload: Record<string, unknown>) => {
     if (payload.runId && payload.runId !== runId()) return;
-    if (type === "run.thinking_delta") {
+    if (type === "run.thinking_delta" || type === "run.text_delta") {
       const raw = String(payload.delta ?? "");
       if (!raw) return;
       buf += raw;
-      draw("work · in progress");
+      draw(type === "run.text_delta" ? "reply · streaming" : "work · in progress");
     }
     if (type === "run.console") {
       buf += `\n[console · ${String(payload.tool ?? "tool")}]`;

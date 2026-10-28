@@ -1,7 +1,8 @@
 /**
  * Autonomy law: agenda is written rarely, raised in idle, proven as a self-run, else dropped.
  *
- * Gap (fail/backlog/capability/inner) → AgendaItem (ZPD-graded) → idle self_run.
+ * Gap (repeated PE fail / backlog) → AgendaItem (ZPD-3) → idle self_run → proof or drop.
+ * Capability map is self-model only — not an agenda writer. Inner think never invents drills.
  * Never invent open-world quests.
  */
 
@@ -81,11 +82,18 @@ export function gapsFromBacklogRows(
 }
 
 export function gapsFromFailEpisodes(
-  episodes: Array<{ failureMode?: string | null; nextHint?: string | null; outcome: string }>,
+  episodes: Array<{
+    failureMode?: string | null;
+    nextHint?: string | null;
+    outcome: string;
+    markers?: string[];
+  }>,
 ): AgendaGap[] {
   const byClass = new Map<string, AgendaGap>();
   for (const episode of episodes) {
     if (episode.outcome !== "fail") continue;
+    // Autonomy closure: only prediction-error fails feed the agenda.
+    if (!(episode.markers ?? []).includes("pe:1")) continue;
     const klass = (episode.failureMode || "").trim() || "general";
     if (klass === "general" || klass === "aborted-unfinished") continue;
     const prev = byClass.get(klass);
@@ -103,9 +111,9 @@ export function gapsFromFailEpisodes(
   return [...byClass.values()].filter((gap) => gap.count >= AGENDA_MIN_GAP_COUNT);
 }
 
-/** Concrete, local, ZPD-graded drill — not an open-world quest. */
+/** Concrete local drill — self_run is always ZPD-3 (proof or drop). */
 export function proposeAgendaItem(gap: AgendaGap, now = new Date().toISOString()): AgendaItem {
-  const level = zpdLevelForGap(gap);
+  const level: ZpdLevel = 3;
   const id = `drill-zpd${level}-${gap.failClass}-${now.slice(0, 10)}`;
   const goal = drillGoalForZpd(gap, level);
   return {

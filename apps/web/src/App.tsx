@@ -10,6 +10,7 @@ import { LinksPage } from "./LinksPage.tsx";
 import { MemoryPage } from "./MemoryPage.tsx";
 import { PsychePage } from "./PsychePage.tsx";
 import { SessionsPage } from "./SessionsPage.tsx";
+import { groundingChipsFromTranscript } from "./groundingChips.ts";
 import { groupTranscript, isOpenWork, isPrelude } from "./transcript.ts";
 import { formatReplyFootnote } from "@domain/run/replyMeta.ts";
 import { lanesOf, shortModel, type Agent, type FileEntry, type Item, type Lanes, type Plugin, type Provider, type ProviderState, type Run } from "./types.ts";
@@ -24,6 +25,16 @@ type Pane =
   | { kind: "provider"; id: string }
   | { kind: "new-provider" }
   | { kind: "plugin"; name: string; file?: string };
+
+type LiveToolRow = {
+  callId: string;
+  tool: string;
+  title?: string;
+  argsPreview?: string;
+  preview?: string;
+  durationMs?: number;
+  ok?: boolean;
+};
 
 export function App() {
   const [agents, setAgents] = useState<Agent[]>([]);
@@ -42,17 +53,23 @@ export function App() {
   const [pending, setPending] = useState<string | null>(null);
   const [debug, setDebug] = useState(() => localStorage.getItem("barney.debug") === "1");
   const [liveThink, setLiveThink] = useState("");
+  const [liveText, setLiveText] = useState("");
+  const [liveTools, setLiveTools] = useState<LiveToolRow[]>([]);
   const [browserModal, setBrowserModal] = useState<{ url: string; shot?: string } | null>(null);
   const [chatTab, setChatTab] = useState<"talk" | "files">("talk");
   const [filePath, setFilePath] = useState<string>();
   const [moreOpen, setMoreOpen] = useState(false);
   const [memoryFocusKey, setMemoryFocusKey] = useState<string>();
+  const [replaceFromId, setReplaceFromId] = useState<string>();
+  const [stopArmed, setStopArmed] = useState(false);
   const { locale, t, setLocale } = useLocale();
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const streamRef = useRef<HTMLDivElement>(null);
   const runIdRef = useRef<string | undefined>(runId);
+  const wsRef = useRef<WebSocket | undefined>(undefined);
   const pinBottomRef = useRef(true);
   const dismissedAlert = useRef("");
+  const stopArmedAt = useRef(0);
   runIdRef.current = runId;
 
   function stickBottom() {
@@ -82,7 +99,12 @@ export function App() {
   const hasModel = Boolean(lanes.large);
   const runBusy = busy || Boolean(run?.running) || ["acting", "reviewing", "researching"].includes(run?.status ?? "");
   const runBlocked = ["done", "parked", "failed"].includes(run?.status ?? "");
-  const canCompose = hasModel && !runBusy && !runBlocked;
+  /** Send allowed while busy — server replace-mode cancels the in-flight step. */
+  const canCompose = hasModel && !runBlocked;
+  const lastUser = useMemo(
+    () => [...(run?.transcript ?? [])].reverse().find((item) => item.kind === "user"),
+    [run?.transcript],
+  );
   const starters = [
     { icon: "⌘", title: t.starterBuildTitle, hint: t.starterBuildHint, prompt: t.starterBuildPrompt },
     { icon: "◇", title: t.starterFixTitle, hint: t.starterFixHint, prompt: t.starterFixPrompt },
@@ -91,7 +113,7 @@ export function App() {
 
   useLayoutEffect(() => {
     stickBottom();
-  }, [run?.transcript, pending, busy, alert, liveThink]);
+  }, [run?.transcript, pending, busy, alert, liveThink, liveText]);
 
   async function refresh(nextRunId = runId) {
     const [a, r, p, s] = await Promise.all([
@@ -130,33 +152,95 @@ export function App() {
       if (closed) return;
       const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/ws`);
       socket = ws;
+      wsRef.current = ws;
       ws.onopen = () => {
         setAlert((prev) => (prev?.title === "Live updates paused" ? null : prev));
+        if (runIdRef.current) {
+          ws.send(JSON.stringify({ type: "subscribe", runId: runIdRef.current }));
+        }
       };
       ws.onmessage = (ev) => {
         try {
           const data = JSON.parse(String(ev.data)) as {
+            type?: string;
             event?: {
               type?: string;
-              payload?: {
-                runId?: string;
-                delta?: string;
-                name?: string;
-                path?: string;
-                prefix?: string;
-                url?: string;
-                shot?: string;
-              };
+              payload?: Record<string, unknown>;
             };
           };
+          if (data.type === "subscribed") return;
+          const payload = data.event?.payload ?? {};
+          const eventRunId = typeof payload.runId === "string" ? payload.runId : undefined;
+          if (eventRunId && eventRunId !== runIdRef.current) return;
+
           if (data.event?.type === "run.thinking_delta") {
-            if (data.event.payload?.runId === runIdRef.current) {
-              setLiveThink((prev) => prev + String(data.event?.payload?.delta ?? ""));
+            setLiveThink((prev) => prev + String(payload.delta ?? ""));
+            return;
+          }
+          if (data.event?.type === "run.text_delta") {
+            setLiveText((prev) => prev + String(payload.delta ?? ""));
+            return;
+          }
+          if (data.event?.type === "run.tool_started") {
+            const callId = String(payload.callId ?? "");
+            const tool = String(payload.tool ?? "");
+            if (!callId || !tool) return;
+            setLiveTools((prev) => [
+              ...prev.filter((row) => row.callId !== callId),
+              {
+                callId,
+                tool,
+                title: String(payload.title ?? tool),
+                argsPreview: String(payload.argsPreview ?? ""),
+              },
+            ]);
+            return;
+          }
+          if (data.event?.type === "run.tool_result") {
+            const callId = String(payload.callId ?? "");
+            setLiveTools((prev) =>
+              prev.map((row) =>
+                row.callId === callId
+                  ? {
+                    ...row,
+                    ok: Boolean(payload.ok),
+                    durationMs: typeof payload.durationMs === "number" ? payload.durationMs : undefined,
+                    preview: String(payload.preview ?? row.preview ?? ""),
+                    title: String(payload.title ?? row.title ?? row.tool),
+                  }
+                  : row,
+              ),
+            );
+            return;
+          }
+          if (data.event?.type === "run.transcript_item") {
+            const item = payload.item as Item | undefined;
+            if (!item?.id || !runIdRef.current) return;
+            setRuns((prev) =>
+              prev.map((session) => {
+                if (session.id !== runIdRef.current) return session;
+                if (session.transcript.some((row) => row.id === item.id)) return session;
+                return { ...session, transcript: [...session.transcript, item] };
+              }),
+            );
+            if (item.kind === "thinking") setLiveThink("");
+            if (item.kind === "assistant") {
+              setLiveText("");
+              setLiveTools([]);
             }
             return;
           }
           if (data.event?.type === "run.thinking") {
-            void refresh(runIdRef.current).finally(() => setLiveThink(""));
+            setLiveThink("");
+            return;
+          }
+          if (data.event?.type === "run.act_finished" || data.event?.type === "run.completed" || data.event?.type === "run.interrupted" || data.event?.type === "run.compacted" || data.event?.type === "run.truncated") {
+            void refresh(runIdRef.current).finally(() => {
+              setLiveText("");
+              setLiveThink("");
+              setLiveTools([]);
+              setStopArmed(false);
+            });
             return;
           }
           if (data.event?.type === "run.permission_needed") {
@@ -217,8 +301,15 @@ export function App() {
       closed = true;
       if (retry) clearTimeout(retry);
       socket?.close();
+      wsRef.current = undefined;
     };
   }, []);
+
+  useEffect(() => {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({ type: "subscribe", runId: runId ?? null }));
+  }, [runId]);
 
   function beginSession() {
     setRunId(undefined);
@@ -230,6 +321,10 @@ export function App() {
     setAlert(null);
     setPending(null);
     setLiveThink("");
+    setLiveText("");
+    setLiveTools([]);
+    setReplaceFromId(undefined);
+    setStopArmed(false);
     setMoreOpen(false);
     queueMicrotask(() => composerRef.current?.focus());
   }
@@ -239,6 +334,8 @@ export function App() {
     setAlert(null);
     setPending(goal);
     setLiveThink("");
+    setLiveText("");
+    setLiveTools([]);
     setPane({ kind: "chat" });
     try {
       const created = await api<Run>("/api/sessions", {
@@ -266,11 +363,16 @@ export function App() {
   async function send() {
     const text = draft.trim();
     if (!text || !canCompose) return;
+    const fromId = replaceFromId;
     setDraft("");
+    setReplaceFromId(undefined);
     setAlert(null);
     pinBottomRef.current = true;
     setPending(text);
     setLiveThink("");
+    setLiveText("");
+    setLiveTools([]);
+    setStopArmed(false);
     if (!runId) {
       await startRun(text);
       return;
@@ -280,7 +382,7 @@ export function App() {
       const updated = await api<Run>(`/api/sessions/${runId}/messages`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ text }),
+        body: JSON.stringify({ text, ...(fromId ? { replaceFromId: fromId } : {}) }),
       });
       setRuns((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
       await refresh(runId);
@@ -294,12 +396,35 @@ export function App() {
     }
   }
 
+  function editLastUser() {
+    if (!lastUser) return;
+    setDraft(lastUser.text);
+    setReplaceFromId(lastUser.id);
+    queueMicrotask(() => composerRef.current?.focus());
+  }
+
+  async function compactSession() {
+    if (!runId || runBusy) return;
+    setBusy(true);
+    try {
+      const updated = await api<Run>(`/api/sessions/${runId}/compact`, { method: "POST" });
+      setRuns((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
+      await refresh(runId);
+    } catch (err) {
+      setAlert(classifyClientError(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function resume(mode: "continue" | "retry") {
     if (!runId || run?.status === "done") return;
     if (alert) dismissedAlert.current = alertDismissKey(runId, alert);
     setAlert(null);
     setBusy(true);
     setLiveThink("");
+    setLiveText("");
+    setLiveTools([]);
     setPending(mode === "retry" ? "Retry last request" : "Continue interrupted work");
     try {
       const updated = await api<Run>(`/api/sessions/${runId}/resume`, {
@@ -356,6 +481,14 @@ export function App() {
 
   async function abortStep() {
     if (!runId) return;
+    const now = Date.now();
+    if (now - stopArmedAt.current > 1000) {
+      stopArmedAt.current = now;
+      setStopArmed(true);
+      return;
+    }
+    stopArmedAt.current = 0;
+    setStopArmed(false);
     await api(`/api/sessions/${runId}/abort`, { method: "POST" }).catch(() => undefined);
     await refresh(runId);
   }
@@ -370,6 +503,8 @@ export function App() {
 
   function openSession(id: string) {
     setLiveThink("");
+    setLiveText("");
+    setLiveTools([]);
     setAlert((prev) => (prev?.allowPrefix ? prev : null));
     setRunId(id);
     setPane({ kind: "chat" });
@@ -473,6 +608,18 @@ export function App() {
             <FilesPage sessionId={runId} initialPath={filePath} />
           ) : (
           <>
+          {run ? (
+            <div className="grounding-chips" aria-label="Grounding">
+              {groundingChipsFromTranscript(run.transcript).map((chip) => (
+                <span
+                  key={chip.kind}
+                  className={`grounding-chip ${chip.ok ? "ok" : "fail"}`}
+                >
+                  {chip.label}
+                </span>
+              ))}
+            </div>
+          ) : null}
           <div className="stream" ref={streamRef} onScroll={onStreamScroll}>
             {!run && !pending ? (
               <div className="empty-hero">
@@ -509,6 +656,8 @@ export function App() {
                         items={entry.items}
                         live={live}
                         liveThink={live ? liveThink : ""}
+                        liveText={live ? liveText : ""}
+                        liveTools={live ? liveTools : []}
                       />
                     );
                   }
@@ -521,7 +670,16 @@ export function App() {
                   </div>
                 ) : null}
                 {busy && !transcriptEntries.some((entry, index) => entry.type === "work" && isOpenWork(index, transcriptEntries)) ? (
-                  <WorkFold items={[]} live liveThink={liveThink} />
+                  <WorkFold items={[]} live liveThink={liveThink} liveText="" liveTools={liveTools} />
+                ) : null}
+                {busy && liveText ? (
+                  <div className="row assistant live-reply">
+                    <div className="kind">assistant</div>
+                    <div className="body">
+                      <MarkdownBody text={liveText} />
+                      <span className="thinking-dots" aria-hidden="true" />
+                    </div>
+                  </div>
                 ) : null}
               </>
             )}
@@ -557,11 +715,13 @@ export function App() {
                 requestAnimationFrame(stickBottom);
               }}
               placeholder={runBusy
-                ? t.composerBusy
+                ? `${t.composerBusy} · ${t.sendCancels}`
                 : run?.status === "parked" || run?.status === "failed"
                 ? t.composerBlocked
                 : runBlocked
                 ? t.composerClosed
+                : replaceFromId
+                ? t.editLast
                 : run
                 ? t.composerFollow
                 : t.composerEmpty}
@@ -570,13 +730,22 @@ export function App() {
             />
             <div className="composer-meta">
               <span>{run ? t.composerContext(files.length) : hasModel ? t.composerReady(shortModel(lanes.large!.model)) : t.configureModel}</span>
-              <span>{t.sendHint}</span>
+              <span>{runBusy ? t.sendCancels : stopArmed ? t.stopHint : t.sendHint}</span>
             </div>
-            {runBusy ? (
-              <button type="button" className="composer-action stop" disabled={!runId} onClick={() => void abortStep()} aria-label={t.stop}>■</button>
-            ) : (
-              <button className="composer-action send" disabled={!draft.trim() || !canCompose} aria-label={t.send}>↑</button>
-            )}
+            <div className="composer-actions">
+              {lastUser && !runBlocked ? (
+                <button type="button" className="composer-chip" disabled={runBusy} onClick={editLastUser}>{t.editLast}</button>
+              ) : null}
+              {runId && !runBlocked ? (
+                <button type="button" className="composer-chip" disabled={runBusy} onClick={() => void compactSession()}>{t.compact}</button>
+              ) : null}
+              {runBusy ? (
+                <button type="button" className={`composer-action stop ${stopArmed ? "armed" : ""}`} disabled={!runId} onClick={() => void abortStep()} aria-label={stopArmed ? t.stopAgain : t.stop}>
+                  {stopArmed ? t.stopAgain : "■"}
+                </button>
+              ) : null}
+              <button className="composer-action send" disabled={!draft.trim() || !canCompose} aria-label={t.send} title={runBusy ? t.sendCancels : t.send}>↑</button>
+            </div>
           </form>
           </>
           )}
@@ -760,9 +929,13 @@ function TranscriptRow(props: { item: Item }) {
     return <FoldRow kind={item.kind} text={item.text} />;
   }
   const footnote = item.kind === "assistant" ? formatReplyFootnote(item.meta) : "";
+  const flags = [
+    item.meta?.partial ? t.partialReply : "",
+    item.meta?.summary ? t.summaryReply : "",
+  ].filter(Boolean).join(" · ");
   return (
-    <div className={`row ${item.kind}`}>
-      <div className="kind">{item.kind === "user" ? t.user : item.kind}</div>
+    <div className={`row ${item.kind}${item.meta?.partial ? " partial" : ""}${item.meta?.summary ? " summary" : ""}`}>
+      <div className="kind">{item.kind === "user" ? t.user : flags || item.kind}</div>
       {item.kind === "assistant" ? <MarkdownBody text={item.text} /> : <div className="body">{item.text}</div>}
       {footnote ? <div className="reply-footnote">{footnote}</div> : null}
     </div>
@@ -784,14 +957,22 @@ function FoldRow(props: { kind: string; text: string }) {
   );
 }
 
-function WorkFold(props: { items: Item[]; live: boolean; liveThink: string }) {
+function WorkFold(props: {
+  items: Item[];
+  live: boolean;
+  liveThink: string;
+  liveText?: string;
+  liveTools?: LiveToolRow[];
+}) {
   const { t } = useLocale();
   const userToggled = useRef(false);
   const [open, setOpen] = useState(props.live);
+  const [expandedTool, setExpandedTool] = useState<string | null>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
   const inner = groupProcess(props.items);
   const lastThinking = [...props.items].reverse().find((item) => item.kind === "thinking");
   const lastConsole = [...props.items].reverse().find((item) => item.kind === "console");
+  const liveTools = props.liveTools ?? [];
 
   useEffect(() => {
     if (userToggled.current) return;
@@ -800,7 +981,7 @@ function WorkFold(props: { items: Item[]; live: boolean; liveThink: string }) {
 
   useEffect(() => {
     if (open && bodyRef.current) bodyRef.current.scrollTop = bodyRef.current.scrollHeight;
-  }, [open, props.items, props.liveThink, props.live]);
+  }, [open, props.items, props.liveThink, props.live, liveTools.length]);
 
   return (
     <div className={`work-fold ${props.live ? "live" : ""}`}>
@@ -835,6 +1016,33 @@ function WorkFold(props: { items: Item[]; live: boolean; liveThink: string }) {
                 {props.liveThink || lastThinking?.text || t.working}
                 <span className="thinking-dots" aria-hidden="true" />
               </div>
+              {liveTools.length ? (
+                <div className="live-tool-cards" aria-label="Tools">
+                  {liveTools.map((row) => {
+                    const openCard = expandedTool === row.callId;
+                    return (
+                      <button
+                        type="button"
+                        key={row.callId}
+                        className={`live-tool-card ${row.ok === undefined ? "running" : row.ok ? "ok" : "fail"}`}
+                        onClick={() => setExpandedTool(openCard ? null : row.callId)}
+                      >
+                        <span className="live-tool-card-title">
+                          {row.title || row.tool}
+                          {row.ok === undefined ? "…" : row.ok ? " ✓" : " ✗"}
+                          {row.durationMs != null ? ` · ${Math.round(row.durationMs)}ms` : ""}
+                        </span>
+                        {openCard ? (
+                          <span className="live-tool-card-body">
+                            {row.argsPreview ? `args: ${row.argsPreview}\n` : ""}
+                            {row.preview || ""}
+                          </span>
+                        ) : null}
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : null}
               {inner
                 .filter((entry) => entry.type === "stream" && entry.kind === "console")
                 .map((entry) =>

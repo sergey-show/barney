@@ -2,7 +2,11 @@ import type { ChatMessage } from "../../domain/provider/Role.ts";
 import { peelUntaggedThinking } from "../../infrastructure/llm/visibleReply.ts";
 import { extractToolEvidence } from "./toolEvidence.ts";
 
-export type TranscriptLike = { kind: string; text: string };
+export type TranscriptLike = {
+  kind: string;
+  text: string;
+  meta?: { summary?: boolean };
+};
 
 export type PackedSession = {
   digest: string;
@@ -17,9 +21,24 @@ const MAX_DIGEST_CHARS = 4_000;
 const MAX_TURN = { user: 400, assistant: 500, console: 280 };
 const MAX_RECENT = { user: 1_500, assistant: 2_000, console: 1_200 };
 
-export function packSession(transcript: TranscriptLike[], goal: string): PackedSession {
-  const durable = transcript.filter((item) => item.kind === "user" || item.kind === "assistant" || item.kind === "console");
-  const recentItems = durable.slice(-RECENT_COUNT);
+export type PackSessionOptions = {
+  recentCount?: number;
+  maxRecentChars?: number;
+};
+
+export function packSession(
+  transcript: TranscriptLike[],
+  goal: string,
+  opts?: PackSessionOptions,
+): PackedSession {
+  const recentCount = opts?.recentCount ?? RECENT_COUNT;
+  const maxRecentChars = opts?.maxRecentChars ?? MAX_RECENT_CHARS;
+  const allDurable = transcript.filter((item) => item.kind === "user" || item.kind === "assistant" || item.kind === "console");
+  const summaryAt = findLastIndex(allDurable, (item) => Boolean(item.meta?.summary));
+  const summaryItem = summaryAt >= 0 ? allDurable[summaryAt] : undefined;
+  // After a summary cursor, drop pre-summary turns from the model window (UI still has them).
+  const durable = summaryAt >= 0 ? allDurable.slice(summaryAt + 1) : allDurable;
+  const recentItems = durable.slice(-recentCount);
   const older = durable.slice(0, Math.max(0, durable.length - recentItems.length));
   const anchors = [
     ...extractAnchors(goal, ...transcript.map((item) => item.text)),
@@ -27,6 +46,7 @@ export function packSession(transcript: TranscriptLike[], goal: string): PackedS
   ];
   const head = [
     `Goal: ${clipText(goal, 400)}`,
+    summaryItem ? `Session summary (cursor):\n${clipText(summaryItem.text, 2_000)}` : "",
     anchors.length ? `Pinned facts (copy exactly, never truncate or guess):\n${anchors.map((a) => `- ${a}`).join("\n")}` : "",
     artifactsLine(transcript),
     lastToolsLine(recentItems),
@@ -38,7 +58,7 @@ export function packSession(transcript: TranscriptLike[], goal: string): PackedS
   const digest = [head, clipText(folded, room)].filter(Boolean).join("\n");
   const recent = budgetClip(
     recentItems.map((item) => toRecentMessage(item)),
-    MAX_RECENT_CHARS,
+    maxRecentChars,
   );
   return { digest, recent, folded: older.length, anchors };
 }
@@ -170,6 +190,13 @@ export function asText(value: unknown): string {
   } catch {
     return "";
   }
+}
+
+function findLastIndex<T>(items: T[], pred: (item: T) => boolean): number {
+  for (let i = items.length - 1; i >= 0; i -= 1) {
+    if (pred(items[i]!)) return i;
+  }
+  return -1;
 }
 
 function isDurableUrl(url: string): boolean {

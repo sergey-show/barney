@@ -124,6 +124,12 @@ export interface WorkspacePort {
   append(path: string, content: string): Promise<string>;
   mkdir(path: string): Promise<string>;
   search(query: string, path?: string): Promise<string>;
+  /** Regex content search (ripgrep when available). */
+  grep?(pattern: string, path?: string, include?: string): Promise<string>;
+  /** List files by glob under worktree. */
+  glob?(pattern: string, path?: string): Promise<string>;
+  /** Apply a unified diff to the worktree. */
+  patch?(patchText: string): Promise<string>;
   remove(path: string): Promise<string>;
   shell(command: string, signal?: AbortSignal): Promise<string>;
 }

@@ -44,10 +44,12 @@ test("buildPsycheEvolution is read-only aggregate", () => {
     frustrationSource: "episode",
     dreamBody: "Compressed shadow into: prefer house tokens",
     dreamUpdatedAt: "2026-01-02T00:00:00.000Z",
+    experiencePulse: "experience_pulse: hit=0.50 used=0.25 pe=0.40 · transfer=1 memorize=0 fresh=2/1 · n=8",
     now: "2026-01-03T00:00:00.000Z",
   });
   expect(evo.shadowCount).toBe(2);
   expect(evo.skills.quarantineCount).toBe(1);
+  expect(evo.experiencePulse).toContain("experience_pulse:");
   expect(evo.agenda.nextGoal).toBe("drill redact");
   expect(evo.lastDreamSummary).toContain("house tokens");
   expect(evo.frustration).toBe(2);

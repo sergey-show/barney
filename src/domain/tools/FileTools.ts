@@ -100,6 +100,71 @@ export const FILE_TOOLS: ToolSpec[] = [
     },
   },
   {
+    name: "grep",
+    description:
+      "Regex search in worktree file contents (ripgrep when available). Prefer over shell grep. Optional include glob e.g. *.ts.",
+    parameters: {
+      type: "object",
+      properties: {
+        pattern: { type: "string", description: "Regex pattern" },
+        path: { type: "string", description: "Relative start directory, default ." },
+        include: { type: "string", description: "Glob filter e.g. *.{ts,tsx}" },
+      },
+      required: ["pattern"],
+    },
+  },
+  {
+    name: "glob",
+    description: "List files matching a glob under the worktree (e.g. **/*.ts). Sorted by mtime, capped.",
+    parameters: {
+      type: "object",
+      properties: {
+        pattern: { type: "string", description: "Glob pattern" },
+        path: { type: "string", description: "Relative start directory, default ." },
+      },
+      required: ["pattern"],
+    },
+  },
+  {
+    name: "patch",
+    description:
+      "Apply a unified diff patch to the worktree. Prefer fs_edit for single-snippet edits; use patch for multi-hunk / multi-file diffs.",
+    parameters: {
+      type: "object",
+      properties: {
+        patchText: { type: "string", description: "Unified diff text" },
+      },
+      required: ["patchText"],
+    },
+  },
+  {
+    name: "tool_search",
+    description:
+      "Reveal deferred MCP tools by name/description query. Call before using mcp__* tools that are not yet in the roster.",
+    parameters: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Substring to match server or tool name" },
+      },
+      required: ["query"],
+    },
+  },
+  {
+    name: "codemode",
+    description:
+      "Run a short async JS script that may call allowlisted read-only tools via await call(name, args). Use to explore/filter without flooding the chat. Return a string summary.",
+    parameters: {
+      type: "object",
+      properties: {
+        script: {
+          type: "string",
+          description: "Async JS body. Available: call, store, load, log. Example: return await call('grep', { pattern: 'TODO' })",
+        },
+      },
+      required: ["script"],
+    },
+  },
+  {
     name: "fs_remove",
     description: "Delete a file or empty directory in the worktree. Cannot delete the worktree root.",
     parameters: {
@@ -190,7 +255,7 @@ export const PROVIDER_TOOLS: ToolSpec[] = [
 export const PLUGIN_TOOLS: ToolSpec[] = [
   {
     name: "plugin_list",
-    description: "List plugins around the kernel: ~/.barney/plugins, legacy skills/mcp, and AgentSkills from Claude/OpenCode/Claw if those folders exist. Check before writing a new one.",
+    description: "List plugins around the kernel: ~/.barney/plugins, legacy skills/mcp, and AgentSkills folders on the host if present. Check before writing a new one.",
     parameters: { type: "object", properties: {} },
   },
   {

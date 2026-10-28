@@ -128,6 +128,18 @@ function fakeApplication(
     async resume() {
       return runSnapshot("run-1", []);
     },
+    async compact() {
+      return runSnapshot("run-1", []);
+    },
+    async fork() {
+      return runSnapshot("run-1", []);
+    },
+    async switchBranch() {
+      return runSnapshot("run-1", []);
+    },
+    async branches() {
+      return [];
+    },
     async close() {
       return runSnapshot("run-1", []);
     },

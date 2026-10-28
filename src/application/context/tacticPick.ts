@@ -17,24 +17,42 @@ export function pickTactic(input: {
   saturated: string[];
   progress?: ProgressSnapshot | null;
   failedFamily?: string;
+  /** Prior approach prefer list — rotated away when stalled. */
+  priorPrefer?: string[];
+  /** No new evidence this approach — force a different family. */
+  stalled?: boolean;
 }): TacticPick {
   const saturated = new Set(input.saturated);
   const avoid = [...saturated];
   if (input.failedFamily) avoid.push(input.failedFamily);
+  if (input.stalled && input.priorPrefer?.length) {
+    for (const fam of input.priorPrefer) avoid.push(fam);
+  }
 
   const prefer: string[] = [];
   const delivery = !input.progress || input.progress.taskKind !== "research";
-  if (delivery) {
-    for (const fam of ["fs_edit", "fs_write", "shell:sed", "shell:python3"]) {
-      if (!saturated.has(fam) && !saturated.has(fam.split(":")[0] ?? "")) prefer.push(fam);
-    }
-  } else {
-    for (const fam of ["browser", "web_search", "fs_read"]) {
-      if (!saturated.has(fam)) prefer.push(fam);
+  const candidates = delivery
+    ? ["fs_edit", "fs_write", "shell:sed", "shell:python3", "shell:test"]
+    : ["browser", "web_search", "fs_read", "grep"];
+  for (const fam of candidates) {
+    const root = fam.split(":")[0] ?? fam;
+    if (saturated.has(fam) || saturated.has(root)) continue;
+    if (avoid.includes(fam)) continue;
+    prefer.push(fam);
+  }
+  // If stall wiped the list, take first unsaturated even if previously preferred.
+  if (!prefer.length) {
+    for (const fam of candidates) {
+      const root = fam.split(":")[0] ?? fam;
+      if (!saturated.has(fam) && !saturated.has(root)) prefer.push(fam);
     }
   }
 
   const steps: string[] = [];
+  if (input.stalled) {
+    steps.push("No new evidence — change tool family now");
+    steps.push("Do not repeat the prior Prefer list");
+  }
   if (input.progress && input.progress.inspections > 0 && input.progress.mutates === 0 && delivery) {
     steps.push("Apply edits now (fs_edit/fs_write/sed -i); do not inventory again");
     steps.push("Probe each edited path; confirm the ask is satisfied");

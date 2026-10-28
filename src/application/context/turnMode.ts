@@ -11,7 +11,7 @@ export const ROUTE_RULES = `Analyze this turn. Do not answer the user. Do not pi
 short=true only for a greeting, who-are-you, or an opinion that needs no tools and no world facts.
 short=false for files, shell, browser, plugins, time, a deliverable, or checking a previous turn.
 
-need_research=true only if the answer depends on current external sources (docs, API, news). Local machine, worktree, who-are-you — false.
+need_research=true if the answer depends on current external sources (docs, API, news), OR you have no recalled prior for this class of task and would otherwise guess from training. Local who-are-you / pure greeting — false.
 
 analysis: what must be true when the request is done (1-3 sentences). Empty if short.
 plan: ordered concrete steps. Empty if short. Each step is one action.

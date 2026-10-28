@@ -21,8 +21,8 @@ function stubClient(): LlmClient {
 
 function anthropicClient(provider: LlmProvider): LlmClient {
   return {
-    complete: ({ model, messages, tools, signal, onThinking }) =>
-      anthropicComplete(provider, model, messages, tools, signal, onThinking),
+    complete: ({ model, messages, tools, signal, onThinking, onText }) =>
+      anthropicComplete(provider, model, messages, tools, signal, onThinking, onText),
     listModels: async () => ["claude-sonnet-4-5", "claude-opus-4-1", "claude-haiku-4-5"],
   };
 }
@@ -62,6 +62,7 @@ async function anthropicComplete(
   tools?: ToolSpec[],
   signal?: AbortSignal,
   onThinking?: (delta: string) => void,
+  onText?: (delta: string) => void,
 ): Promise<ChatResult> {
   if (!provider.apiKey) throw new Error("anthropic provider needs an api key");
   const system = messages.filter((m) => m.role === "system").map((m) => m.content).join("\n");
@@ -97,6 +98,7 @@ async function anthropicComplete(
   const thinking = json.content.filter((c) => c.type === "thinking" && c.thinking).map((c) => c.thinking ?? "").join("\n\n");
   const split = extractReasoning({ content: text, thinking }, { peelUntagged: false, tagsInContent: true });
   if (split.thinking) onThinking?.(split.thinking);
+  if (split.text) onText?.(split.text);
   const toolCalls: ToolCall[] = json.content
     .filter((c) => c.type === "tool_use" && c.id && c.name)
     .map((c) => ({ id: c.id!, name: c.name!, arguments: c.input ?? {} }));

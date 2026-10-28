@@ -22,6 +22,15 @@ export async function runFileTool(ws: WorkspacePort, call: ToolCall, signal?: Ab
         return await ws.mkdir(str("path"));
       case "fs_search":
         return await ws.search(str("query"), str("path") || ".");
+      case "grep":
+        if (!ws.grep) return "error: grep not supported on this workspace";
+        return await ws.grep(str("pattern"), str("path") || ".", str("include") || undefined);
+      case "glob":
+        if (!ws.glob) return "error: glob not supported on this workspace";
+        return await ws.glob(str("pattern"), str("path") || ".");
+      case "patch":
+        if (!ws.patch) return "error: patch not supported on this workspace";
+        return await ws.patch(str("patchText"));
       case "fs_remove":
         return await ws.remove(str("path"));
       case "shell":

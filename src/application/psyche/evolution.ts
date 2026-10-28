@@ -32,6 +32,8 @@ export type PsycheEvolution = {
     nextGoal: string | null;
   };
   designSealed: boolean;
+  /** Idle experience pulse (hit/used/pe rates + transfer counts). */
+  experiencePulse: string | null;
   updatedAt: string;
 };
 
@@ -89,6 +91,7 @@ export function buildPsycheEvolution(input: {
   frustrationSource: PsycheEvolution["frustrationSource"];
   dreamBody?: string;
   dreamUpdatedAt?: string;
+  experiencePulse?: string | null;
   now?: string;
 }): PsycheEvolution {
   const buckets = bucketSkills(input.skills);
@@ -119,6 +122,7 @@ export function buildPsycheEvolution(input: {
       nextGoal: running[0]?.goal ?? pending[0]?.goal ?? null,
     },
     designSealed: input.designSealed,
+    experiencePulse: input.experiencePulse ?? null,
     updatedAt: input.now ?? new Date().toISOString(),
   };
 }

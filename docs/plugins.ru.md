@@ -20,7 +20,7 @@
 
 - `~/.barney/skills/`
 - `~/.barney/mcp/`
-- навыки AgentSkills из Claude / OpenCode / Codex / Claw, если эти папки есть на машине
+- навыки AgentSkills из Claude / Codex / Claw (и похожих папок на хосте), если они есть
 
 Список **Settings → Plugins** в Web — это каталог. Отдельной формы «поставить плагин» нет: файлы кладут в тело или просят Barney их написать.
 

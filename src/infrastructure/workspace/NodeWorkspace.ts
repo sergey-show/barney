@@ -133,6 +133,77 @@ export class NodeWorkspace implements WorkspacePort {
     return hits.join("\n") || "no matches";
   }
 
+  async grep(pattern: string, rel = ".", include?: string): Promise<string> {
+    const start = this.resolveSafe(rel);
+    const rg = await tryRipgrep(pattern, start, include);
+    if (rg != null) {
+      const lines = rg
+        .split("\n")
+        .filter(Boolean)
+        .slice(0, MAX_SEARCH_HITS)
+        .map((line) => {
+          const abs = line.split(":")[0] ?? "";
+          try {
+            const relPath = relative(this.root, abs).split(sep).join("/");
+            return line.replace(abs, relPath);
+          } catch {
+            return line;
+          }
+        });
+      return lines.join("\n") || "no matches";
+    }
+    let re: RegExp;
+    try {
+      re = new RegExp(this.unmask(pattern), "i");
+    } catch (err) {
+      throw new Error(`invalid regex: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    const hits: string[] = [];
+    this.walk(start, (file) => {
+      if (hits.length >= MAX_SEARCH_HITS) return;
+      if (include && !globMatch(relative(start, file).split(sep).join("/"), include)) return;
+      try {
+        const buf = readFileSync(file);
+        if (buf.includes(0) || buf.length > MAX_READ) return;
+        const text = buf.toString("utf8");
+        const lines = text.split(/\r?\n/);
+        for (let i = 0; i < lines.length; i++) {
+          if (!re.test(lines[i]!)) continue;
+          const relPath = relative(this.root, file).split(sep).join("/");
+          hits.push(`${relPath}:${i + 1}:${lines[i]!.slice(0, 200)}`);
+          if (hits.length >= MAX_SEARCH_HITS) break;
+        }
+      } catch {
+        /* skip */
+      }
+    });
+    return hits.join("\n") || "no matches";
+  }
+
+  async glob(pattern: string, rel = "."): Promise<string> {
+    const start = this.resolveSafe(rel);
+    const matches: Array<{ path: string; mtime: number }> = [];
+    this.walk(start, (file) => {
+      const relPath = relative(this.root, file).split(sep).join("/");
+      const fromStart = relative(start, file).split(sep).join("/");
+      if (!globMatch(fromStart, pattern) && !globMatch(relPath, pattern)) return;
+      try {
+        matches.push({ path: relPath, mtime: statSync(file).mtimeMs });
+      } catch {
+        matches.push({ path: relPath, mtime: 0 });
+      }
+    });
+    matches.sort((a, b) => b.mtime - a.mtime);
+    const capped = matches.slice(0, MAX_SEARCH_HITS);
+    if (!capped.length) return "no files found";
+    const extra = matches.length > capped.length ? `\n… truncated ${matches.length - capped.length} more` : "";
+    return `${capped.map((m) => m.path).join("\n")}${extra}`;
+  }
+
+  async patch(patchText: string): Promise<string> {
+    return applyUnifiedDiff(this, this.unmask(patchText));
+  }
+
   async remove(rel: string): Promise<string> {
     const abs = this.resolveSafe(rel);
     if (resolve(abs) === resolve(this.root)) throw new Error("cannot remove worktree root");
@@ -172,7 +243,10 @@ export class NodeWorkspace implements WorkspacePort {
         proc.exited,
       ]);
       const raw = [out, err].filter(Boolean).join("\n") || "(no output)";
-      const clipped = raw.length > MAX_SHELL_OUT ? `${raw.slice(0, MAX_SHELL_OUT)}\n…truncated` : raw;
+      // Soft clip here; DriveSolve offloads full body to .barney/tool-out when needed.
+      const clipped = raw.length > MAX_SHELL_OUT
+        ? `${raw.slice(0, MAX_SHELL_OUT)}\n…truncated (${raw.length - MAX_SHELL_OUT} more chars in tool offload if re-run via session)`
+        : raw;
       return `exit ${code}\n${this.mask(clipped)}`;
     } finally {
       clearTimeout(timer);
@@ -213,6 +287,155 @@ export class NodeWorkspace implements WorkspacePort {
       }
     }
   }
+}
+
+async function tryRipgrep(pattern: string, cwd: string, include?: string): Promise<string | null> {
+  try {
+    const args = ["-n", "--no-heading", "-e", pattern];
+    if (include) args.push("--glob", include);
+    args.push(".");
+    const proc = Bun.spawn(["rg", ...args], {
+      cwd,
+      stdout: "pipe",
+      stderr: "pipe",
+      stdin: "ignore",
+    });
+    const [out, code] = await Promise.all([
+      proc.stdout instanceof ReadableStream ? new Response(proc.stdout).text() : Promise.resolve(""),
+      proc.exited,
+    ]);
+    if (code === 0 || code === 1) return out;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/** Minimal glob: * and ** and ? — enough for tool use. */
+function globMatch(path: string, pattern: string): boolean {
+  const norm = path.replace(/^(\.\/)+/, "");
+  const escaped = pattern
+    .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+    .replace(/\*\*/g, "{{GLOBSTAR}}")
+    .replace(/\*/g, "[^/]*")
+    .replace(/\?/g, "[^/]")
+    .replace(/\{\{GLOBSTAR\}\}/g, ".*");
+  return new RegExp(`^${escaped}$`).test(norm) || new RegExp(`^${escaped}$`).test(path);
+}
+
+async function applyUnifiedDiff(
+  ws: NodeWorkspace,
+  patchText: string,
+): Promise<string> {
+  const files = parseUnifiedDiff(patchText);
+  if (!files.length) throw new Error("patch: no file hunks found");
+  const changed: string[] = [];
+  for (const file of files) {
+    if (file.delete) {
+      await ws.remove(file.path);
+      changed.push(`deleted ${file.path}`);
+      continue;
+    }
+    let current = "";
+    try {
+      current = await ws.read(file.path);
+    } catch {
+      if (!file.create) throw new Error(`patch: missing file ${file.path}`);
+    }
+    const next = applyHunks(current, file.hunks);
+    await ws.write(file.path, next);
+    changed.push(`updated ${file.path}`);
+  }
+  return changed.join("\n");
+}
+
+type DiffFile = {
+  path: string;
+  create?: boolean;
+  delete?: boolean;
+  hunks: Array<{ oldStart: number; lines: string[] }>;
+};
+
+function parseUnifiedDiff(text: string): DiffFile[] {
+  const files: DiffFile[] = [];
+  let current: DiffFile | null = null;
+  for (const line of text.split(/\r?\n/)) {
+    if (line.startsWith("--- ")) {
+      current = null;
+      continue;
+    }
+    if (line.startsWith("+++ ")) {
+      const raw = line.slice(4).trim().replace(/^[ab]\//, "");
+      if (raw === "/dev/null") continue;
+      current = { path: raw, hunks: [] };
+      files.push(current);
+      continue;
+    }
+    if (line.startsWith("diff --git ")) {
+      const m = line.match(/b\/(.+)$/);
+      if (m) {
+        current = { path: m[1]!, hunks: [] };
+        files.push(current);
+      }
+      continue;
+    }
+    if (line.startsWith("new file mode")) {
+      if (current) current.create = true;
+      continue;
+    }
+    if (line.startsWith("deleted file mode")) {
+      if (current) current.delete = true;
+      continue;
+    }
+    const hunk = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line);
+    if (hunk && current) {
+      current.hunks.push({ oldStart: Number(hunk[1]), lines: [] });
+      continue;
+    }
+    if (current?.hunks.length && (line.startsWith(" ") || line.startsWith("+") || line.startsWith("-") || line === "\\ No newline at end of file")) {
+      if (line.startsWith("\\")) continue;
+      current.hunks.at(-1)!.lines.push(line);
+    }
+  }
+  return files.filter((f) => f.path && f.path !== "/dev/null");
+}
+
+function applyHunks(content: string, hunks: DiffFile["hunks"]): string {
+  if (!hunks.length) return content;
+  const endsWithNl = content.endsWith("\n");
+  const lines = content === "" ? [] : content.replace(/\n$/, "").split("\n");
+  // Apply from bottom so line numbers stay valid
+  for (const hunk of [...hunks].reverse()) {
+    const oldLines: string[] = [];
+    const newLines: string[] = [];
+    for (const row of hunk.lines) {
+      const mark = row[0];
+      const body = row.slice(1);
+      if (mark === " ") {
+        oldLines.push(body);
+        newLines.push(body);
+      } else if (mark === "-") oldLines.push(body);
+      else if (mark === "+") newLines.push(body);
+    }
+    const start = Math.max(0, hunk.oldStart - 1);
+    const slice = lines.slice(start, start + oldLines.length);
+    if (oldLines.length && slice.join("\n") !== oldLines.join("\n")) {
+      // fuzzy: find first occurrence of old block
+      const block = oldLines.join("\n");
+      const joined = lines.join("\n");
+      const idx = joined.indexOf(block);
+      if (idx < 0) throw new Error(`patch: hunk context mismatch at line ${hunk.oldStart}`);
+      const before = joined.slice(0, idx);
+      const after = joined.slice(idx + block.length);
+      const rebuilt = `${before}${newLines.join("\n")}${after}`.split("\n");
+      lines.length = 0;
+      lines.push(...rebuilt);
+      continue;
+    }
+    lines.splice(start, oldLines.length, ...newLines);
+  }
+  const out = lines.join("\n");
+  return endsWithNl || out === "" ? (out.endsWith("\n") || out === "" ? out : `${out}\n`) : out;
 }
 
 function shellInvocation(command: string): { command: string; args: string[] } {
