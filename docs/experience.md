@@ -57,6 +57,8 @@ Also always log `experience_recall_ready` (including empty bags). The same hit/u
 
 After forced study, the brief is written into the body: `study/<class>/…` (full note) plus provisional `rule/<class>/study/…` directives (`study_write: note=1 directives=N`). Next turns recall them via rule bags instead of re-guessing.
 
+See also [Individuation](individuation.md): study is the `blind` appraisal path; Light gains only after helped/exam.
+
 Code: `src/application/experience/experienceRecall.ts`, `experiencePulse.ts`, `weightedRecall.ts` (wired in `DriveSolve` / `Kernel.tick`).
 
 ## Four-hand hard transfer

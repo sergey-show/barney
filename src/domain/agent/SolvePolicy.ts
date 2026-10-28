@@ -1,6 +1,9 @@
 import { InvariantError } from "../shared/DomainError.ts";
 
 export type ExhaustedAction = "park";
+export type BlindAction = "study" | "self_run" | "act";
+export type ConstrainedAction = "park" | "act";
+export type ConflictAction = "fork" | "act";
 
 export type SolvePolicyProps = {
   minStrategies: number;
@@ -8,6 +11,12 @@ export type SolvePolicyProps = {
   maxSameFailure: number;
   reviewRequired: boolean;
   researchOn: Array<"gap" | "unknown_api" | "new_task_class">;
+  /** Individuation: path when appraisal verdict is blind. */
+  onBlind: BlindAction;
+  /** Individuation: path when limits dominate. */
+  onConstrained: ConstrainedAction;
+  /** Individuation: path when competing methods conflict. */
+  onConflict: ConflictAction;
   budgetTokens: number;
   budgetUsd: number;
   budgetMs: number;
@@ -21,6 +30,9 @@ export class SolvePolicy {
   readonly maxSameFailure: number;
   readonly reviewRequired: boolean;
   readonly researchOn: SolvePolicyProps["researchOn"];
+  readonly onBlind: BlindAction;
+  readonly onConstrained: ConstrainedAction;
+  readonly onConflict: ConflictAction;
   readonly budgetTokens: number;
   readonly budgetUsd: number;
   readonly budgetMs: number;
@@ -33,6 +45,9 @@ export class SolvePolicy {
     this.maxSameFailure = props.maxSameFailure ?? 2;
     this.reviewRequired = props.reviewRequired ?? true;
     this.researchOn = props.researchOn ?? ["gap", "unknown_api", "new_task_class"];
+    this.onBlind = props.onBlind ?? "study";
+    this.onConstrained = props.onConstrained ?? "park";
+    this.onConflict = props.onConflict ?? "fork";
     this.budgetTokens = props.budgetTokens ?? 200_000;
     this.budgetUsd = props.budgetUsd ?? 5;
     this.budgetMs = props.budgetMs ?? 30 * 60_000;
@@ -52,6 +67,9 @@ export class SolvePolicy {
       maxSameFailure: this.maxSameFailure,
       reviewRequired: this.reviewRequired,
       researchOn: [...this.researchOn],
+      onBlind: this.onBlind,
+      onConstrained: this.onConstrained,
+      onConflict: this.onConflict,
       budgetTokens: this.budgetTokens,
       budgetUsd: this.budgetUsd,
       budgetMs: this.budgetMs,

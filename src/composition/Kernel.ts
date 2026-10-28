@@ -52,6 +52,16 @@ import {
   transferMemoryKey,
 } from "../application/context/transferLedger.ts";
 import {
+  emptyLedger,
+  formatSelfLedger,
+  parseSelfLedger,
+  projectSamost,
+  pruneSelfLedger,
+  selfLedgerKey,
+  syncFromCapability,
+  upsertShadow,
+} from "../application/psyche/individuation.ts";
+import {
   cancelWakesForRun,
   dueWakes,
   formatWakes,
@@ -660,6 +670,29 @@ export class Kernel {
       tags: ["plasticity", "sleep"],
       sourceAgentId: agentId,
     }));
+    // Individuation: prune Light/Shadow ledger and resync from capability canon.
+    const ledgerNote = await this.memories.get(selfLedgerKey(agentId));
+    let ledger = ledgerNote ? parseSelfLedger(ledgerNote.body) : emptyLedger();
+    const capEntries = buildCapabilityMap({ skills: skillRecs });
+    ledger = pruneSelfLedger(syncFromCapability(ledger, capEntries));
+    await this.memories.save(new MemoryNote({
+      key: selfLedgerKey(agentId),
+      title: "Self ledger (Light/Shadow)",
+      body: formatSelfLedger(ledger),
+      tags: ["self", "individuation", "ledger", "plasticity"],
+      sourceAgentId: agentId,
+    }));
+    const samostNote = await this.memories.get(samostKey(agentId));
+    if (samostNote) {
+      const samost = projectSamost(parseSamost(samostNote.body), ledger);
+      await this.memories.save(new MemoryNote({
+        key: samostKey(agentId),
+        title: "Self",
+        body: formatSamost(samost),
+        tags: ["samost", "psyche", "individuation"],
+        sourceAgentId: agentId,
+      }));
+    }
   }
 
   private async runAutonomyDrill(
@@ -980,7 +1013,26 @@ export class Kernel {
   }
 
   async forkSession(runId: string, title?: string): Promise<Run> {
-    return this.sessionService.fork(runId, title);
+    const run = await this.sessionService.fork(runId, title);
+    const agentId = run.agentId;
+    const ledgerNote = await this.memories.get(selfLedgerKey(agentId));
+    let ledger = ledgerNote ? parseSelfLedger(ledgerNote.body) : emptyLedger();
+    ledger = upsertShadow(ledger, {
+      kind: "rejected",
+      claim: `Forked session branch: ${title?.trim() || "fork"} — prior path kept as alternative`,
+      refs: [`run:${runId}`, "path:fork"],
+      weight: 1,
+      pathChanged: true,
+    });
+    await this.memories.save(new MemoryNote({
+      key: selfLedgerKey(agentId),
+      title: "Self ledger (Light/Shadow)",
+      body: formatSelfLedger(ledger),
+      tags: ["self", "individuation", "ledger"],
+      sourceAgentId: agentId,
+      sourceRunId: runId,
+    }));
+    return run;
   }
 
   async switchBranch(runId: string, branchId: string): Promise<Run> {
@@ -1164,6 +1216,10 @@ export class Kernel {
       }
     }
     const experiencePulse = (await this.memories.get(`metrics/experience/${agent.id.value}`))?.body ?? null;
+    const ledgerNote = await this.memories.get(selfLedgerKey(agent.id.value));
+    const ledger = ledgerNote ? parseSelfLedger(ledgerNote.body) : emptyLedger();
+    const lightActive = ledger.light.filter((row) => row.status === "active");
+    const shadowActive = ledger.shadow.filter((row) => row.status === "active");
     return buildPsycheEvolution({
       shadow: samost.shadow,
       light: samost.light,
@@ -1175,6 +1231,11 @@ export class Kernel {
       dreamBody: dream?.body,
       dreamUpdatedAt: dream?.updatedAt,
       experiencePulse,
+      individuation: {
+        lightActive: lightActive.length,
+        shadowActive: shadowActive.length,
+        blinds: shadowActive.filter((row) => row.kind === "blind").length,
+      },
     });
   }
 

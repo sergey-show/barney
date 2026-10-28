@@ -54,11 +54,11 @@ export const TASK_STUDY_ACT_NUDGE = [
 
 /** Who-are-you / hello — skip forced web study. */
 export function isGreetingRoute(topic: string, message: string): boolean {
+  const msg = message.trim().toLowerCase();
   const text = `${topic}\n${message}`.toLowerCase();
-  if (/^(hi|hello|hey|привет|здравств)\b/.test(message.trim().toLowerCase()) && message.trim().length < 40) {
-    return true;
-  }
-  return /\b(who are you|кто ты|what(?:'s| is) your name|как тебя зовут|greeting)\b/i.test(text);
+  if (msg.length < 40 && /^(hi|hello|hey|привет|здравств)/i.test(msg)) return true;
+  // Avoid \b — JS word boundaries are unreliable for Cyrillic.
+  return /(who are you|кто ты|what(?:'s| is) your name|как тебя зовут|greeting)/i.test(text);
 }
 
 export type StudyWritePlan = {

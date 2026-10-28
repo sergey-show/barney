@@ -179,6 +179,22 @@ import {
   TASK_STUDY_ACT_NUDGE,
 } from "../experience/taskStudy.ts";
 import {
+  appraiseSelf,
+  demoteLightToShadow,
+  emptyLedger,
+  formatSelfLedger,
+  migrateSamostLines,
+  parseSelfLedger,
+  projectSamost,
+  renderAppraisalPrompt,
+  selfLedgerKey,
+  syncFromCapability,
+  upsertLight,
+  upsertShadow,
+  type SelfAppraisal,
+  type SelfLedger,
+} from "../psyche/individuation.ts";
+import {
   decideExperienceWrite,
   STRUCTURAL_FAIL_CLASSES,
 } from "../experience/experienceLayers.ts";
@@ -598,22 +614,22 @@ export class DriveSolve {
     if (ablation.recallExperience) {
       run.append("system", `experience_recall_ready · ${formatBagsCount(experienceBags)}`);
     }
+    const turnReuse = classifyReuse({
+      goalHash: goalHash(run.goal),
+      priorGoalHashes: priorHashes,
+      currentClass: run.taskClass,
+      recalledFromClasses: [
+        ...recalledMeta.map((r) => r.sourceClass),
+        ...relevantEpisodes.map((episode) => episode.taskClass),
+        ...skillBodyRecs
+          .filter((r) => r.status === "frozen" || r.status === "quarantine" || r.status === "verified")
+          .map((r) => r.bornFromClass || run.taskClass),
+      ],
+    });
     // Re-check after skill bags: still fresh+empty → force study even if planner said no.
     if (depth === 0 && ablation.recallExperience && !taskStudyForced) {
-      const lateReuse = classifyReuse({
-        goalHash: goalHash(run.goal),
-        priorGoalHashes: priorHashes,
-        currentClass: run.taskClass,
-        recalledFromClasses: [
-          ...recalledMeta.map((r) => r.sourceClass),
-          ...relevantEpisodes.map((episode) => episode.taskClass),
-          ...skillBodyRecs
-            .filter((r) => r.status === "frozen" || r.status === "quarantine" || r.status === "verified")
-            .map((r) => r.bornFromClass || run.taskClass),
-        ],
-      });
       const lateStudy = shouldForceTaskStudy({
-        reuse: lateReuse,
+        reuse: turnReuse,
         bags: experienceBags,
         researchOn: agent.solvePolicy.researchOn,
         allowSkip: isGreetingRoute(routed?.topic ?? "", input.message),
@@ -623,6 +639,43 @@ export class DriveSolve {
         routed = { ...(routed ?? { topic: "", short: false, needResearch: true, analysis: "", plan: [] }), short: false, needResearch: true };
         run.append("system", lateStudy.line);
       }
+    }
+    let selfLedger = ablation.learnBody
+      ? await this.loadSelfLedger(agent.id.value, psyche.samost)
+      : emptyLedger();
+    let appraisal: SelfAppraisal | null = null;
+    if (depth === 0 && ablation.recallExperience) {
+      const capEntries = buildCapabilityMap({ skills: skillBodyRecs });
+      selfLedger = syncFromCapability(selfLedger, capEntries);
+      appraisal = appraiseSelf({
+        query: `${run.goal}\n${input.message}`,
+        reuse: turnReuse,
+        bags: experienceBags,
+        ledger: selfLedger,
+        capability: capEntries,
+        allowSkip: isGreetingRoute(routed?.topic ?? "", input.message),
+        onBlind: agent.solvePolicy.onBlind,
+        onConstrained: agent.solvePolicy.onConstrained,
+        onConflict: agent.solvePolicy.onConflict,
+      });
+      run.append("system", appraisal.line);
+      if (appraisal.path === "study" && agent.solvePolicy.researchOn.includes("new_task_class")) {
+        taskStudyForced = true;
+        routed = {
+          ...(routed ?? { topic: "", short: false, needResearch: true, analysis: "", plan: [] }),
+          short: false,
+          needResearch: true,
+        };
+        selfLedger = upsertShadow(selfLedger, {
+          kind: "blind",
+          claim: `Blind appraisal on: ${clipText(run.goal, 100)}`,
+          refs: [`class:${run.taskClass}`, `goal:${goalHash(run.goal)}`],
+          weight: 1,
+        });
+      }
+      psyche.samost = projectSamost(psyche.samost, selfLedger);
+      await this.flushPsyche(run, agent.id.value, psyche);
+      await this.saveSelfLedger(run, agent.id.value, selfLedger);
     }
     const failedCalls = new Set<string>();
     const familyFails = new Map<string, number>();
@@ -648,6 +701,13 @@ export class DriveSolve {
       }
     }
 
+    const appraisalBlock = appraisal ? renderAppraisalPrompt(appraisal) : "";
+    const parkBlock = appraisal?.path === "park"
+      ? "PARK: constraints dominate. Do not invent workarounds; narrow the ask or wait for operator grant."
+      : "";
+    const forkBlock = appraisal?.path === "fork"
+      ? "FORK: competing methods — prefer exploring an alternate session branch before committing."
+      : "";
     const actMessages: ChatMessage[] = [
       {
         role: "system",
@@ -663,7 +723,7 @@ export class DriveSolve {
           sessionDir: run.sessionPath,
           depth,
           skills: skillCatalog(this.skills, `${run.goal}\n${input.message}`, quarantinedSkills),
-          memory: memoryNote,
+          memory: [memoryNote, appraisalBlock, parkBlock, forkBlock].filter(Boolean).join("\n\n"),
           projectContext: loadProjectContextFiles(run.worktreePath),
         }),
       },
@@ -1027,6 +1087,29 @@ export class DriveSolve {
       if (skillOutcomes.falseSkills.length) {
         run.append("system", `skill_false: 1 · names=${skillOutcomes.falseSkills.join(",")}`);
       }
+      selfLedger = await this.emitIndividuation({
+        ledger: selfLedger,
+        run,
+        agentId: agent.id.value,
+        learnedBody: learned.body,
+        outcomeOk,
+        pe: pe.error,
+        klass,
+        reuse,
+        recallHit: recallSignal.recallHit,
+        recallUsed: recallSignal.recallUsed,
+        lessonTrail,
+        familyFails,
+        skillPromoted: skillOutcomes.promoted,
+        skillFalse: skillOutcomes.falseSkills,
+        skillReused: skillOutcomes.reused,
+        spiOk,
+        extraApproaches: extra.n,
+        overflowed: run.transcript.some((item) =>
+          item.kind === "system" && /overflow|context (too )?long|pack.*pressure/i.test(item.text)),
+      });
+      psyche.samost = projectSamost(psyche.samost, selfLedger);
+      await this.flushPsyche(run, agent.id.value, psyche);
     }
     const recalledSkillNames = new Set(extractRecalledSkillNames(experienceBags));
     const ruleConfidences = recalledMeta
@@ -2555,6 +2638,132 @@ export class DriveSolve {
 
   private async become(message: string): Promise<void> {
     await this.learning.commitBiography(message);
+  }
+
+  private async loadSelfLedger(agentId: string, samost: import("../psyche/samost.ts").Samost): Promise<SelfLedger> {
+    const note = await this.memory.get(selfLedgerKey(agentId));
+    let ledger = note ? parseSelfLedger(note.body) : emptyLedger();
+    ledger = migrateSamostLines(ledger, samost);
+    return ledger;
+  }
+
+  private async saveSelfLedger(run: Run, agentId: string, ledger: SelfLedger): Promise<void> {
+    await this.remember(run, agentId, {
+      key: selfLedgerKey(agentId),
+      title: "Self ledger (Light/Shadow)",
+      body: formatSelfLedger(ledger),
+      tags: ["self", "individuation", "ledger"],
+    });
+  }
+
+  /** Typed Light/Shadow upserts after a turn — projection only, capability stays canon. */
+  private async emitIndividuation(input: {
+    ledger: SelfLedger;
+    run: Run;
+    agentId: string;
+    learnedBody: string;
+    outcomeOk: boolean;
+    pe: 0 | 1;
+    klass: string;
+    reuse: import("../context/transferLedger.ts").ReuseKind;
+    recallHit: boolean;
+    recallUsed: boolean;
+    lessonTrail: LessonTrail;
+    familyFails: Map<string, number>;
+    skillPromoted: string[];
+    skillFalse: string[];
+    skillReused: string[];
+    spiOk: boolean | null;
+    extraApproaches: number;
+    overflowed: boolean;
+  }): Promise<SelfLedger> {
+    let ledger = input.ledger;
+    const classRef = `class:${input.run.taskClass}`;
+    if (input.pe === 1 || !input.outcomeOk) {
+      ledger = upsertShadow(ledger, {
+        kind: "fail",
+        claim: clipText(input.learnedBody || input.klass || "fail", 160),
+        refs: [classRef, input.klass !== "general" ? `mode:${input.klass}` : ""].filter(Boolean),
+        weight: 1 + (input.pe === 1 ? 1 : 0),
+      });
+    }
+    if (input.recallHit && !input.recallUsed) {
+      ledger = upsertShadow(ledger, {
+        kind: "unused",
+        claim: "Recall hit but not used in plan/act/tools",
+        refs: [classRef, "recall:unused"],
+        weight: 1,
+      });
+    }
+    if (input.extraApproaches >= 1 && input.lessonTrail.failedFamily) {
+      ledger = upsertShadow(ledger, {
+        kind: "rejected",
+        claim: `Rejected/saturated family: ${input.lessonTrail.failedFamily}`,
+        refs: [`fam:${input.lessonTrail.failedFamily}`],
+        weight: 1,
+        pathChanged: true,
+      });
+    }
+    if (input.spiOk === false || input.overflowed) {
+      ledger = upsertShadow(ledger, {
+        kind: "limit",
+        claim: input.overflowed ? "Context/overflow limit" : "SPI verify limit",
+        refs: [input.overflowed ? "limit:overflow" : "limit:spi"],
+        weight: 2,
+      });
+    }
+    if (input.outcomeOk && input.lessonTrail.recoveredBy && input.lessonTrail.failedFamily) {
+      ledger = upsertLight(ledger, {
+        kind: "method",
+        claim: `Recover via ${input.lessonTrail.recoveredBy} after ${input.lessonTrail.failedFamily}`,
+        refs: [`method:${input.lessonTrail.recoveredBy}`, classRef],
+        confidence: 0.55,
+        band: "ok",
+        helped: true,
+        transfer: input.reuse === "transfer",
+      });
+    }
+    if (input.outcomeOk && input.recallUsed) {
+      ledger = upsertLight(ledger, {
+        kind: "domain",
+        claim: clipText(`Helped on: ${input.run.goal}`, 140),
+        refs: [classRef, `goal:${goalHash(input.run.goal)}`],
+        confidence: 0.5,
+        band: "ok",
+        helped: true,
+        transfer: input.reuse === "transfer",
+      });
+    }
+    for (const name of input.skillPromoted) {
+      ledger = upsertLight(ledger, {
+        kind: "skill",
+        claim: `Skill ${name} promoted`,
+        refs: [`skill:${name}`],
+        confidence: 0.65,
+        band: "strong",
+        helped: true,
+      });
+    }
+    for (const name of input.skillReused) {
+      ledger = upsertLight(ledger, {
+        kind: "skill",
+        claim: `Skill ${name} reused`,
+        refs: [`skill:${name}`],
+        confidence: 0.55,
+        band: "ok",
+        helped: true,
+        transfer: input.reuse === "transfer",
+      });
+    }
+    for (const name of input.skillFalse) {
+      ledger = demoteLightToShadow(ledger, `skill:${name}`, "false skill on exam");
+    }
+    await this.saveSelfLedger(input.run, input.agentId, ledger);
+    input.run.append(
+      "system",
+      `individuation_write: light=${ledger.light.filter((r) => r.status === "active").length} shadow=${ledger.shadow.filter((r) => r.status === "active").length}`,
+    );
+    return ledger;
   }
 
   private async remember(run: Run, agentId: string, input: { key: string; title: string; body: string; tags: string[] }): Promise<void> {

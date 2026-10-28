@@ -17,6 +17,7 @@ The kernel in `src/` does not change for a task. New capability lives in `~/.bar
 | [Autonomy](autonomy.md) | Agenda law: gaps → idle self-run → drill |
 | [Wake](wake.md) | Deferred work: process watch, wall clock; no background reasoning |
 | [Plasticity](plasticity.md) | Cortical plasticity: reconsolidation, prune, sleep, duel |
+| [Individuation](individuation.md) | Light × Shadow appraisal: spectrum, blinds, deterministic path |
 | [Constrain](constrain.md) | OS sandbox defaults + optional Docker profile |
 | [SPI](spi.md) | Body providers on stable kernel ports (quarantine→exam) |
 | [Oracle](oracle.md) | Soft-domain PE/ZPD grounding without LLM-as-judge |

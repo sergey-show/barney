@@ -50,6 +50,7 @@ test("buildPsycheEvolution is read-only aggregate", () => {
   expect(evo.shadowCount).toBe(2);
   expect(evo.skills.quarantineCount).toBe(1);
   expect(evo.experiencePulse).toContain("experience_pulse:");
+  expect(evo.individuation).toBeNull();
   expect(evo.agenda.nextGoal).toBe("drill redact");
   expect(evo.lastDreamSummary).toContain("house tokens");
   expect(evo.frustration).toBe(2);

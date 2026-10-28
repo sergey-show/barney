@@ -34,6 +34,12 @@ export type PsycheEvolution = {
   designSealed: boolean;
   /** Idle experience pulse (hit/used/pe rates + transfer counts). */
   experiencePulse: string | null;
+  /** Individuation ledger summary. */
+  individuation: {
+    lightActive: number;
+    shadowActive: number;
+    blinds: number;
+  } | null;
   updatedAt: string;
 };
 
@@ -92,6 +98,7 @@ export function buildPsycheEvolution(input: {
   dreamBody?: string;
   dreamUpdatedAt?: string;
   experiencePulse?: string | null;
+  individuation?: PsycheEvolution["individuation"];
   now?: string;
 }): PsycheEvolution {
   const buckets = bucketSkills(input.skills);
@@ -123,6 +130,7 @@ export function buildPsycheEvolution(input: {
     },
     designSealed: input.designSealed,
     experiencePulse: input.experiencePulse ?? null,
+    individuation: input.individuation ?? null,
     updatedAt: input.now ?? new Date().toISOString(),
   };
 }

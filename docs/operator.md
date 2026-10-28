@@ -60,6 +60,7 @@
 |---|---|
 | Experience recall | Always `experience_recall_ready` + episode `recall_*`; short→full when skill/rule bags present |
 | Task study | `reuse=fresh` + empty recall bags → force deep research before act; `study_write` saves study note + provisional rules for next recall |
+| Individuation | `self_appraisal:` Light×Shadow → act/study/fork/park; ledger `self/ledger/*`; plastic prune |
 | Experience pulse | Idle `metrics/experience/*` + psyche `experiencePulse` |
 | SPI verify-before-done | Active verify providers gate pass inside persist (reopen on fail) |
 | Stall → tactic | Flat progress rotates Prefer / can saturate failed family |
