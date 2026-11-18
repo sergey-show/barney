@@ -25,7 +25,7 @@ export class RoleRouter implements LlmPort {
   async complete(role: Role, messages: ChatMessage[], options?: CompleteOptions): Promise<ChatResult> {
     const started = Date.now();
     const { provider, model } = await resolveBinding(this.catalog, role);
-    const normalized = collapseSystemMessages(messages);
+    const normalized = ensureUserQuery(collapseSystemMessages(messages));
     const result = await clientFor(provider).complete({
       role,
       model,
@@ -69,6 +69,23 @@ export function collapseSystemMessages(messages: ChatMessage[]): ChatMessage[] {
   const systems = messages.filter((m) => m.role === "system").map((m) => m.content.trim()).filter(Boolean);
   const rest = messages.filter((m) => m.role !== "system");
   return systems.length ? [{ role: "system", content: systems.join("\n\n") }, ...rest] : rest;
+}
+
+/**
+ * Qwen 3.8 / Ollama reject chats with no plain `user` turn. Server-side context
+ * pruning can also drop an earlier user while keeping trailing tool messages —
+ * so pin a non-empty user as the final turn when the tail is assistant/tool.
+ */
+export function ensureUserQuery(
+  messages: ChatMessage[],
+  fallback = "Continue from the tool results and finish the task.",
+): ChatMessage[] {
+  const last = messages.at(-1);
+  const lastIsPlainUser = last?.role === "user" && String(last.content ?? "").trim().length > 0;
+  if (lastIsPlainUser) return messages;
+  const hasUser = messages.some((m) => m.role === "user" && String(m.content ?? "").trim().length > 0);
+  if (hasUser && last?.role !== "tool" && last?.role !== "assistant") return messages;
+  return [...messages, { role: "user", content: fallback }];
 }
 
 export async function seedBuiltinProviders(catalog: ProviderCatalog): Promise<void> {

@@ -16,6 +16,16 @@ Shell-инструменты по возможности запускаются 
 
 Код: `src/infrastructure/sandbox/OsSandbox.ts`.
 
+## Профили
+
+| Профиль (`BARNEY_SANDBOX_PROFILE`) | Поведение |
+|---|---|
+| `workspace_write` (default) | Worktree writable |
+| `read_only` | Без записи в worktree через OS-обёртку |
+| `full` | Без OS-обёртки |
+
+См. также [Harness](harness.ru.md).
+
 ## Опциональный Docker
 
 См. [`deploy/docker/sandbox/`](../deploy/docker/sandbox/README.md).

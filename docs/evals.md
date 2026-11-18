@@ -11,6 +11,7 @@ How to run the evaluation suites. Kernel in `src/`, adapters in `evals/`. Secret
 | [Unit tests](#3-unit-tests) | Verifiers and model-string parsing | no | no |
 | [Harbor](#4-harbor-terminal-bench) | Terminal-Bench success in Docker | yes | yes |
 | [Live-learn](#5-live-learn) | Two turns on one body | yes | no |
+| [Live-harness](#6-live-harness) | Approval ladder + flag deliverable | yes | no |
 
 Harbor scores task success. Body experience is four-hand (see [Experience](experience.md)).
 
@@ -131,4 +132,16 @@ One body, two turns: first, `openssl` on `PATH` always fails; then “write a sc
 bun evals/live-learn.ts --model ollama/qwen3.8:latest
 ```
 
-[Experience](experience.md) · [Docs](README.md).
+---
+
+## 6. Live-harness
+
+Case `house-harness-flag`: write `harvest.mjs` → `flag.txt`, then `rm -rf junk/build` (high-risk → approval ladder). The probe auto-approves and records amendments.
+
+```bash
+bun evals/live-harness.ts --model ollama/qwen3.8:27b-mlx --out ./tmp/harness-proof
+```
+
+Pass when: exact flag, `junk/build` gone, seed/harvest kept, and at least one high-risk `approval_needed`.
+
+[Harness](harness.md) · [Experience](experience.md) · [Docs](README.md).

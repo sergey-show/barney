@@ -991,6 +991,38 @@ export class Kernel {
     return pathAllowedByGrants(absPath, this.outsideGrants.get(runId) ?? []);
   }
 
+  /** Session tool approval (+ optional durable exec-policy amendment). */
+  async approveTool(
+    runId: string,
+    signature: string,
+    opts?: { command?: string; amend?: boolean },
+  ): Promise<{ signature: string; amended: boolean }> {
+    const run = await this.runs.get(runId);
+    return this.driveSolve.approveTool({
+      runId,
+      signature,
+      command: opts?.command,
+      amend: opts?.amend ?? true,
+      agentId: run?.agentId,
+    });
+  }
+
+  denyTool(runId: string, signature: string): void {
+    this.driveSolve.denyTool(runId, signature);
+  }
+
+  answerElicitation(runId: string, text: string): boolean {
+    return this.driveSolve.answerElicitation(runId, text);
+  }
+
+  async consolidateMemory(agentId?: string): Promise<{ bytes: number; kept: number }> {
+    const agent = agentId
+      ? await this.agents.get(agentId)
+      : await this.ensureAgent.execute();
+    if (!agent) throw new Error("agent missing");
+    return this.driveSolve.consolidateAgentMemory(agent.id.value);
+  }
+
   workspaceFor(root: string, runId?: string): NodeWorkspace {
     return new NodeWorkspace(
       root,

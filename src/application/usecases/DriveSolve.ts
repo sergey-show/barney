@@ -88,13 +88,42 @@ import {
   formatFileListsForCompact,
   structuredCompactSystemPrompt,
 } from "../context/compactStructured.ts";
+import {
+  formatWorldStateForPrompt,
+  mergeFileListsIntoWorldState,
+  parseWorldStateFromCompact,
+  worldStateSystemPrompt,
+  type WorldState,
+} from "../context/worldState.ts";
+import { runRiskReviewPass, destructiveToolNames } from "../context/riskReviewPass.ts";
+import { consolidateMemories } from "../experience/memoryConsolidator.ts";
 import { isContextOverflowError, isOutputLengthFinish } from "../context/overflowRecovery.ts";
 import { clipText, packSession, redactSecrets } from "../context/packSession.ts";
 import { loadProjectContextFiles } from "../context/projectContext.ts";
 import { HTML_OFFLOAD_CHARS, offloadToolOutput } from "../context/toolOutputOffload.ts";
 import { bindFsWriteArgs, extractToolEvidence } from "../context/toolEvidence.ts";
-import { MessageQueue } from "../services/MessageQueue.ts";
-import { CODEMODE_ALLOWED_DEFAULT, runCodemodeScript } from "../tools/codemode.ts";
+import { MessageQueue, type SteerSource } from "../services/MessageQueue.ts";
+import { ElicitationGate } from "../services/ElicitationGate.ts";
+import { AgentMailboxBus, formatMailForPrompt } from "../session/AgentMailbox.ts";
+import { resolveAgentRole, roleAllowsTool } from "../session/AgentRoleSpec.ts";
+import { WorkspaceDeltaSteer } from "../services/WorkspaceDeltaSteer.ts";
+import {
+  approvalModeFromEnv,
+  approvalSignature,
+  decideApproval,
+} from "../../domain/guard/ApprovalLadder.ts";
+import {
+  evaluateExecPolicy,
+  execPolicyMemoryKey,
+  formatExecPolicy,
+  isTrustedByAmendments,
+  parseExecPolicy,
+  proposeAmendmentFromApproval,
+  upsertAmendment,
+  type ExecPolicyStore,
+  emptyExecPolicy,
+} from "../../domain/guard/ExecPolicyAmendment.ts";
+import { codemodeAllowlist, codemodeProfileFromEnv, runCodemodeScript } from "../tools/codemode.ts";
 import type { McpExposure } from "../mcp/mcpConfig.ts";
 import { visibleAssistantText } from "../../infrastructure/llm/visibleReply.ts";
 import { formatResearchBrief, runDeepResearch } from "../research/DeepResearch.ts";
@@ -249,6 +278,15 @@ export class DriveSolve {
   private readonly liveReplies = new Map<string, string>();
   /** Mid-run steer / follow-up queues. */
   readonly queues = new MessageQueue();
+  /** Mid-tool operator questions / approvals. */
+  readonly elicitation = new ElicitationGate();
+  /** Cross-agent mail for spawn/delegate coordination. */
+  readonly mailbox = new AgentMailboxBus();
+  private readonly sessionAllows = new Map<string, Set<string>>();
+  private readonly sessionDenies = new Map<string, Set<string>>();
+  private readonly worldStates = new Map<string, WorldState>();
+  private readonly workspaceWatchers = new Map<string, WorkspaceDeltaSteer>();
+  private readonly agentRoles = new Map<string, string>();
 
   constructor(
     private readonly agents: AgentRepository,
@@ -347,14 +385,17 @@ export class DriveSolve {
       ...packed.recent.map((m) => `${m.role}: ${m.content}`),
     ].join("\n\n").slice(0, 24_000);
     const raw = await this.completeRole(run, "planner", [
-      { role: "system", content: structuredCompactSystemPrompt() },
+      { role: "system", content: `${structuredCompactSystemPrompt()}\n\n${worldStateSystemPrompt()}` },
       { role: "user", content: body || run.goal },
     ], { signal });
     run.budget.charge(raw.tokens, raw.usd);
-    const item = run.markSummary(raw.text.trim() || "(empty summary)");
+    const summaryText = raw.text.trim() || "(empty summary)";
+    const world = mergeFileListsIntoWorldState(parseWorldStateFromCompact(summaryText, run.goal), files);
+    this.worldStates.set(runId, world);
+    const item = run.markSummary(`${summaryText}\n\n${formatWorldStateForPrompt(world)}`);
     this.events.publish([
       event("run.transcript_item", { runId: run.id.value, item }),
-      event("run.compacted", { runId: run.id.value }),
+      event("run.compacted", { runId: run.id.value, worldState: true }),
     ]);
     await this.runs.save(run);
     return run;
@@ -375,14 +416,127 @@ export class DriveSolve {
     this.syncMcpTools(tools);
   }
 
-  enqueueSteer(runId: string, text: string): void {
-    this.queues.enqueueSteer(runId, text);
-    this.events.publish([event("run.steer_queued", { runId, text: text.slice(0, 200) })]);
+  enqueueSteer(runId: string, text: string, source: SteerSource = "operator"): void {
+    const result = this.queues.enqueueSteer(runId, text, source);
+    if (!result.ok) return;
+    this.events.publish([event("run.steer_queued", { runId, text: text.slice(0, 200), source })]);
   }
 
   enqueueFollowUp(runId: string, text: string): void {
-    this.queues.enqueueFollowUp(runId, text);
+    const result = this.queues.enqueueFollowUp(runId, text);
+    if (!result.ok) return;
     this.events.publish([event("run.followup_queued", { runId, text: text.slice(0, 200) })]);
+  }
+
+  /** Operator answers the oldest open elicitation for this run. */
+  answerElicitation(runId: string, text: string): boolean {
+    const record = this.elicitation.answerSession(runId, text);
+    if (!record) return false;
+    this.events.publish([event("run.elicitation_answered", {
+      runId,
+      id: record.id,
+      answer: text.slice(0, 200),
+    })]);
+    return true;
+  }
+
+  /**
+   * Session allow for a tool signature / command prefix.
+   * Optionally persists an exec-policy amendment and Light claim.
+   */
+  async approveTool(input: {
+    runId: string;
+    signature: string;
+    command?: string;
+    amend?: boolean;
+    agentId?: string;
+  }): Promise<{ signature: string; amended: boolean }> {
+    const allows = this.sessionAllows.get(input.runId) ?? new Set<string>();
+    allows.add(input.signature);
+    this.sessionAllows.set(input.runId, allows);
+    this.elicitation.answerSession(input.runId, `allow ${input.signature}`);
+    let amended = false;
+    if (input.amend && input.command && input.agentId) {
+      const proposal = proposeAmendmentFromApproval(input.command, "operator");
+      if (proposal) {
+        const store = await this.loadExecPolicy(input.agentId);
+        const next = upsertAmendment(store, proposal);
+        await this.saveExecPolicy(input.agentId, next);
+        amended = true;
+        const run = await this.runs.get(input.runId);
+        if (run) {
+          const samostNote = await this.memory.get(samostKey(input.agentId));
+          const samost = samostNote ? parseSamost(samostNote.body) : seedSamost();
+          let ledger = await this.loadSelfLedger(input.agentId, samost);
+          ledger = upsertLight(ledger, {
+            kind: "tooling",
+            claim: `Trusted exec prefix: ${proposal.prefix}`,
+            refs: [`policy:${proposal.id}`, `cmd:${proposal.prefix}`],
+            confidence: 0.6,
+            band: "ok",
+            helped: true,
+          });
+          await this.saveSelfLedger(run, input.agentId, ledger);
+        }
+      }
+    }
+    this.events.publish([event("run.approval_granted", {
+      runId: input.runId,
+      signature: input.signature,
+      amended,
+    })]);
+    return { signature: input.signature, amended };
+  }
+
+  denyTool(runId: string, signature: string): void {
+    const denies = this.sessionDenies.get(runId) ?? new Set<string>();
+    denies.add(signature);
+    this.sessionDenies.set(runId, denies);
+    this.elicitation.answerSession(runId, `deny ${signature}`);
+    this.events.publish([event("run.approval_denied", { runId, signature })]);
+  }
+
+  setAgentRole(agentId: string, roleName: string): void {
+    this.agentRoles.set(agentId, roleName);
+  }
+
+  worldState(runId: string): WorldState | undefined {
+    return this.worldStates.get(runId);
+  }
+
+  /** Poll worktree mtimes and queue a tagged steer when files change. */
+  pollWorkspaceDelta(runId: string, root: string): string | null {
+    let watcher = this.workspaceWatchers.get(runId);
+    if (!watcher) {
+      watcher = new WorkspaceDeltaSteer({ root });
+      watcher.baseline();
+      this.workspaceWatchers.set(runId, watcher);
+      return null;
+    }
+    const { steerText } = watcher.poll();
+    if (steerText) this.enqueueSteer(runId, steerText, "workspace_delta");
+    return steerText;
+  }
+
+  async consolidateAgentMemory(agentId: string, limit = 40): Promise<{ bytes: number; kept: number }> {
+    const notes = await this.memory.recent(limit);
+    const mine = notes.map((n) => ({
+      key: n.key,
+      title: n.title,
+      body: n.body,
+      tags: n.tags,
+      updatedAt: n.updatedAt,
+    }));
+    const consolidated = consolidateMemories(mine);
+    if (!consolidated.summary.trim()) return { bytes: 0, kept: 0 };
+    await this.memory.save(new MemoryNote({
+      key: `memory/summary/${agentId}`,
+      title: "Consolidated memory",
+      body: consolidated.summary,
+      tags: ["memory", "consolidated"],
+      sourceAgentId: agentId,
+    }));
+    return { bytes: consolidated.bytes, kept: consolidated.kept };
   }
 
   /** Optional Body LSP (BARNEY_LSP=1) — diagnostics enter review evidence, not Core. */
@@ -419,6 +573,11 @@ export class DriveSolve {
       return this.sealDesign(run, agent, input.message);
     }
     if (depth === 0) {
+      const mail = formatMailForPrompt(this.mailbox.drain(run.agentId));
+      if (mail) run.append("system", mail);
+      const world = this.worldStates.get(run.id.value);
+      if (world) run.append("system", formatWorldStateForPrompt(world));
+      this.pollWorkspaceDelta(run.id.value, run.worktreePath);
       throwIfAborted();
       await this.maybeAutoCompact(run, input.signal);
       const healed = await this.learning.healSkillLocks(agent);
@@ -896,8 +1055,33 @@ export class DriveSolve {
     } else if (run.status === "ready" && review.verdict === "pass") {
       const gated = await this.gateSpiVerify(run, artifactEvidence(run));
       spiOk = gated.ok;
-      if (gated.ok === false) {
-        review = { ...review, verdict: "fail", missing: gated.detail || "SPI verify failed" };
+      if (gated.ok !== false) {
+        const risk = runRiskReviewPass({
+          review,
+          transcriptTexts: run.transcript.map((item) => item.text),
+          destructiveTools: destructiveToolNames(
+            run.transcript
+              .filter((item) => item.kind === "console")
+              .map((item) => item.text.split(/\s+/)[0] ?? ""),
+          ),
+          spiOk,
+          worldRisks: this.worldStates.get(run.id.value)?.risks,
+          strict: agent?.solvePolicy.riskReviewStrict ?? true,
+        });
+        run.append("system", risk.line);
+        if (risk.reopen) {
+          review = {
+            ...review,
+            verdict: risk.verdict === "pass" ? "fail" : risk.verdict,
+            summary: risk.summary,
+            missing: risk.summary,
+          };
+        }
+      }
+      if (gated.ok === false || review.verdict !== "pass") {
+        if (gated.ok === false) {
+          review = { ...review, verdict: "fail", missing: gated.detail || "SPI verify failed" };
+        }
         const persisted = await this.persistUntilDone({
           run,
           actMessages,
@@ -1988,6 +2172,96 @@ export class DriveSolve {
     });
     if (gate.blocked) return gate.reason ?? "BLOCKED by Self.";
 
+    const roleName = this.agentRoles.get(run.agentId);
+    if (roleName) {
+      const role = resolveAgentRole(roleName);
+      if (!roleAllowsTool(role, call.name)) {
+        return `BLOCKED by role ${role.name}: tool ${call.name} denied.`;
+      }
+    }
+
+    const policy = agent?.solvePolicy;
+    const approvalMode = policy?.approvalMode ?? approvalModeFromEnv();
+    const execStore = await this.loadExecPolicy(run.agentId);
+    const cmd = String(call.arguments?.command ?? call.arguments?.cmd ?? "");
+    if ((call.name === "shell" || call.name === "process_spawn") && cmd) {
+      const exec = evaluateExecPolicy(cmd, execStore.amendments);
+      if (!exec.allowed) return `error: blocked: ${exec.reason}. Use fs_* inside the worktree.`;
+    }
+    const trustedPrefixes = execStore.amendments
+      .filter((row) => row.kind === "allow_prefix")
+      .map((row) => `${call.name}:${row.prefix}`);
+    if (cmd && isTrustedByAmendments(cmd, execStore.amendments)) {
+      trustedPrefixes.push(approvalSignature(call.name, call.arguments));
+    }
+    const approval = decideApproval({
+      mode: approvalMode,
+      toolName: call.name,
+      args: call.arguments,
+      trustedPrefixes,
+      sessionAllows: this.sessionAllows.get(run.id.value),
+      sessionDenies: this.sessionDenies.get(run.id.value),
+    });
+    if (approval.decision === "deny") {
+      return `BLOCKED by approval: ${approval.reason} (${approval.signature})`;
+    }
+    if (approval.decision === "ask" && depth === 0) {
+      if (/^(1|true|yes)$/i.test(String(process.env.BARNEY_AUTO_APPROVE_TOOLS ?? ""))) {
+        await this.approveTool({
+          runId: run.id.value,
+          signature: approval.signature,
+          command: cmd || undefined,
+          amend: false,
+          agentId: run.agentId,
+        });
+      } else {
+        this.pollWorkspaceDelta(run.id.value, run.worktreePath);
+        const elic = this.elicitation.register({
+          sessionId: run.id.value,
+          prompt: `Approve ${approval.signature}? Reply allow/deny. Risk=${approval.risk}.`,
+          kind: "approval",
+          meta: {
+            signature: approval.signature,
+            tool: call.name,
+            command: cmd.slice(0, 200),
+          },
+        });
+        this.events.publish([event("run.approval_needed", {
+          runId: run.id.value,
+          id: elic.id,
+          signature: approval.signature,
+          risk: approval.risk,
+          tool: call.name,
+        })]);
+        run.append(
+          "system",
+          `approval_needed: ${approval.signature} · /approve ${approval.signature} or /deny ${approval.signature}`,
+        );
+        const timeoutMs = Number(process.env.BARNEY_ELICITATION_MS ?? 120_000);
+        const waited = await this.elicitation.wait(elic.id, timeoutMs);
+        if (waited.status !== "answered") {
+          return `BLOCKED by approval: elicitation ${waited.status} (${approval.signature})`;
+        }
+        const answer = (waited.record.answer ?? "").toLowerCase();
+        if (/\bdeny|reject|no\b/.test(answer)) {
+          this.denyTool(run.id.value, approval.signature);
+          return `BLOCKED by approval: operator denied (${approval.signature})`;
+        }
+        if (!/\ballow|yes|ok|approve\b/.test(answer) && !answer.includes(approval.signature.toLowerCase())) {
+          if (!answer.startsWith("allow") && answer !== "y") {
+            return `BLOCKED by approval: unclear answer (${approval.signature})`;
+          }
+        }
+        await this.approveTool({
+          runId: run.id.value,
+          signature: approval.signature,
+          command: cmd || undefined,
+          amend: /\bamend|remember|always\b/.test(answer),
+          agentId: run.agentId,
+        });
+      }
+    }
+
     if (call.name === "tool_search") {
       return this.toolRegistry.searchMcp(String(call.arguments?.query ?? ""));
     }
@@ -1996,14 +2270,14 @@ export class DriveSolve {
       if (!script.trim()) return "error: script required";
       const result = await runCodemodeScript({
         script,
-        allowed: CODEMODE_ALLOWED_DEFAULT,
+        allowed: codemodeAllowlist(codemodeProfileFromEnv()),
         call: async (name, args) => {
           const nested: ToolCall = {
             id: `${call.id}_${name}_${Date.now()}`,
             name,
             arguments: args,
           };
-          return this.dispatchTool(run, ws, nested, signal, depth);
+          return this.dispatchTool(run, ws, nested, signal, depth + 1);
         },
       });
       return result.ok
@@ -2768,6 +3042,21 @@ export class DriveSolve {
 
   private async remember(run: Run, agentId: string, input: { key: string; title: string; body: string; tags: string[] }): Promise<void> {
     await this.learning.remember(run, agentId, input);
+  }
+
+  private async loadExecPolicy(agentId: string): Promise<ExecPolicyStore> {
+    const note = await this.memory.get(execPolicyMemoryKey(agentId));
+    return note ? parseExecPolicy(note.body) : emptyExecPolicy();
+  }
+
+  private async saveExecPolicy(agentId: string, store: ExecPolicyStore): Promise<void> {
+    await this.memory.save(new MemoryNote({
+      key: execPolicyMemoryKey(agentId),
+      title: "Exec policy amendments",
+      body: formatExecPolicy(store),
+      tags: ["policy", "exec", "amendment"],
+      sourceAgentId: agentId,
+    }));
   }
 }
 

@@ -119,6 +119,14 @@ function toOpenAiMessages(messages: ChatMessage[]): unknown[] {
     }
     out.push({ role: m.role, content: m.content });
   }
+  const last = out.at(-1) as { role?: string; content?: unknown } | undefined;
+  const lastIsPlainUser = last?.role === "user" && (
+    (typeof last.content === "string" && last.content.trim().length > 0)
+    || (Array.isArray(last.content) && last.content.length > 0)
+  );
+  if (!lastIsPlainUser) {
+    out.push({ role: "user", content: "Continue from the tool results and finish the task." });
+  }
   return out;
 }
 

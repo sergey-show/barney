@@ -19,6 +19,7 @@ The kernel in `src/` does not change for a task. New capability lives in `~/.bar
 | [Plasticity](plasticity.md) | Cortical plasticity: reconsolidation, prune, sleep, duel |
 | [Individuation](individuation.md) | Light × Shadow appraisal: spectrum, blinds, deterministic path |
 | [Constrain](constrain.md) | OS sandbox defaults + optional Docker profile |
+| [Harness](harness.md) | Approval ladder, elicitation, world-state, risk review, roles/mailbox |
 | [SPI](spi.md) | Body providers on stable kernel ports (quarantine→exam) |
 | [Oracle](oracle.md) | Soft-domain PE/ZPD grounding without LLM-as-judge |
 

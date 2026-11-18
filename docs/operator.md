@@ -45,7 +45,10 @@
 |---|---|
 | Overflow retry | context overflow → compact + one retry |
 | Tool offload | long tool stdout → `.barney/tool-out/*` + `full_output_path` |
-| Steer / followUp | `whenBusy: steer\|followUp` queues mid-run / after settle |
+| Steer / followUp | `whenBusy: steer\|followUp` queues mid-run / after settle; steer requires active run; empty/cap rejected |
+| Approval / elicitation | High-risk tools pause via ElicitationGate; `/approve` `/deny`; steer while paused answers |
+| World-state compact | Compact stores structured continuation state for the next turn |
+| Risk review | Extra reopen gate after SPI on secret/destructive/unverified signals |
 | Parallel tools | read-safe tools run concurrently in one step |
 | Truncated tools | `finish_reason=length` → fail tool calls, ask re-issue |
 | Structured compact | Goal/Progress/Decisions + read/modified file lists |

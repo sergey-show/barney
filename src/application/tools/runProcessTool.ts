@@ -1,7 +1,7 @@
 import { denyShell } from "../../domain/guard/ShellPolicy.ts";
 import type { ProcessPort } from "../ports.ts";
 import type { ToolCall } from "../../domain/tools/FileTools.ts";
-import { wrapSandboxed } from "../../infrastructure/sandbox/OsSandbox.ts";
+import { sandboxProfileFromEnv, wrapSandboxed } from "../../infrastructure/sandbox/OsSandbox.ts";
 
 export async function runProcessTool(
   processes: ProcessPort,
@@ -18,7 +18,12 @@ export async function runProcessTool(
         const denied = denyShell(command);
         if (denied) return `error: blocked: ${denied}. Use fs_* inside the worktree.`;
         const invocation = shellInvocation(command);
-        const launched = wrapSandboxed({ cwd: ctx.cwd, command: invocation.command, args: invocation.args });
+        const launched = wrapSandboxed({
+          cwd: ctx.cwd,
+          command: invocation.command,
+          args: invocation.args,
+          profile: sandboxProfileFromEnv(),
+        });
         const started = await processes.spawn({
           runId: ctx.runId,
           cwd: ctx.cwd,

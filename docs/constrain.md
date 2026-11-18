@@ -16,6 +16,14 @@ marketed as absolute isolation.
 
 Implementation: `src/infrastructure/sandbox/OsSandbox.ts`.
 
+## Profiles
+
+| Profile (`BARNEY_SANDBOX_PROFILE`) | Behavior |
+|---|---|
+| `workspace_write` (default) | Worktree writable; root read-only where supported |
+| `read_only` | No worktree writes through the OS wrapper |
+| `full` | Passthrough (no OS wrapper) |
+
 ## Optional Docker profile
 
 For stronger containment in CI, see [`deploy/docker/sandbox/`](../deploy/docker/sandbox/README.md).
@@ -23,4 +31,5 @@ For stronger containment in CI, see [`deploy/docker/sandbox/`](../deploy/docker/
 ## Related
 
 - Outside worktree paths still need operator grant ([Tools](tools.md))
+- Approval ladder + exec amendments ([Harness](harness.md))
 - Shadow recall redacts live secrets before prompt injection ([Experience](experience.md))

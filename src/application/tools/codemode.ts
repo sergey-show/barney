@@ -78,3 +78,23 @@ export const CODEMODE_ALLOWED_DEFAULT = new Set([
   "memory_read",
   "memory_search",
 ]);
+
+/** Read-only vs mutate allowlists — mutate still goes through dispatch gates. */
+export type CodemodeProfile = "read" | "mutate";
+
+export const CODEMODE_ALLOWED_MUTATE = new Set([
+  ...CODEMODE_ALLOWED_DEFAULT,
+  "fs_write",
+  "fs_edit",
+  "fs_append",
+  "shell",
+]);
+
+export function codemodeAllowlist(profile: CodemodeProfile = "read"): Set<string> {
+  return profile === "mutate" ? new Set(CODEMODE_ALLOWED_MUTATE) : new Set(CODEMODE_ALLOWED_DEFAULT);
+}
+
+export function codemodeProfileFromEnv(env: NodeJS.ProcessEnv = process.env): CodemodeProfile {
+  const raw = String(env.BARNEY_CODEMODE_PROFILE ?? "read").trim().toLowerCase();
+  return raw === "mutate" ? "mutate" : "read";
+}

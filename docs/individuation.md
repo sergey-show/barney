@@ -48,13 +48,15 @@ outcome → emit Light/Shadow upserts → project Samost
 
 - Types / store / appraisal: `src/application/psyche/individuation.ts`
 - Wired in `DriveSolve` (pre-act + emitters), idle prune in `Kernel` plastic_sleep
-- Policy: `SolvePolicy.onBlind` / `onConstrained` / `onConflict`
+- Policy: `SolvePolicy.onBlind` / `onConstrained` / `onConflict` / `approvalMode` / `riskReviewStrict`
+- Operator exec amend → Light `tooling` with `policy:` refs ([Harness](harness.md))
 
 ## Relation
 
 1. [Experience](experience.md) — rare write, recall, transfer  
 2. [Autonomy](autonomy.md) — blind → agenda / self_run  
 3. [Plasticity](plasticity.md) — prune / duel  
-4. Task study — special case of `verdict=blind`
+4. Task study — special case of `verdict=blind`  
+5. [Harness](harness.md) — approval amendments + world-state risks
 
 Back to [docs index](README.md).

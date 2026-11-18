@@ -4,6 +4,7 @@ export type ExhaustedAction = "park";
 export type BlindAction = "study" | "self_run" | "act";
 export type ConstrainedAction = "park" | "act";
 export type ConflictAction = "fork" | "act";
+export type ApprovalMode = "unless_trusted" | "on_request" | "on_failure" | "never";
 
 export type SolvePolicyProps = {
   minStrategies: number;
@@ -17,6 +18,10 @@ export type SolvePolicyProps = {
   onConstrained: ConstrainedAction;
   /** Individuation: path when competing methods conflict. */
   onConflict: ConflictAction;
+  /** Tool approval ladder mode. */
+  approvalMode: ApprovalMode;
+  /** When true, risk review can reopen a pass. */
+  riskReviewStrict: boolean;
   budgetTokens: number;
   budgetUsd: number;
   budgetMs: number;
@@ -33,6 +38,8 @@ export class SolvePolicy {
   readonly onBlind: BlindAction;
   readonly onConstrained: ConstrainedAction;
   readonly onConflict: ConflictAction;
+  readonly approvalMode: ApprovalMode;
+  readonly riskReviewStrict: boolean;
   readonly budgetTokens: number;
   readonly budgetUsd: number;
   readonly budgetMs: number;
@@ -48,6 +55,8 @@ export class SolvePolicy {
     this.onBlind = props.onBlind ?? "study";
     this.onConstrained = props.onConstrained ?? "park";
     this.onConflict = props.onConflict ?? "fork";
+    this.approvalMode = props.approvalMode ?? "unless_trusted";
+    this.riskReviewStrict = props.riskReviewStrict ?? true;
     this.budgetTokens = props.budgetTokens ?? 200_000;
     this.budgetUsd = props.budgetUsd ?? 5;
     this.budgetMs = props.budgetMs ?? 30 * 60_000;
@@ -70,6 +79,8 @@ export class SolvePolicy {
       onBlind: this.onBlind,
       onConstrained: this.onConstrained,
       onConflict: this.onConflict,
+      approvalMode: this.approvalMode,
+      riskReviewStrict: this.riskReviewStrict,
       budgetTokens: this.budgetTokens,
       budgetUsd: this.budgetUsd,
       budgetMs: this.budgetMs,

@@ -1,11 +1,14 @@
 /**
  * Structured compaction helpers — Goal / Progress / Decisions / files.
+ * Prefer worldState.ts for machine-readable continuation state.
  */
 
 export type CompactFileLists = {
   readFiles: string[];
   modifiedFiles: string[];
 };
+
+export { worldStateSystemPrompt as structuredWorldStatePrompt } from "./worldState.ts";
 
 export function extractFileListsFromTranscript(
   transcript: Array<{ kind: string; text: string }>,

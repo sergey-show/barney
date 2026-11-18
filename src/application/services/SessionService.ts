@@ -58,9 +58,17 @@ export class SessionService {
   ): Promise<Run> {
     await this.ensureBooted();
     const whenBusy = opts?.whenBusy ?? opts?.lockMode ?? "replace";
+    if (whenBusy === "steer" && !this.lock.isRunning(runId)) {
+      throw new Error(`steer requires active run: ${runId}`);
+    }
     if (this.lock.isRunning(runId)) {
       if (whenBusy === "steer") {
-        this.driveSolve.enqueueSteer(runId, this.mask(message));
+        const masked = this.mask(message);
+        if (this.driveSolve.elicitation.isPaused(runId)) {
+          this.driveSolve.answerElicitation(runId, masked);
+        } else {
+          this.driveSolve.enqueueSteer(runId, masked);
+        }
         const run = await this.runs.get(runId);
         if (!run) throw new Error(`run not found: ${runId}`);
         return run;

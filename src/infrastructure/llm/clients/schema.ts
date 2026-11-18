@@ -19,6 +19,8 @@ export type DialectSchema = {
     dryMultiplier?: number;
     enableThinkingKwargs: boolean;
     thinkFlag: boolean;
+    /** Ollama runtime context; raised so tool loops keep the user turn. */
+    numCtx?: number;
   };
 };
 
@@ -113,6 +115,9 @@ const SCHEMAS: Record<DialectId, DialectSchema> = {
       maxTokens: 4096,
       enableThinkingKwargs: false,
       thinkFlag: true,
+      // Filled in schemaFor — default Ollama window is often 4k; tool loops then
+      // prune the user turn and qwen3.8 returns 500 "no user query found".
+      numCtx: 65536,
     },
   },
   vllm: {
@@ -134,6 +139,10 @@ export function schemaFor(provider: Pick<LlmProvider, "name" | "baseUrl" | "kind
     kind: provider.kind,
   });
   const schema = SCHEMAS[id];
+  if (id === "ollama") {
+    const numCtx = Number(process.env.BARNEY_OLLAMA_NUM_CTX ?? schema.request.numCtx ?? 65536) || 65536;
+    return { ...schema, request: { ...schema.request, numCtx } };
+  }
   if (id === "openai-custom" && isLocalHost(provider.baseUrl)) {
     return {
       ...schema,
@@ -157,6 +166,9 @@ export function requestBodyExtras(schema: DialectSchema): Record<string, unknown
     body.chat_template_kwargs = { enable_thinking: true };
   }
   if (schema.request.thinkFlag) body.think = true;
+  if (schema.request.numCtx && schema.request.numCtx > 0) {
+    body.options = { ...(body.options as Record<string, unknown> | undefined), num_ctx: schema.request.numCtx };
+  }
   return body;
 }
 

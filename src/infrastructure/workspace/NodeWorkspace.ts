@@ -12,7 +12,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { escapeDeniedMessage } from "../../domain/guard/outsideAccess.ts";
 import { denyShell } from "../../domain/guard/ShellPolicy.ts";
 import type { WorkspacePort } from "../../application/ports.ts";
-import { wrapSandboxed } from "../sandbox/OsSandbox.ts";
+import { sandboxProfileFromEnv, wrapSandboxed } from "../sandbox/OsSandbox.ts";
 
 const SHELL_TIMEOUT_MS = 120_000;
 const MAX_SHELL_OUT = 16_000;
@@ -218,7 +218,12 @@ export class NodeWorkspace implements WorkspacePort {
     const denied = denyShell(trimmed);
     if (denied) throw new Error(`blocked: ${denied}. Use fs_* inside the worktree.`);
     const invocation = shellInvocation(this.unmask(trimmed));
-    const launched = wrapSandboxed({ cwd: this.root, command: invocation.command, args: invocation.args });
+    const launched = wrapSandboxed({
+      cwd: this.root,
+      command: invocation.command,
+      args: invocation.args,
+      profile: sandboxProfileFromEnv(),
+    });
     const proc = Bun.spawn([launched.command, ...launched.args], {
       cwd: this.root,
       stdout: "pipe",

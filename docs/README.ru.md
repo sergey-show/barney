@@ -19,6 +19,7 @@
 | [Пластичность](plasticity.ru.md) | Кортикальная пластика: реконсолидация, обрезка, сон, дуэль |
 | [Индивидуация](individuation.ru.md) | Свет × Тень: спектр, слепые зоны, детерминированный path |
 | [Constrain](constrain.ru.md) | OS-песочница + опциональный Docker |
+| [Harness](harness.ru.md) | Лестница разрешений, elicitation, world-state, risk review, роли |
 | [SPI](spi.ru.md) | Провайдеры тела на стабильных портах ядра |
 | IDE ACP | [`../extensions/`](../extensions/README.md) |
 

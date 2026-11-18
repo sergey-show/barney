@@ -127,6 +127,8 @@ const CLI_HELP = [
   "  /status              show task status and workspace",
   "  /self                show Self board, existence, oracle/PE chips",
   "  /allow <path>        grant access outside the workspace",
+  "  /approve <sig>       allow a pending tool signature (amend exec policy)",
+  "  /deny <sig>          deny a pending tool signature",
   "  /debug               show internal transcript in plain mode",
   "  /stop                stop an active step (Ctrl+C also stops it)",
   "  /quit                exit",
@@ -135,7 +137,7 @@ const CLI_HELP = [
 const TUI_HELP = [
   "TASKS      /new  /sessions [query]  /open <id>  /continue  /retry  /compact  /close",
   "KNOWLEDGE  /memory [query]  /note <key>  /agents  /agent <name>",
-  "CONTROL    /work  /status  /self  /allow <path>  /debug  /quit",
+  "CONTROL    /work  /status  /self  /allow <path>  /approve <sig>  /deny <sig>  /debug  /quit",
   "STOP       Press Ctrl+C while Barney is working.",
 ].join("\n");
 
@@ -441,6 +443,36 @@ const cli = defineCommand({
         } catch (err) {
           note("error", String(err));
         }
+        again();
+        continue;
+      }
+      if (line.startsWith("/approve")) {
+        if (!runId) { note("session", "none"); again(); continue; }
+        const signature = line.slice(8).trim();
+        if (!signature) {
+          note("approval", "usage: /approve <signature>");
+          again();
+          continue;
+        }
+        try {
+          const result = await kernel.approveTool(runId, signature, { amend: true });
+          note("approval", `allowed ${result.signature}${result.amended ? " (+amendment)" : ""}`);
+        } catch (err) {
+          note("error", String(err));
+        }
+        again();
+        continue;
+      }
+      if (line.startsWith("/deny")) {
+        if (!runId) { note("session", "none"); again(); continue; }
+        const signature = line.slice(5).trim();
+        if (!signature) {
+          note("approval", "usage: /deny <signature>");
+          again();
+          continue;
+        }
+        kernel.denyTool(runId, signature);
+        note("approval", `denied ${signature}`);
         again();
         continue;
       }
