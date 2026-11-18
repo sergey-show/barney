@@ -12,5 +12,7 @@ test("respects cap", () => {
   const q = new MessageQueue();
   q.setCap("r1", 1);
   expect(q.enqueueSteer("r1", "a").ok).toBe(true);
-  expect(q.enqueueSteer("r1", "b").reason).toBe("cap");
+  const capped = q.enqueueSteer("r1", "b");
+  expect(capped.ok).toBe(false);
+  if (!capped.ok) expect(capped.reason).toBe("cap");
 });

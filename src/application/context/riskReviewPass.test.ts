@@ -3,7 +3,7 @@ import { runRiskReviewPass } from "./riskReviewPass.ts";
 
 test("pass with secret evidence reopens", () => {
   const result = runRiskReviewPass({
-    review: { verdict: "pass", summary: "ok" },
+    review: { verdict: "pass", summary: "ok", needsResearch: false },
     transcriptTexts: ["exported BEGIN RSA PRIVATE KEY"],
     strict: true,
   });
@@ -13,7 +13,7 @@ test("pass with secret evidence reopens", () => {
 
 test("clean pass stays ok", () => {
   const result = runRiskReviewPass({
-    review: { verdict: "pass", summary: "shipped" },
+    review: { verdict: "pass", summary: "shipped", needsResearch: false },
     transcriptTexts: ["fs_write ok"],
     spiOk: true,
   });

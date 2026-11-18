@@ -267,7 +267,10 @@ export function App() {
           if (data.event?.type === "browser.shown") {
             const payload = data.event.payload;
             if (!payload || payload.runId !== runIdRef.current || !payload.url) return;
-            setBrowserModal({ url: payload.url, shot: payload.shot || undefined });
+            setBrowserModal({
+              url: String(payload.url),
+              shot: payload.shot ? String(payload.shot) : undefined,
+            });
             return;
           }
           if (data.event?.type === "plugin.opened" || data.event?.type === "skill.opened") {
