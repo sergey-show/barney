@@ -14,6 +14,12 @@ import {
 } from "../plasticity/plasticity.ts";
 import { reshapeProcedureAfterOutcome } from "../context/procedureCompile.ts";
 import { admitSkillCapsule } from "../experience/skillReplayAdmit.ts";
+import { gateSkillRewrite } from "../experience/masteredPin.ts";
+import { admitByContrast } from "../experience/dualCandidate.ts";
+import {
+  annotateProcedureDeopt,
+  planStepLocalDeopt,
+} from "../experience/stepLocalDeopt.ts";
 import {
   bumpBacklog,
   failureClass,
@@ -110,12 +116,36 @@ export class RunLearningService {
     if (this.skills.get(draft.name) && !canRewriteSkill(bodyRecord)) return draft.name;
     if (!this.skills.get(draft.name)) this.skills.writeFile(draft.name, "SKILL.md", draft.body);
 
-    const admitted = bodyRecord && !canRewriteSkill(bodyRecord)
-      ? bodyRecord
-      : {
-        ...admitNewSkill(draft.name, run.taskClass, klass, captureHostEnv()),
-        procedure: lessonTrail.procedure.filter(Boolean).slice(0, 8),
-      };
+    const challenger: SkillBodyRecord = {
+      ...admitNewSkill(draft.name, run.taskClass, klass, captureHostEnv()),
+      procedure: lessonTrail.procedure.filter(Boolean).slice(0, 8),
+    };
+    const pin = gateSkillRewrite({ incumbent: bodyRecord, next: challenger });
+    run.append("system", `mastered_pin: skill · ${pin.mode} · ${pin.reason}`);
+    if (!pin.allow && bodyRecord) {
+      return draft.name;
+    }
+    let admitted = bodyRecord && !canRewriteSkill(bodyRecord) ? bodyRecord : challenger;
+    if (bodyRecord && pin.allow && canRewriteSkill(bodyRecord)) {
+      const contrast = admitByContrast({
+        incumbent: {
+          id: "incumbent",
+          body: (bodyRecord.procedure ?? []).join(" → "),
+          procedure: bodyRecord.procedure,
+          confidence: bodyRecord.strength,
+        },
+        challenger: {
+          id: "challenger",
+          body: (challenger.procedure ?? []).join(" → "),
+          procedure: challenger.procedure,
+          confidence: challenger.strength,
+        },
+        evidence: run.goal,
+        goal: run.goal,
+      });
+      run.append("system", contrast.line);
+      admitted = contrast.replace ? challenger : bodyRecord;
+    }
     // Quarantine stays out of SkillsLock until an independent exam (recall+use).
     await this.pinSkillIfEligible(agent, admitted);
     await this.remember(run, agent.id.value, {
@@ -216,9 +246,41 @@ export class RunLearningService {
         },
       );
       const capsule = admitSkillCapsule(next);
-      const bodyRec = capsule.repairedProcedure?.length
+      let bodyRec = capsule.repairedProcedure?.length
         ? { ...next, procedure: capsule.repairedProcedure }
         : next;
+      const pin = gateSkillRewrite({ incumbent: previous, next: bodyRec });
+      run.append("system", `mastered_pin: skill · ${pin.mode} · ${pin.reason}`);
+      if (!pin.allow) {
+        // Keep plasticity weights from reconsolidation; pin only freezes structure.
+        bodyRec = {
+          ...bodyRec,
+          status: previous.status,
+          procedure: previous.procedure,
+          frozenAt: previous.frozenAt,
+        };
+      } else if (previous.procedure?.length && bodyRec.procedure?.length) {
+        const contrast = admitByContrast({
+          incumbent: {
+            id: "incumbent",
+            body: previous.procedure.join(" → "),
+            procedure: previous.procedure,
+            confidence: previous.strength,
+          },
+          challenger: {
+            id: "challenger",
+            body: bodyRec.procedure.join(" → "),
+            procedure: bodyRec.procedure,
+            confidence: bodyRec.strength,
+          },
+          evidence: run.goal,
+          goal: run.goal,
+        });
+        run.append("system", contrast.line);
+        if (!contrast.replace) {
+          bodyRec = { ...bodyRec, procedure: previous.procedure };
+        }
+      }
       await this.remember(run, agent.id.value, {
         key: skillBodyKey(name),
         title: `Body: ${name}`,
@@ -237,7 +299,32 @@ export class RunLearningService {
       const activeNow = skillEligibleForLock(next) || promoted.includes(name);
       if (!activeNow && !wasActive) continue;
       if (input.success) reused.push(name);
-      else if (wasActive || skillEligibleForLock(next)) falseSkills.push(name);
+      else if (wasActive || skillEligibleForLock(next)) {
+        falseSkills.push(name);
+        const deopt = planStepLocalDeopt({
+          skill: name,
+          procedure: bodyRec.procedure ?? previous.procedure ?? [],
+          evidence: run.goal,
+          errorHint: "false skill · recalled path failed",
+        });
+        run.append("system", deopt.line);
+        if (deopt.prompt) run.append("system", deopt.prompt);
+        if (deopt.failedStep >= 0 && (bodyRec.procedure?.length || previous.procedure?.length)) {
+          const patched = {
+            ...bodyRec,
+            procedure: annotateProcedureDeopt(
+              bodyRec.procedure ?? previous.procedure ?? [],
+              deopt.failedStep,
+            ),
+          };
+          await this.remember(run, agent.id.value, {
+            key: skillBodyKey(name),
+            title: `Body: ${name}`,
+            body: JSON.stringify(patched),
+            tags: ["body", "skill", patched.status, "deopt"],
+          });
+        }
+      }
     }
     return { promoted, reused, falseSkills };
   }

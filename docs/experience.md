@@ -87,6 +87,28 @@ body_fast_path_fallthrough: 0|1 · …
 
 Code: `bodyFastPath.ts`.
 
+### Procedure streak + step-local deopt
+
+Consecutive mechanical steps (fs / shell:grep / …) are planned as one `procedure_exec` streak so the model does not re-plan between them. On fallthrough, blame one step (`step_deopt`), annotate it `[deopt]`, and resume after it — do not discard the whole skill.
+
+```text
+procedure_exec: skill=… · streak=N · families=…
+step_deopt: skill=… · fail_step=k/N · retry=…
+```
+
+Code: `procedureExecutor.ts`, `stepLocalDeopt.ts`.
+
+### Mastered pin + dual-candidate
+
+Frozen skills and high-confidence / tagged mastered rules are not clobbered by broader drafts. Narrow/annotate is allowed; demote and unrelated rewrite are refused. When an incumbent exists, two candidates are contrasted against evidence; the weaker challenger does not win by recency.
+
+```text
+mastered_pin: rule|skill · replace|narrow|reject|create · …
+dual_candidate: win=… lose=… · a=… b=…
+```
+
+Code: `masteredPin.ts`, `dualCandidate.ts`.
+
 ## Two-layer verify
 
 Deterministic structural checks (artifacts, secret masks, conflicts, URL opens) run as layer 1. Semantic reviewer text is layer 2. A semantic «pass» cannot override a failed deterministic layer.

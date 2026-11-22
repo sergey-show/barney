@@ -47,6 +47,23 @@
 
 Код: `experienceLayers.ts`, `predictionError.ts`, `RunLearningService.applyRecalledSkillOutcomes`.
 
+### Быстрый путь тела, streak и deopt
+
+Проверенный/замороженный навык с процедурой подставляется как предпочтительный путь (`body_fast_path`). Подряд идущие механические шаги планируются одной серией `procedure_exec`. При сбое виноват один шаг (`step_deopt`, метка `[deopt]`), остальное сохраняется.
+
+### Mastered pin и dual-candidate
+
+Замороженные навыки и правила с высокой уверенностью / тегом mastered не затираются широким черновиком. При наличии incumbent два кандидата сравниваются по внешним evidence — побеждает не «кто новее».
+
+```text
+mastered_pin: rule|skill · …
+dual_candidate: win=… lose=…
+procedure_exec: … · streak=N
+step_deopt: … · fail_step=k/N
+```
+
+Код: `bodyFastPath.ts`, `procedureExecutor.ts`, `stepLocalDeopt.ts`, `masteredPin.ts`, `dualCandidate.ts`.
+
 ## Обязательное вспоминание перед актом
 
 Перед актом подставляются корзины, ранжированные по **весу × сходству**:

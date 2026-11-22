@@ -255,6 +255,13 @@ import {
   fastPathFallthrough,
   selectBodyFastPath,
 } from "../experience/bodyFastPath.ts";
+import {
+  annotateProcedureDeopt,
+  planStepLocalDeopt,
+} from "../experience/stepLocalDeopt.ts";
+import { gateRuleRewrite, gateSkillRewrite } from "../experience/masteredPin.ts";
+import { admitByContrast } from "../experience/dualCandidate.ts";
+import { planProcedureExec } from "../experience/procedureExecutor.ts";
 import { applyTwoLayerVerify } from "../experience/twoLayerVerify.ts";
 import { currentKernelAblation } from "../evaluation/kernelAblation.ts";
 import {
@@ -913,6 +920,13 @@ export class DriveSolve {
       })
       : null;
     if (bodyFastPath) run.append("system", bodyFastPath.line);
+    const procedureExec = bodyFastPath
+      ? planProcedureExec({
+        skill: bodyFastPath.skill,
+        procedure: bodyFastPath.procedure,
+      })
+      : null;
+    if (procedureExec?.line) run.append("system", procedureExec.line);
     const actMessages: ChatMessage[] = [
       {
         role: "system",
@@ -935,6 +949,7 @@ export class DriveSolve {
             forkBlock,
             checklistBlock,
             bodyFastPath?.prompt ?? "",
+            procedureExec?.prompt ?? "",
           ].filter(Boolean).join("\n\n"),
           projectContext: loadProjectContextFiles(run.worktreePath),
         }),
@@ -1463,6 +1478,32 @@ export class DriveSolve {
         recallUsed: recallSignal.recallUsed,
       });
       run.append("system", fall.line);
+      if (fall.fallthrough && ablation.learnBody) {
+        const deopt = planStepLocalDeopt({
+          skill: bodyFastPath.skill,
+          procedure: bodyFastPath.procedure,
+          evidence: artifactEvidence(run),
+          errorHint: review.missing || review.summary,
+        });
+        run.append("system", deopt.line);
+        if (deopt.prompt) run.append("system", deopt.prompt);
+        if (deopt.failedStep >= 0) {
+          const note = await this.memory.get(skillBodyKey(bodyFastPath.skill));
+          if (note) {
+            const rec = parseSkillBody(note.body, bodyFastPath.skill);
+            const patched = {
+              ...rec,
+              procedure: annotateProcedureDeopt(rec.procedure ?? bodyFastPath.procedure, deopt.failedStep),
+            };
+            await this.remember(run, agent.id.value, {
+              key: skillBodyKey(bodyFastPath.skill),
+              title: `Body: ${bodyFastPath.skill}`,
+              body: JSON.stringify(patched),
+              tags: ["body", "skill", patched.status, "deopt"],
+            });
+          }
+        }
+      }
     }
     const softScores = scoreSoftHurt({
       outcomeOk,
@@ -1578,19 +1619,68 @@ export class DriveSolve {
       `conf:${learned.confidence.toFixed(2)}`,
       ...(klass !== "general" && klass !== "aborted-unfinished" ? [klass] : []),
     ];
+    const editSignal = classifyEditSignal({
+      outcomeOk,
+      recallUsed: recallSignal.recallUsed,
+      falseSkillCount: skillOutcomes.falseSkills.length,
+      structuralFail,
+      priorSuccessRate: classStats
+        ? (() => {
+          const wins = classStats.strategies.reduce((sum, row) => sum + row.wins, 0);
+          const fails = classStats.strategies.reduce((sum, row) => sum + row.fails, 0);
+          const total = wins + fails;
+          return total > 0 ? wins / total : 0;
+        })()
+        : undefined,
+    });
     if (outcomeOk) {
       // Experience law: episode_only → episode save only (no rule pin, no skill pin).
       // External admission required for durable pins (gated rejects self-report alone).
       if (mayPin) {
-        await this.remember(run, agent.id.value, {
-          key: learned.key,
-          title: learned.title,
-          body: formatLessonLine(learned),
-          tags: [...ruleTags, "lesson", writeDecision.kind, `admit:${admission.evidence ?? "none"}`],
+        const priorRuleNote = await this.memory.get(learned.key);
+        const pinGate = gateRuleRewrite({
+          incumbent: priorRuleNote
+            ? {
+              key: learned.key,
+              body: priorRuleNote.body,
+              confidence: priorConfidence,
+              tags: priorRuleNote.tags,
+            }
+            : null,
+          nextBody: learned.body,
         });
-        await this.graph.link(classKey(run.taskClass), learned.key, "learned");
-        if (klass !== "general" && klass !== "aborted-unfinished") {
-          await this.graph.link(classKey(klass), learned.key, "learned");
+        run.append("system", `mastered_pin: rule · ${pinGate.mode} · ${pinGate.reason}`);
+        let pinBody = formatLessonLine(learned);
+        let pinTags = [...ruleTags, "lesson", writeDecision.kind, `admit:${admission.evidence ?? "none"}`];
+        if (!pinGate.allow) {
+          run.append("system", "mastered_pin: rule refused — keep incumbent");
+        } else if (priorRuleNote) {
+          const contrast = admitByContrast({
+            incumbent: { id: "incumbent", body: priorRuleNote.body, confidence: priorConfidence },
+            challenger: { id: "challenger", body: learned.body, confidence: learned.confidence },
+            evidence: artifactEvidence(run),
+            goal: run.goal,
+            signal: editSignal,
+          });
+          run.append("system", contrast.line);
+          if (contrast.replace) {
+            pinTags = [...pinTags, "dual-win"];
+          } else {
+            pinBody = priorRuleNote.body;
+            pinTags = [...pinTags, "dual-keep"];
+          }
+        }
+        if (pinGate.allow) {
+          await this.remember(run, agent.id.value, {
+            key: learned.key,
+            title: learned.title,
+            body: pinBody,
+            tags: pinTags,
+          });
+          await this.graph.link(classKey(run.taskClass), learned.key, "learned");
+          if (klass !== "general" && klass !== "aborted-unfinished") {
+            await this.graph.link(classKey(klass), learned.key, "learned");
+          }
         }
       }
       const created = mayPin && writeDecision.kind === "skill_candidate"
@@ -1619,20 +1709,6 @@ export class DriveSolve {
       );
     } else {
       if (mayPin && writeDecision.kind === "failure_rule") {
-        const editSignal = classifyEditSignal({
-          outcomeOk,
-          recallUsed: recallSignal.recallUsed,
-          falseSkillCount: skillOutcomes.falseSkills.length,
-          structuralFail,
-          priorSuccessRate: classStats
-            ? (() => {
-              const wins = classStats.strategies.reduce((sum, row) => sum + row.wins, 0);
-              const fails = classStats.strategies.reduce((sum, row) => sum + row.fails, 0);
-              const total = wins + fails;
-              return total > 0 ? wins / total : 0;
-            })()
-            : undefined,
-        });
         const shaped = shapeFailureDirective({
           directive: learned.body,
           signal: editSignal,
@@ -1646,22 +1722,57 @@ export class DriveSolve {
           `edit_signal: ${editSignal.kind} · priority=${editSignal.priority}`
             + ` · tag=${shaped.tag} · ${editSignal.reason}`,
         );
-        await this.remember(run, agent.id.value, {
-          key: learned.key,
-          title: learned.title,
-          body: formatLessonLine(scopedLearned),
-          tags: [
-            ...ruleTags,
-            "fail",
-            "experience",
-            "rule",
-            review.verdict,
-            `admit:${admission.evidence ?? "none"}`,
-            `signal:${editSignal.kind}`,
-            shaped.tag,
-          ],
+        const priorRuleNote = await this.memory.get(learned.key);
+        const pinGate = gateRuleRewrite({
+          incumbent: priorRuleNote
+            ? {
+              key: learned.key,
+              body: priorRuleNote.body,
+              confidence: priorConfidence,
+              tags: priorRuleNote.tags,
+            }
+            : null,
+          nextBody: scopedLearned.body,
         });
-        await this.graph.link(classKey(klass), learned.key, "failed-as");
+        run.append("system", `mastered_pin: rule · ${pinGate.mode} · ${pinGate.reason}`);
+        let pinBody = formatLessonLine(scopedLearned);
+        let pinTags = [
+          ...ruleTags,
+          "fail",
+          "experience",
+          "rule",
+          review.verdict,
+          `admit:${admission.evidence ?? "none"}`,
+          `signal:${editSignal.kind}`,
+          shaped.tag,
+        ];
+        if (!pinGate.allow) {
+          run.append("system", "mastered_pin: rule refused — keep incumbent");
+        } else if (priorRuleNote) {
+          const contrast = admitByContrast({
+            incumbent: { id: "incumbent", body: priorRuleNote.body, confidence: priorConfidence },
+            challenger: { id: "challenger", body: scopedLearned.body, confidence: scopedLearned.confidence },
+            evidence: artifactEvidence(run),
+            goal: run.goal,
+            signal: editSignal,
+          });
+          run.append("system", contrast.line);
+          if (contrast.replace) {
+            pinTags = [...pinTags, "dual-win"];
+          } else {
+            pinBody = priorRuleNote.body;
+            pinTags = [...pinTags, "dual-keep"];
+          }
+        }
+        if (pinGate.allow) {
+          await this.remember(run, agent.id.value, {
+            key: learned.key,
+            title: learned.title,
+            body: pinBody,
+            tags: pinTags,
+          });
+          await this.graph.link(classKey(klass), learned.key, "failed-as");
+        }
       }
       await this.episodes.save(
         new Episode({
