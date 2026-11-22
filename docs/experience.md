@@ -53,10 +53,13 @@ Skill loop (target):
 
 1. recovery → mint **quarantine** (not in SkillsLock)
 2. recall + use on a later task → reconsolidation / graduation
-3. **verified | frozen** → pin into SkillsLock → reusable plugin
-4. `healSkillLocks` repairs verified bodies that missed the lock
+3. **verified | frozen** → **replay-before-admit** (structure → lift bindings → dry replay)
+4. pin into SkillsLock as capsule form `hybrid` / `text` (source-only stays out of lock)
+5. `healSkillLocks` repairs verified bodies that missed the lock
 
-Code: `experienceLayers.ts`, `predictionError.ts`, `RunLearningService.applyRecalledSkillOutcomes`.
+Hardcoded paths/URLs/ids in procedures are lifted to `<binding>` so capsules transfer. Transcript: `skill_capsule: name · form=…`.
+
+Code: `experienceLayers.ts`, `predictionError.ts`, `skillReplayAdmit.ts`, `RunLearningService.applyRecalledSkillOutcomes`.
 
 ## Mandatory recall before act
 

@@ -13,6 +13,7 @@ import {
   reconsolidateSkill,
 } from "../plasticity/plasticity.ts";
 import { reshapeProcedureAfterOutcome } from "../context/procedureCompile.ts";
+import { admitSkillCapsule } from "../experience/skillReplayAdmit.ts";
 import {
   bumpBacklog,
   failureClass,
@@ -214,15 +215,23 @@ export class RunLearningService {
           trail: input.recallUsed ? previous.procedure : undefined,
         },
       );
+      const capsule = admitSkillCapsule(next);
+      const bodyRec = capsule.repairedProcedure?.length
+        ? { ...next, procedure: capsule.repairedProcedure }
+        : next;
       await this.remember(run, agent.id.value, {
         key: skillBodyKey(name),
         title: `Body: ${name}`,
-        body: JSON.stringify(next),
-        tags: ["body", "skill", next.status, "plasticity"],
+        body: JSON.stringify(bodyRec),
+        tags: ["body", "skill", bodyRec.status, "plasticity", `capsule:${capsule.form}`],
       });
-      if (await this.pinSkillIfEligible(agent, next)) {
+      run.append(
+        "system",
+        `skill_capsule: ${name} · form=${capsule.form} · admit=${capsule.admit ? 1 : 0} · ${capsule.reason}`,
+      );
+      if (await this.pinSkillIfEligible(agent, bodyRec)) {
         promoted.push(name);
-        await this.commitBiography(`become: skill ${name} (${next.status})`);
+        await this.commitBiography(`become: skill ${name} (${bodyRec.status}/${capsule.form})`);
       }
       if (!input.recallUsed) continue;
       const activeNow = skillEligibleForLock(next) || promoted.includes(name);
@@ -265,6 +274,9 @@ export class RunLearningService {
   async pinSkillIfEligible(agent: Agent, rec: SkillBodyRecord): Promise<boolean> {
     if (!skillEligibleForLock(rec)) return false;
     if (agent.skillsLock.has("skill", rec.name)) return false;
+    const capsule = admitSkillCapsule(rec);
+    // source-only: keep body in memory, do not pin into SkillsLock yet
+    if (!capsule.admit || capsule.form === "source") return false;
     agent.evolve({ skills: [{ kind: "skill", name: rec.name, version: "1" }] });
     await this.agents.save(agent);
     return true;
