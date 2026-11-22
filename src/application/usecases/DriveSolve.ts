@@ -241,6 +241,10 @@ import {
   softHurtDecide,
   writeFingerprint,
 } from "../experience/softHurtGate.ts";
+import {
+  classifyEditSignal,
+  shapeFailureDirective,
+} from "../experience/editSignal.ts";
 import { currentKernelAblation } from "../evaluation/kernelAblation.ts";
 import {
   captureHostEnv,
@@ -1536,11 +1540,47 @@ export class DriveSolve {
       );
     } else {
       if (mayPin && writeDecision.kind === "failure_rule") {
+        const editSignal = classifyEditSignal({
+          outcomeOk,
+          recallUsed: recallSignal.recallUsed,
+          falseSkillCount: skillOutcomes.falseSkills.length,
+          structuralFail,
+          priorSuccessRate: classStats
+            ? (() => {
+              const wins = classStats.strategies.reduce((sum, row) => sum + row.wins, 0);
+              const fails = classStats.strategies.reduce((sum, row) => sum + row.fails, 0);
+              const total = wins + fails;
+              return total > 0 ? wins / total : 0;
+            })()
+            : undefined,
+        });
+        const shaped = shapeFailureDirective({
+          directive: learned.body,
+          signal: editSignal,
+          trigger: klass !== "general" ? klass : (run.taskClass || "task"),
+        });
+        const scopedLearned = shaped.body
+          ? { ...learned, body: shaped.body }
+          : learned;
+        run.append(
+          "system",
+          `edit_signal: ${editSignal.kind} · priority=${editSignal.priority}`
+            + ` · tag=${shaped.tag} · ${editSignal.reason}`,
+        );
         await this.remember(run, agent.id.value, {
           key: learned.key,
           title: learned.title,
-          body: formatLessonLine(learned),
-          tags: [...ruleTags, "fail", "experience", "rule", review.verdict, `admit:${admission.evidence ?? "none"}`],
+          body: formatLessonLine(scopedLearned),
+          tags: [
+            ...ruleTags,
+            "fail",
+            "experience",
+            "rule",
+            review.verdict,
+            `admit:${admission.evidence ?? "none"}`,
+            `signal:${editSignal.kind}`,
+            shaped.tag,
+          ],
         });
         await this.graph.link(classKey(klass), learned.key, "failed-as");
       }

@@ -22,7 +22,7 @@ Not every PASS writes a skill. Not every FAIL writes a rule. Pins prefer **predi
 | Outcome | What gets written |
 |---|---|
 | Success after changing path + prediction error | skill candidate (quarantine; may carry `procedure`) |
-| Fail + prediction error + repeated/structural mode + concrete directive | failure rule |
+| Fail + prediction error + repeated/structural mode + concrete directive | failure rule (regression → `when <trigger>: …`; gap → broader) |
 | Success + house-convention pin | pinned lesson |
 | Otherwise | episode only (nothing pinned into body rules/skills) |
 
@@ -41,9 +41,12 @@ Transcript lines:
 experience_write: <kind> · <reason>
 body_admission: 0/1 · mode=gated|selfreport · evidence=… · <reason>
 soft_hurt: 0/1 · net=… gain=… hurt=… · <reason>
+edit_signal: regression|gap · priority=… · tag=iff-regression|gap · <reason>
 ```
 
 **Soft-HURT:** even with evidence, a pin ships only when gain beats hurt (false skills, recall used but failed, etc.). Refusals go into `admission/rejection-ledger` and Shadow `rejected` so the same claim is not resubmitted for a day.
+
+**Edit signal:** regressions (recalled path misfired) outrank gaps (never solved). Regression rules are scoped with `when <trigger>: …` instead of a global rewrite.
 
 Skills still graduate later via recall+use exam → SkillsLock. Admission only gates the *mint / rule pin*, not the final lock.
 
