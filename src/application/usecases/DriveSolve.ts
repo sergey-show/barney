@@ -245,6 +245,12 @@ import {
   classifyEditSignal,
   shapeFailureDirective,
 } from "../experience/editSignal.ts";
+import {
+  compileTurnChecklist,
+  formatChecklistPrompt,
+  gradeTurnChecklist,
+  type ChecklistItem,
+} from "../experience/turnChecklist.ts";
 import { currentKernelAblation } from "../evaluation/kernelAblation.ts";
 import {
   captureHostEnv,
@@ -885,6 +891,16 @@ export class DriveSolve {
     const forkBlock = appraisal?.path === "fork"
       ? "FORK: competing methods — prefer exploring an alternate session branch before committing."
       : "";
+    const turnChecklist: ChecklistItem[] = depth === 0
+      ? compileTurnChecklist({
+        goal: run.goal,
+        anchors: packed.anchors?.map((row) => typeof row === "string" ? row : String(row)),
+      })
+      : [];
+    if (turnChecklist.length) {
+      run.append("system", `turn_checklist_ready: ${turnChecklist.length} items`);
+    }
+    const checklistBlock = formatChecklistPrompt(turnChecklist);
     const actMessages: ChatMessage[] = [
       {
         role: "system",
@@ -900,7 +916,7 @@ export class DriveSolve {
           sessionDir: run.sessionPath,
           depth,
           skills: skillCatalog(this.skills, `${run.goal}\n${input.message}`, quarantinedSkills),
-          memory: [memoryNote, appraisalBlock, parkBlock, forkBlock].filter(Boolean).join("\n\n"),
+          memory: [memoryNote, appraisalBlock, parkBlock, forkBlock, checklistBlock].filter(Boolean).join("\n\n"),
           projectContext: loadProjectContextFiles(run.worktreePath),
         }),
       },
@@ -1123,6 +1139,31 @@ export class DriveSolve {
         review = persisted.review;
         oracleVerdict = persisted.oracleVerdict ?? oracleVerdict;
         spiOk = persisted.spiOk;
+      }
+    }
+
+    if (turnChecklist.length) {
+      const checklistReport = gradeTurnChecklist({
+        items: turnChecklist,
+        goal: run.goal,
+        evidence: artifactEvidence(run),
+        reply: act.text,
+        reviewMissing: review.missing,
+      });
+      run.append("system", checklistReport.line);
+      const hardFails = checklistReport.grades.filter((g) =>
+        !g.ok && turnChecklist.some((item) =>
+          item.id === g.id && (item.kind === "artifact" || item.kind === "verify")));
+      if (review.verdict === "pass" && hardFails.length) {
+        review = {
+          ...review,
+          verdict: "fail",
+          achieved: false,
+          missing: hardFails.map((g) => g.detail).join("; "),
+          summary: `${review.summary} · checklist open: ${hardFails.map((g) => g.id).join(",")}`,
+          failureKind: review.failureKind ?? "missing-artifact",
+        };
+        run.append("system", `turn_checklist_reopen: ${hardFails.map((g) => g.id).join(",")}`);
       }
     }
 

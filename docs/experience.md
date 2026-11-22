@@ -64,6 +64,18 @@ Hardcoded paths/URLs/ids in procedures are lifted to `<binding>` so capsules tra
 
 Code: `experienceLayers.ts`, `predictionError.ts`, `skillReplayAdmit.ts`, `RunLearningService.applyRecalledSkillOutcomes`.
 
+## Turn-0 checklist
+
+Before the first act, compile atomic checks from the goal (artifacts, constraints, verify). Inject them into the act prompt. After the turn, grade against evidence; open artifact/verify items reopen a false «pass».
+
+```text
+turn_checklist_ready: N items
+turn_checklist: K/N pass · …
+turn_checklist_reopen: artifact-1,…
+```
+
+Code: `turnChecklist.ts`.
+
 ## Mandatory recall before act
 
 Before the act, inject bags ranked by **weight × similarity**:
