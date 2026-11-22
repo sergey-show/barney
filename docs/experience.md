@@ -76,6 +76,17 @@ turn_checklist_reopen: artifact-1,…
 
 Code: `turnChecklist.ts`.
 
+## Body fast-path
+
+If a verified/frozen skill has a procedure overlapping the goal, inject it as a preferred path before inventing a new plan. On misfire, log fallthrough and continue with the full loop (safety gates still apply).
+
+```text
+body_fast_path: try=<skill> status=frozen score=… steps=N
+body_fast_path_fallthrough: 0|1 · …
+```
+
+Code: `bodyFastPath.ts`.
+
 ## Mandatory recall before act
 
 Before the act, inject bags ranked by **weight × similarity**:

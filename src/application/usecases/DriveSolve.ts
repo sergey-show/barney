@@ -251,6 +251,10 @@ import {
   gradeTurnChecklist,
   type ChecklistItem,
 } from "../experience/turnChecklist.ts";
+import {
+  fastPathFallthrough,
+  selectBodyFastPath,
+} from "../experience/bodyFastPath.ts";
 import { currentKernelAblation } from "../evaluation/kernelAblation.ts";
 import {
   captureHostEnv,
@@ -901,6 +905,13 @@ export class DriveSolve {
       run.append("system", `turn_checklist_ready: ${turnChecklist.length} items`);
     }
     const checklistBlock = formatChecklistPrompt(turnChecklist);
+    const bodyFastPath = ablation.recallExperience
+      ? selectBodyFastPath({
+        skills: skillBodyRecs,
+        query: `${run.goal}\n${input.message}`,
+      })
+      : null;
+    if (bodyFastPath) run.append("system", bodyFastPath.line);
     const actMessages: ChatMessage[] = [
       {
         role: "system",
@@ -916,7 +927,14 @@ export class DriveSolve {
           sessionDir: run.sessionPath,
           depth,
           skills: skillCatalog(this.skills, `${run.goal}\n${input.message}`, quarantinedSkills),
-          memory: [memoryNote, appraisalBlock, parkBlock, forkBlock, checklistBlock].filter(Boolean).join("\n\n"),
+          memory: [
+            memoryNote,
+            appraisalBlock,
+            parkBlock,
+            forkBlock,
+            checklistBlock,
+            bodyFastPath?.prompt ?? "",
+          ].filter(Boolean).join("\n\n"),
           projectContext: loadProjectContextFiles(run.worktreePath),
         }),
       },
@@ -1426,6 +1444,15 @@ export class DriveSolve {
       learned.body,
       klass,
     );
+    if (bodyFastPath) {
+      const fall = fastPathFallthrough({
+        attemptedSkill: bodyFastPath.skill,
+        outcomeOk,
+        falseSkills: skillOutcomes.falseSkills,
+        recallUsed: recallSignal.recallUsed,
+      });
+      run.append("system", fall.line);
+    }
     const softScores = scoreSoftHurt({
       outcomeOk,
       recovered,
