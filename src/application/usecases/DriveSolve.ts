@@ -255,6 +255,7 @@ import {
   fastPathFallthrough,
   selectBodyFastPath,
 } from "../experience/bodyFastPath.ts";
+import { applyTwoLayerVerify } from "../experience/twoLayerVerify.ts";
 import { currentKernelAblation } from "../evaluation/kernelAblation.ts";
 import {
   captureHostEnv,
@@ -986,6 +987,16 @@ export class DriveSolve {
     throwIfAborted();
     const reviewRaw = await this.completeRole(run, "reviewer", reviewPrompt, { signal: input.signal });
     let review = judgeReview(reviewRaw.text, input.message, artifactEvidence(run), act.text, reviewOpts(run.id.value));
+    {
+      const layered = applyTwoLayerVerify({
+        semantic: review,
+        latest: input.message,
+        evidence: artifactEvidence(run),
+        reply: act.text,
+      });
+      run.append("system", layered.line);
+      review = layered.review;
+    }
     rememberFailKlass(failKlass, review);
     const reviewEvents = run.submitReview(review);
     this.events.publish(reviewEvents);

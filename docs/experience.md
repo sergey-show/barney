@@ -87,6 +87,16 @@ body_fast_path_fallthrough: 0|1 · …
 
 Code: `bodyFastPath.ts`.
 
+## Two-layer verify
+
+Deterministic structural checks (artifacts, secret masks, conflicts, URL opens) run as layer 1. Semantic reviewer text is layer 2. A semantic «pass» cannot override a failed deterministic layer.
+
+```text
+verify_layer: det=0|1 sem=0|1 · …
+```
+
+Code: `twoLayerVerify.ts` (wired after `judgeReview`).
+
 ## Mandatory recall before act
 
 Before the act, inject bags ranked by **weight × similarity**:
