@@ -231,6 +231,16 @@ import {
   admitBodyWrite,
   decideSelfReportWrite,
 } from "../experience/bodyAdmission.ts";
+import {
+  appendRejection,
+  formatRejectionLedger,
+  isResubmitBlocked,
+  parseRejectionLedger,
+  REJECTION_LEDGER_KEY,
+  scoreSoftHurt,
+  softHurtDecide,
+  writeFingerprint,
+} from "../experience/softHurtGate.ts";
 import { currentKernelAblation } from "../evaluation/kernelAblation.ts";
 import {
   captureHostEnv,
@@ -1364,6 +1374,28 @@ export class DriveSolve {
         evidence: null as null,
         mode: ablation.bodyWriteMode,
       };
+    const rejectNote = await this.memory.get(REJECTION_LEDGER_KEY);
+    let rejectionLedger = parseRejectionLedger(rejectNote?.body);
+    const pinFingerprint = writeFingerprint(
+      writeDecision.kind,
+      learned.body,
+      klass,
+    );
+    const softScores = scoreSoftHurt({
+      outcomeOk,
+      recovered,
+      pinConvention,
+      predictionError: pe.error,
+      structuralFail,
+      falseSkillCount: skillOutcomes.falseSkills.length,
+      recallUsedButFailed: Boolean(recallSignal.recallUsed && !outcomeOk),
+    });
+    const soft = softHurtDecide({
+      priorAdmit: admission.admit,
+      scores: softScores,
+      mode: ablation.bodyWriteMode,
+      blockedResubmit: isResubmitBlocked(rejectionLedger, pinFingerprint),
+    });
     run.append(
       "system",
       `experience_write: ${writeDecision.kind} · ${writeDecision.reason}`,
@@ -1373,7 +1405,38 @@ export class DriveSolve {
       `body_admission: ${admission.admit ? 1 : 0} · mode=${admission.mode}`
         + ` · evidence=${admission.evidence ?? "none"} · ${admission.reason}`,
     );
-    const mayPin = ablation.learnBody && writeDecision.kind !== "episode_only" && admission.admit;
+    run.append(
+      "system",
+      `soft_hurt: ${soft.admit ? 1 : 0} · net=${soft.scores.net.toFixed(2)}`
+        + ` gain=${soft.scores.gain.toFixed(2)} hurt=${soft.scores.hurt.toFixed(2)}`
+        + ` · ${soft.reason}`,
+    );
+    if (ablation.learnBody && writeDecision.kind !== "episode_only" && !soft.admit) {
+      rejectionLedger = appendRejection(rejectionLedger, {
+        fingerprint: pinFingerprint,
+        writeKind: writeDecision.kind,
+        reason: soft.reason,
+        at: new Date().toISOString(),
+      });
+      await this.remember(run, agent.id.value, {
+        key: REJECTION_LEDGER_KEY,
+        title: "Admission rejection ledger",
+        body: formatRejectionLedger(rejectionLedger),
+        tags: ["admission", "rejection", "soft-hurt"],
+      });
+      if (ablation.learnBody) {
+        selfLedger = upsertShadow(selfLedger, {
+          kind: "rejected",
+          claim: `refused body pin (${writeDecision.kind}): ${soft.reason}`,
+          refs: [`admit:${pinFingerprint}`, learned.key],
+          pathChanged: true,
+          weight: 1,
+        });
+        psyche.samost = projectSamost(psyche.samost, selfLedger);
+        await this.saveSelfLedger(run, agent.id.value, selfLedger);
+      }
+    }
+    const mayPin = ablation.learnBody && writeDecision.kind !== "episode_only" && soft.admit;
     const nextStats = recordStrategyOutcome(
       classStats,
       lastStrategy,

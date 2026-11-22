@@ -40,11 +40,14 @@ Transcript lines:
 ```text
 experience_write: <kind> · <reason>
 body_admission: 0/1 · mode=gated|selfreport · evidence=… · <reason>
+soft_hurt: 0/1 · net=… gain=… hurt=… · <reason>
 ```
+
+**Soft-HURT:** even with evidence, a pin ships only when gain beats hurt (false skills, recall used but failed, etc.). Refusals go into `admission/rejection-ledger` and Shadow `rejected` so the same claim is not resubmitted for a day.
 
 Skills still graduate later via recall+use exam → SkillsLock. Admission only gates the *mint / rule pin*, not the final lock.
 
-Code: `bodyAdmission.ts`, wired in `DriveSolve`.
+Code: `bodyAdmission.ts`, `softHurtGate.ts`, wired in `DriveSolve`.
 
 Skill loop (target):
 
