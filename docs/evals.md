@@ -7,7 +7,8 @@ How to run the evaluation suites. Kernel in `src/`, adapters in `evals/`. Secret
 | Suite | For | LLM | Docker |
 |---|---|---|---|
 | [Four-hand](#1-four-hand) | `transfer_success_lift` — train → shifted test vs fresh | yes | no |
-| [Spaced / transfer](#2-spaced-and-transfer) | Summarize lifts you already saved | no | no |
+| [Spaced / transfer](#2-spaced-and-transfer) | Summarize lifts; live +1d/+7d retest on train homes | mixed | no |
+| [Admission ablation](#2b-admission-ablation) | Gated body writes vs self-report (matched budget) | yes | no |
 | [Unit tests](#3-unit-tests) | Verifiers and model-string parsing | no | no |
 | [Harbor](#4-harbor-terminal-bench) | Terminal-Bench success in Docker | yes | yes |
 | [Live-learn](#5-live-learn) | Two turns on one body | yes | no |
@@ -67,15 +68,38 @@ Output: `fourhand-report.json` and a console verdict. Example: [proof/2026-09-15
 
 ## 2. Spaced and transfer
 
-No live model — they fold JSON you already have:
+Fold JSON you already have:
 
 ```bash
 barney eval spaced path/to/observations.json
 barney eval transfer path/to/observations.json
 ```
 
-Spaced shape: `{ caseId, delayHours, transferSuccessLift }[]`.  
-Immediate is already in four-hand; +24h / +7d need separate runs on the same body.
+Spaced shape: `{ caseId, delayHours, transferSuccessLift }[]`.
+
+Live retention retest (needs LLM + `spaced-anchors.json` from four-hand):
+
+```bash
+barney eval spaced-retest \
+  --anchors ./tmp/fourhand-proof/spaced-anchors.json \
+  --delay 24 \
+  --out ./tmp/spaced-1d
+```
+
+`--delay 24` or `168` forces that probe without waiting wall-clock. Without `--delay`, due probes are chosen from elapsed time since `trainedAt`.
+
+---
+
+## 2b. Admission ablation
+
+Matched-budget contrast: same cases/provider; `gated` vs `selfreport` body writes.
+
+```bash
+barney eval admission --out ./tmp/admission-proof
+# optional: --case house-redact
+```
+
+Env override for a single run: `BARNEY_BODY_WRITE_MODE=selfreport`.
 
 ---
 

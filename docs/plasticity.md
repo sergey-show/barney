@@ -38,6 +38,7 @@ Without transfer lift, pruning is risky — it can drop weight that never got a 
 | Fayr | In code |
 |---|---|
 | Prediction error | `predictionError.ts` → write gate |
+| External body admission | `bodyAdmission.ts` (gated vs selfreport) |
 | Top-k by weight × similarity | `weightedRecall.ts` |
 | Procedural skill | `LessonTrail.procedure` |
 | Dream merge | `mergeFailureRules` |

@@ -227,6 +227,10 @@ import {
   decideExperienceWrite,
   STRUCTURAL_FAIL_CLASSES,
 } from "../experience/experienceLayers.ts";
+import {
+  admitBodyWrite,
+  decideSelfReportWrite,
+} from "../experience/bodyAdmission.ts";
 import { currentKernelAblation } from "../evaluation/kernelAblation.ts";
 import {
   captureHostEnv,
@@ -1312,24 +1316,64 @@ export class DriveSolve {
     });
     const calib = scoreCalibration(predicted, outcomeOk);
     run.append("system", formatCalibrationLine(calib));
-    const writeDecision = ablation.learnBody
-      ? decideExperienceWrite({
+    const recovered = Boolean(
+      lessonTrail.failedFamily
+      && lessonTrail.recoveredBy
+      && lessonTrail.recoveredBy !== lessonTrail.failedFamily,
+    );
+    const structuralFail = STRUCTURAL_FAIL_CLASSES.has(String(review.failureKind ?? ""));
+    const hasConcreteDirective = Boolean(
+      learned.body && /do not|don't|prefer|instead|first|avoid/i.test(learned.body),
+    );
+    const writeDecision = !ablation.learnBody
+      ? { kind: "episode_only" as const, reason: "learnBody=0 · ablation" }
+      : ablation.bodyWriteMode === "selfreport"
+      ? decideSelfReportWrite({
         outcomeOk,
-        recovered: Boolean(
-          lessonTrail.failedFamily
-          && lessonTrail.recoveredBy
-          && lessonTrail.recoveredBy !== lessonTrail.failedFamily,
-        ),
         failClass: klass,
-        structuralFail: STRUCTURAL_FAIL_CLASSES.has(String(review.failureKind ?? "")),
+        hasConcreteDirective,
+        pinConvention,
+        recovered,
+      })
+      : decideExperienceWrite({
+        outcomeOk,
+        recovered,
+        failClass: klass,
+        structuralFail,
         modeRepeatCount: klass !== "general" ? Math.max(1, run.sameFailureCount) : 0,
-        hasConcreteDirective: Boolean(learned.body && /do not|don't|prefer|instead|first|avoid/i.test(learned.body)),
+        hasConcreteDirective,
         pinConvention,
         plasticPressure: pressure.pressure,
         predictionError: pe.error,
+      });
+    const admission = ablation.learnBody && writeDecision.kind !== "episode_only"
+      ? admitBodyWrite({
+        writeKind: writeDecision.kind,
+        mode: ablation.bodyWriteMode,
+        outcomeOk,
+        predictionError: pe.error,
+        structuralFail,
+        pinConvention,
+        hasConcreteDirective,
+        // External check: structural review already judged the artifact path.
+        artifactVerified: outcomeOk && review.verdict === "pass",
       })
-      : { kind: "episode_only" as const, reason: "learnBody=0 · ablation" };
-    run.append("system", `experience_write: ${writeDecision.kind} · ${writeDecision.reason}`);
+      : {
+        admit: false,
+        reason: writeDecision.kind === "episode_only" ? "episode_only" : "learnBody=0",
+        evidence: null as null,
+        mode: ablation.bodyWriteMode,
+      };
+    run.append(
+      "system",
+      `experience_write: ${writeDecision.kind} · ${writeDecision.reason}`,
+    );
+    run.append(
+      "system",
+      `body_admission: ${admission.admit ? 1 : 0} · mode=${admission.mode}`
+        + ` · evidence=${admission.evidence ?? "none"} · ${admission.reason}`,
+    );
+    const mayPin = ablation.learnBody && writeDecision.kind !== "episode_only" && admission.admit;
     const nextStats = recordStrategyOutcome(
       classStats,
       lastStrategy,
@@ -1390,19 +1434,20 @@ export class DriveSolve {
     ];
     if (outcomeOk) {
       // Experience law: episode_only → episode save only (no rule pin, no skill pin).
-      if (ablation.learnBody && writeDecision.kind !== "episode_only") {
+      // External admission required for durable pins (gated rejects self-report alone).
+      if (mayPin) {
         await this.remember(run, agent.id.value, {
           key: learned.key,
           title: learned.title,
           body: formatLessonLine(learned),
-          tags: [...ruleTags, "lesson", writeDecision.kind],
+          tags: [...ruleTags, "lesson", writeDecision.kind, `admit:${admission.evidence ?? "none"}`],
         });
         await this.graph.link(classKey(run.taskClass), learned.key, "learned");
         if (klass !== "general" && klass !== "aborted-unfinished") {
           await this.graph.link(classKey(klass), learned.key, "learned");
         }
       }
-      const created = ablation.learnBody && writeDecision.kind === "skill_candidate"
+      const created = mayPin && writeDecision.kind === "skill_candidate"
         ? await this.growBodyFromRecovery(run, agent, failKlass.last || klass, lessonTrail)
         : "";
       await this.episodes.save(
@@ -1427,12 +1472,12 @@ export class DriveSolve {
         }),
       );
     } else {
-      if (ablation.learnBody && writeDecision.kind === "failure_rule") {
+      if (mayPin && writeDecision.kind === "failure_rule") {
         await this.remember(run, agent.id.value, {
           key: learned.key,
           title: learned.title,
           body: formatLessonLine(learned),
-          tags: [...ruleTags, "fail", "experience", "rule", review.verdict],
+          tags: [...ruleTags, "fail", "experience", "rule", review.verdict, `admit:${admission.evidence ?? "none"}`],
         });
         await this.graph.link(classKey(klass), learned.key, "failed-as");
       }

@@ -49,4 +49,4 @@ workspace-delta steer, sandbox profiles, and start-vs-steer protocol.
 - [Constrain](constrain.md) — OS sandbox  
 - [Operator](operator.md) — steer / SessionLock  
 - [Individuation](individuation.md) — Light × Shadow  
-- [Experience](experience.md) — memory law  
+- [Experience](experience.md) — memory law (external admission before durable pins)  

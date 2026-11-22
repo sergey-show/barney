@@ -7,7 +7,8 @@
 | Набор | Для чего | LLM | Docker |
 |---|---|---|---|
 | [Four-hand](#1-four-hand) | `transfer_success_lift` — train → сдвинутый тест vs fresh | да | нет |
-| [Spaced / transfer](#2-spaced-и-transfer) | Сводка уже собранных lift | нет | нет |
+| [Spaced / transfer](#2-spaced-и-transfer) | Сводка lift; живой retest +1d/+7d | смешанно | нет |
+| [Абляция допуска](#2b-абляция-допуска) | gated vs selfreport при том же бюджете | да | нет |
 | [Юнит-тесты](#3-юнит-тесты) | Верификаторы и разбор model-строк | нет | нет |
 | [Harbor](#4-harbor-terminal-bench) | Success на Terminal-Bench в Docker | да | да |
 | [Live-learn](#5-live-learn) | Два хода на одном теле | да | нет |
@@ -66,15 +67,33 @@ bun run src/presentation/cli/main.ts eval experience --out ./tmp/fourhand-proof
 
 ## 2. Spaced и transfer
 
-Без модели — сводят JSON:
+Сводка JSON:
 
 ```bash
 barney eval spaced path/to/observations.json
 barney eval transfer path/to/observations.json
 ```
 
-Формат spaced: `{ caseId, delayHours, transferSuccessLift }[]`.  
-Immediate уже в four-hand; +24h / +7d — отдельные прогоны на том же теле.
+Формат spaced: `{ caseId, delayHours, transferSuccessLift }[]`.
+
+Живой retest по сохранённым train home (`spaced-anchors.json` из four-hand):
+
+```bash
+barney eval spaced-retest \
+  --anchors ./tmp/fourhand-proof/spaced-anchors.json \
+  --delay 24 \
+  --out ./tmp/spaced-1d
+```
+
+---
+
+## 2b. Абляция допуска
+
+Один бюджет, два режима записи в тело (`gated` vs `selfreport`):
+
+```bash
+barney eval admission --out ./tmp/admission-proof
+```
 
 ---
 

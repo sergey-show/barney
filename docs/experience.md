@@ -26,6 +26,26 @@ Not every PASS writes a skill. Not every FAIL writes a rule. Pins prefer **predi
 | Success + house-convention pin | pinned lesson |
 | Otherwise | episode only (nothing pinned into body rules/skills) |
 
+### External admission (before durable pin)
+
+`decideExperienceWrite` chooses the *kind*. `admitBodyWrite` decides whether the pin may enter the body.
+
+| Mode (`BARNEY_BODY_WRITE_MODE`) | Rule |
+|---|---|
+| `gated` (default) | Reject self-report alone. Need structural fail, prediction error, house convention, verified artifact, or skill exam path. |
+| `selfreport` | Ablation control: pin on the author’s claim (matched-budget contrast). |
+
+Transcript lines:
+
+```text
+experience_write: <kind> · <reason>
+body_admission: 0/1 · mode=gated|selfreport · evidence=… · <reason>
+```
+
+Skills still graduate later via recall+use exam → SkillsLock. Admission only gates the *mint / rule pin*, not the final lock.
+
+Code: `bodyAdmission.ts`, wired in `DriveSolve`.
+
 Skill loop (target):
 
 1. recovery → mint **quarantine** (not in SkillsLock)
@@ -101,7 +121,27 @@ so kernel-test can measure `skill_reuse` when house tokens are applied
 Report: [`docs/proof/2026-09-15-fourhand-qwen38`](./proof/2026-09-15-fourhand-qwen38/).
 
 Spaced schedule (immediate / +1d / +7d): `spacedTransfer.ts`.  
-Immediate is in the four-hand report; later: `barney eval spaced <observations.json>`.
+Immediate is in the four-hand report; train homes are saved as `spaced-anchors.json`.
+
+```bash
+# Later re-probe the same trained bodies (+24h or +168h)
+barney eval spaced-retest --anchors ./tmp/fourhand-proof/spaced-anchors.json --delay 24 --out ./tmp/spaced-1d
+barney eval spaced path/to/spaced-observations.json
+```
+
+### Matched-budget admission ablation
+
+Same cases and provider; only body-write mode differs:
+
+```bash
+barney eval admission --out ./tmp/admission-proof
+```
+
+`lift_delta = gated_lift − selfreport_lift`. Positive ⇒ external admission helps (or at least does not lose) under matched budget.
+
+### Failure-weighted curriculum
+
+`experienceCurriculumSample.ts` reweights hard cases by recent fails / low lift / false-skill rate so scarce experience families run first. Four-hand accepts optional hints via the runner API (`curriculumHints` / `sampleSeed`).
 
 ## Dream consolidation
 

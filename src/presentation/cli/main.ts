@@ -7,10 +7,16 @@ import {
 import {
   formatFourHandReport,
   runFourHandCurriculum,
+  runSpacedAnchorRetest,
 } from "../../application/evaluation/fourHandRunner.ts";
+import {
+  formatGatedVsSelfReport,
+  runGatedVsSelfReport,
+} from "../../application/evaluation/gatedVsSelfReport.ts";
 import {
   planSpacedProbes,
   summarizeSpacedRetention,
+  type SpacedAnchor,
   type SpacedLiftObservation,
 } from "../../application/evaluation/spacedTransfer.ts";
 import { getKernel } from "../../composition/Kernel.ts";
@@ -98,9 +104,76 @@ const spacedEval = defineCommand({
   },
 });
 
+const spacedRetestEval = defineCommand({
+  meta: {
+    name: "spaced-retest",
+    description: "Re-run kernel-test vs fresh on persisted train homes (+1d / +7d)",
+  },
+  args: {
+    anchors: { type: "string", required: true, description: "spaced-anchors.json from four-hand outDir" },
+    observations: { type: "string", description: "Optional prior observations JSON to merge" },
+    delay: { type: "string", description: "Force a delay hours probe (e.g. 24 or 168)" },
+    out: { type: "string", description: "Output directory" },
+  },
+  async run({ args }) {
+    const anchors = await Bun.file(String(args.anchors)).json() as SpacedAnchor[];
+    if (!Array.isArray(anchors)) throw new Error("anchors JSON must be an array");
+    let observations: SpacedLiftObservation[] | undefined;
+    if (args.observations) {
+      const parsed = await Bun.file(String(args.observations)).json() as
+        | SpacedLiftObservation[]
+        | { observations: SpacedLiftObservation[] };
+      observations = Array.isArray(parsed) ? parsed : parsed.observations;
+    }
+    const outDir = args.out
+      ? String(args.out)
+      : `tmp/spaced-retest-${new Date().toISOString().replace(/[:.]/g, "-")}`;
+    const result = await runSpacedAnchorRetest({
+      anchors,
+      observations,
+      delayHours: args.delay != null ? Number(args.delay) : undefined,
+      outDir,
+    });
+    console.log(JSON.stringify({
+      plan: planSpacedProbes(),
+      reports: result.reports,
+      remainingDue: result.anchors.map((a) => ({ caseId: a.caseId, due: a.dueDelayHours })),
+    }, null, 2));
+    console.error(`wrote ${outDir}/spaced-retention.json`);
+  },
+});
+
+const admissionEval = defineCommand({
+  meta: {
+    name: "admission",
+    description: "Matched-budget ablation: gated body writes vs self-report pins",
+  },
+  args: {
+    case: { type: "string", description: "Comma-separated case ids" },
+    out: { type: "string", description: "Output directory" },
+  },
+  async run({ args }) {
+    const caseIds = args.case
+      ? String(args.case).split(",").map((id) => id.trim()).filter(Boolean)
+      : undefined;
+    const outDir = args.out
+      ? String(args.out)
+      : `tmp/admission-${new Date().toISOString().replace(/[:.]/g, "-")}`;
+    const report = await runGatedVsSelfReport({ caseIds, outDir });
+    console.log(formatGatedVsSelfReport(report));
+    console.error(`wrote ${outDir}/gated-vs-selfreport.json`);
+  },
+});
+
 const evalCmd = defineCommand({
   meta: { name: "eval", description: "Evaluation harnesses (experience causality, transfer)" },
-  subCommands: { experience: experienceEval, spaced: spacedEval, transfer },
+  subCommands: {
+    experience: experienceEval,
+    spaced: spacedEval,
+    "spaced-retest": spacedRetestEval,
+    admission: admissionEval,
+    transfer,
+  },
 });
 
 const CLI_HELP = [
