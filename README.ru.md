@@ -8,6 +8,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![GitHub stars](https://img.shields.io/github/stars/sergey-show/barney?style=flat&logo=github)](https://github.com/sergey-show/barney/stargazers)
+[![DOI](https://zenodo.org/badge/1338620027.svg)](https://doi.org/10.5281/zenodo.24495701)
 
 Саморазвивающийся агент.
 

@@ -17,12 +17,21 @@ abstract: >-
 keywords:
   - llm-agent
   - self-development
+  - jungian-individuation
   - executable-verification
   - prediction-error
   - four-hand-protocol
 license: MIT
-version: 0.3.0
+version: 0.4.0
 date-released: "2026-11-24"
+doi: 10.5281/zenodo.24495701
+identifiers:
+  - type: doi
+    value: "10.5281/zenodo.24495701"
+    description: "Concept DOI — resolves to the latest release version."
+  - type: doi
+    value: "10.5281/zenodo.24495702"
+    description: "Version DOI for the v0.4.0 preprint release."
 preferred-citation:
   type: article
   title: "Barney: Individuation as Engineering — Immutable Core, Executable Verification, and Portable Mechanisms for Guarded Body Growth"
@@ -31,5 +40,6 @@ preferred-citation:
       family-names: "Chugay"
   year: 2026
   month: 11
-  url: "https://github.com/sergey-show/barney"
+  doi: 10.5281/zenodo.24495702
+  url: "https://doi.org/10.5281/zenodo.24495702"
   notes: "Preprint, November 2026."
