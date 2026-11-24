@@ -76,5 +76,85 @@ export function forceArtifactNudge(decision: { force: true; path: string; reason
   ].join(" ");
 }
 
+/**
+ * Post-review forced write: after the reviewer pins `Not yet written: PATH` or
+ * `failureKind: "missing-artifact"`, the persist loop must force a write —
+ * not another analysis round. This closes the non-delivery gap the roadmap
+ * names as the main weakness on Harbor: the agent can spend the whole
+ * persist budget re-reading and re-planning while the deliverable stays
+ * unwritten.
+ *
+ * Unlike `decideForceArtifact` (mid-budget, turn-loop), this fires on every
+ * persist iteration where the review verdict is fail with a missing local
+ * artifact. It targets the first unwritten path — from `review.missing` if
+ * the reviewer named one, else from `unwrittenArtifacts(goal, evidence)`.
+ */
+export function decideForceArtifactPostReview(input: {
+  goal: string;
+  evidence: string;
+  /** Review verdict — only fires on non-pass with missing-artifact signal. */
+  reviewVerdict: string;
+  reviewFailureKind?: string;
+  reviewMissing?: string;
+}): ForceArtifactDecision {
+  // Only fire when the reviewer failed and flagged a missing artifact.
+  if (input.reviewVerdict === "pass") return { force: false };
+  const missing = input.reviewMissing ?? "";
+  const hasPathWithExt = /\b\w+\.\w+\b/i.test(missing) || /`\w+\.\w+`/.test(missing);
+  const isMissingArtifact = input.reviewFailureKind === "missing-artifact"
+    || /not yet written/i.test(missing)
+    || (/\bmissing\b/i.test(missing) && hasPathWithExt);
+  if (!isMissingArtifact) return { force: false };
+
+  // Target: first unwritten path. Prefer paths named in review.missing,
+  // fall back to requestedArtifacts(goal) not yet in evidence.
+  const fromReview = extractPathsFromMissing(input.reviewMissing ?? "");
+  const fromGoal = unwrittenArtifacts(input.goal, input.evidence);
+  const target = fromReview.find((p) => !evidenceWrote(input.evidence, p))
+    ?? fromGoal[0];
+  if (!target) return { force: false };
+
+  const alreadyFailed = writeCapturedError(input.evidence, target);
+  return {
+    force: true,
+    path: target,
+    reason: alreadyFailed
+      ? `review pinned ${target} as missing and a prior write captured an error — overwrite with successful minimal output now`
+      : `review pinned ${target} as not yet written — write it now, do not re-analyze`,
+  };
+}
+
+/** Extract backtick-quoted or bare file paths from a review.missing string. */
+function extractPathsFromMissing(missing: string): string[] {
+  const found: string[] = [];
+  // Backtick-quoted paths: `out/report.md`
+  for (const m of missing.matchAll(/`([^`]+\.[A-Za-z][A-Za-z0-9.]*)`/g)) {
+    found.push(m[1] ?? "");
+  }
+  // Bare paths with extension: out/report.md
+  for (const m of missing.matchAll(/\b([\w./-]+\.[A-Za-z][A-Za-z0-9.]*)\b/g)) {
+    const p = m[1] ?? "";
+    if (!found.includes(p)) found.push(p);
+  }
+  return found.filter((p) => p && !/^https?:/i.test(p));
+}
+
+/** True if evidence shows a successful write of path (mirrors reviewJudge.evidenceWrote lightly). */
+function evidenceWrote(evidence: string, path: string): boolean {
+  // fs_write block for path with non-error body, or shell redirect success.
+  const lines = evidence.split("\n");
+  for (let i = 0; i < lines.length - 1; i++) {
+    const line = lines[i] ?? "";
+    if (/^fs_write\b/.test(line) && line.includes(path)) {
+      const body = (lines[i + 1] ?? "").trim();
+      if (body && !/^error:/i.test(body)) return true;
+    }
+  }
+  // ls/stat EXISTS check
+  const base = path.split("/").filter(Boolean).at(-1) ?? path;
+  return new RegExp(`${base.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s+\\d+\\s+bytes\\b`, "i").test(evidence)
+    || new RegExp(`${base.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\bEXISTS`, "i").test(evidence);
+}
+
 // (No re-export: artifactEvidence is a local helper in DriveSolve; the loop
 // already has it in scope and passes evidence into decideForceArtifact.)

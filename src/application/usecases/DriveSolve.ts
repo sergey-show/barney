@@ -258,7 +258,7 @@ import {
 import {
   selectSubtaskFastPath,
 } from "../experience/subtaskIndex.ts";
-import { decideForceArtifact, forceArtifactNudge } from "../autonomy/forceArtifact.ts";
+import { decideForceArtifact, decideForceArtifactPostReview, forceArtifactNudge } from "../autonomy/forceArtifact.ts";
 import {
   annotateProcedureDeopt,
   planStepLocalDeopt,
@@ -2467,6 +2467,30 @@ export class DriveSolve {
         const query = review.knowledgeQuery || review.missing || `${input.run.goal} ${input.latest}`;
         researchNote = await this.collectResearch(input.run, query, input.signal);
         input.run.append("research", researchNote);
+      }
+
+      // B.1: post-review forced write — if review pinned a missing artifact,
+      // inject a forced-write nudge BEFORE the persist strategy nudge so the
+      // agent writes the file instead of re-analyzing. One nudge per persist
+      // iteration; the guard is the review verdict itself (only fires on fail
+      // with missing-artifact signal).
+      const evidenceNow = artifactEvidence(input.run);
+      const postReviewForce = decideForceArtifactPostReview({
+        goal: input.run.goal,
+        evidence: evidenceNow,
+        reviewVerdict: review.verdict,
+        reviewFailureKind: review.failureKind,
+        reviewMissing: review.missing,
+      });
+      if (postReviewForce.force) {
+        trail.push({ role: "user", content: forceArtifactNudge(postReviewForce) });
+        input.run.append("system", `force_artifact_post_review: ${postReviewForce.path}`);
+        this.events.publish([event("run.force_artifact", {
+          runId: input.run.id.value,
+          step: input.extra.n,
+          path: postReviewForce.path,
+          reason: postReviewForce.reason,
+        })]);
       }
 
       trail.push({

@@ -95,3 +95,90 @@ test("nudge is imperative and names the path", () => {
   expect(n).toContain("fs_write");
   expect(n).toContain("minimal");
 });
+
+// --- Post-review forced write (B.1) ---
+
+import { decideForceArtifactPostReview } from "./forceArtifact.ts";
+
+test("post-review: no force on pass verdict", () => {
+  const d = decideForceArtifactPostReview({
+    goal: "write `out/report.md`",
+    evidence: "",
+    reviewVerdict: "pass",
+    reviewFailureKind: "missing-artifact",
+    reviewMissing: "Not yet written: out/report.md",
+  });
+  expect(d.force).toBe(false);
+});
+
+test("post-review: force when fail + missing-artifact kind", () => {
+  const d = decideForceArtifactPostReview({
+    goal: "write `out/report.md`",
+    evidence: "",
+    reviewVerdict: "fail",
+    reviewFailureKind: "missing-artifact",
+    reviewMissing: "Not yet written: out/report.md",
+  });
+  expect(d.force).toBe(true);
+  if (d.force) {
+    expect(d.path).toBe("out/report.md");
+    expect(d.reason).toContain("not yet written");
+  }
+});
+
+test("post-review: force when missing string names a path even without kind", () => {
+  const d = decideForceArtifactPostReview({
+    goal: "write `out/report.md`",
+    evidence: "",
+    reviewVerdict: "fail",
+    reviewMissing: "the file out/report.md is missing",
+  });
+  expect(d.force).toBe(true);
+  if (d.force) expect(d.path).toBe("out/report.md");
+});
+
+test("post-review: no force when fail but no missing-artifact signal", () => {
+  const d = decideForceArtifactPostReview({
+    goal: "write `out/report.md`",
+    evidence: "",
+    reviewVerdict: "fail",
+    reviewFailureKind: "general",
+    reviewMissing: "the answer was too vague",
+  });
+  expect(d.force).toBe(false);
+});
+
+test("post-review: no force when artifact already written", () => {
+  const d = decideForceArtifactPostReview({
+    goal: "write `out/report.md`",
+    evidence: EVIDENCE_WROTE("out/report.md"),
+    reviewVerdict: "fail",
+    reviewFailureKind: "missing-artifact",
+    reviewMissing: "Not yet written: out/report.md",
+  });
+  expect(d.force).toBe(false);
+});
+
+test("post-review: reason notes prior failed write", () => {
+  const d = decideForceArtifactPostReview({
+    goal: "write `out/report.md`",
+    evidence: EVIDENCE_FAILED("out/report.md"),
+    reviewVerdict: "fail",
+    reviewFailureKind: "missing-artifact",
+    reviewMissing: "Not yet written: out/report.md",
+  });
+  expect(d.force).toBe(true);
+  if (d.force) expect(d.reason).toContain("captured an error");
+});
+
+test("post-review: falls back to unwrittenArtifacts(goal) when review missing is vague", () => {
+  const d = decideForceArtifactPostReview({
+    goal: "write `a.txt` and `b.txt`",
+    evidence: EVIDENCE_WROTE("b.txt"),
+    reviewVerdict: "fail",
+    reviewFailureKind: "missing-artifact",
+    reviewMissing: "deliverable missing",
+  });
+  expect(d.force).toBe(true);
+  if (d.force) expect(d.path).toBe("a.txt");
+});
