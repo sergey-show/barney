@@ -40,6 +40,11 @@ import {
   applyFuzzVerdict,
   FUZZ_COOLDOWN_MS,
 } from "../application/autonomy/adversarialFuzz.ts";
+import {
+  admitGraft,
+  graftProvenanceNote,
+  type ExternalCapsule,
+} from "../application/autonomy/capsuleGraft.ts";
 import { loadMcpConfig, listRemoteMcpUrls, mcpExposureMap } from "../application/mcp/mcpConfig.ts";
 import { CompositeOracle } from "../infrastructure/oracle/CompositeOracle.ts";
 import type { OraclePort } from "../application/ports.ts";
@@ -747,6 +752,45 @@ export class Kernel {
       tags: ["autonomy", "adversarial", "fuzz", verdict.outcome, rec.name],
       sourceAgentId: agentId,
     }));
+  }
+
+  /**
+   * barney graft (P.3): import an external skill capsule into quarantine.
+   * The capsule enters as `quarantine` regardless of source status; promotion
+   * to verified/frozen happens only after a ZPD-3 local proof on this agent's
+   * environment (via the existing skill_exam_path / runAutonomyDrill pipeline).
+   */
+  async importCapsule(agentId: string, capsule: ExternalCapsule): Promise<{ admit: boolean; reason: string }> {
+    const agent = await this.agents.get(agentId);
+    if (!agent) return { admit: false, reason: "graft · unknown agent" };
+    const decision = admitGraft({ capsule, targetTaskClass: agent.taskClass });
+    // Always record provenance — admit or reject — so the ledger can audit grafts.
+    await this.memories.save(new MemoryNote({
+      key: slugKey(`autonomy/graft/${new Date().toISOString().slice(0, 13)}/${capsule.name}`),
+      title: `Graft: ${capsule.name}`,
+      body: graftProvenanceNote(capsule, decision),
+      tags: ["autonomy", "graft", decision.admit ? "admit" : "reject", capsule.name],
+      sourceAgentId: agentId,
+    }));
+    if (!decision.admit) return { admit: false, reason: decision.reason };
+    // Persist the quarantine skill body + optional SKILL.md.
+    await this.memories.save(new MemoryNote({
+      key: skillBodyKey(decision.record.name),
+      title: `Body: ${decision.record.name}`,
+      body: JSON.stringify(decision.record),
+      tags: ["body", "skill", "quarantine", "graft", "transfer", decision.record.bornFromClass],
+      sourceAgentId: agentId,
+    }));
+    if (decision.skillMd) {
+      this.skills.writeFile(decision.record.name, "SKILL.md", decision.skillMd);
+    }
+    this.events.publish([event("autonomy.capsule_grafted", {
+      agentId,
+      skill: decision.record.name,
+      klass: decision.record.bornFromClass,
+      bindingHits: decision.bindingHits,
+    })]);
+    return { admit: true, reason: decision.reason };
   }
 
   private async runAutonomyDrill(
