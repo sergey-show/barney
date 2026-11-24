@@ -256,6 +256,9 @@ import {
   selectBodyFastPath,
 } from "../experience/bodyFastPath.ts";
 import {
+  selectSubtaskFastPath,
+} from "../experience/subtaskIndex.ts";
+import {
   annotateProcedureDeopt,
   planStepLocalDeopt,
 } from "../experience/stepLocalDeopt.ts";
@@ -927,6 +930,22 @@ export class DriveSolve {
       })
       : null;
     if (procedureExec?.line) run.append("system", procedureExec.line);
+    // Whole-match miss → fall back to sub-task semantic retrieval: reuse one
+    // proven step of a frozen capsule as a subroutine inside the new plan.
+    // This is what moves skillReuseRate above zero on shifted tasks.
+    const subtaskMatches = ablation.recallExperience && !bodyFastPath
+      ? selectSubtaskFastPath({
+        skills: skillBodyRecs,
+        query: `${run.goal}\n${input.message}`,
+        topK: 2,
+      })
+      : [];
+    if (subtaskMatches.length) {
+      run.append("system", `subtask_matches: ${subtaskMatches.length} · ${subtaskMatches.map((m) => m.skill).join(",")}`);
+    }
+    const subtaskBlock = subtaskMatches.length
+      ? subtaskMatches.map((m) => m.prompt).join("\n\n")
+      : "";
     const actMessages: ChatMessage[] = [
       {
         role: "system",
@@ -950,6 +969,7 @@ export class DriveSolve {
             checklistBlock,
             bodyFastPath?.prompt ?? "",
             procedureExec?.prompt ?? "",
+            subtaskBlock,
           ].filter(Boolean).join("\n\n"),
           projectContext: loadProjectContextFiles(run.worktreePath),
         }),
