@@ -258,6 +258,7 @@ import {
 import {
   selectSubtaskFastPath,
 } from "../experience/subtaskIndex.ts";
+import { decideForceArtifact, forceArtifactNudge } from "../autonomy/forceArtifact.ts";
 import {
   annotateProcedureDeopt,
   planStepLocalDeopt,
@@ -1875,6 +1876,7 @@ export class DriveSolve {
     let tokens = 0;
     let usd = 0;
     const askedOutside = new Set<string>();
+    let forceArtifactSent = false;
 
     const looped = await runAgentToolLoop<ChatResult>({
       config: { maxSteps: MAX_TOOL_ROUNDS, maxKeepWriting: DEFAULT_AGENT_LOOP.maxKeepWriting },
@@ -2096,6 +2098,29 @@ export class DriveSolve {
           convo.push({ role: "user", content: `[steer] ${steer}` });
           run.append("user", `[steer] ${steer}`);
           this.events.publish([event("run.steer_injected", { runId: run.id.value })]);
+        }
+        // Force-Artifact: past the midpoint of the tool-step budget, if the user
+        // asked for a deliverable file that is still not on disk, nudge the agent
+        // to produce a minimal verifiable artifact now — before budget runs out.
+        if (!forceArtifactSent) {
+          const fa = decideForceArtifact({
+            step,
+            maxSteps: MAX_TOOL_ROUNDS,
+            goal: run.goal,
+            evidence: artifactEvidence(run),
+          });
+          if (fa.force) {
+            forceArtifactSent = true;
+            const nudge = forceArtifactNudge(fa);
+            convo.push({ role: "user", content: nudge });
+            run.append("system", `force_artifact: ${fa.path} · step ${step + 1}/${MAX_TOOL_ROUNDS}`);
+            this.events.publish([event("run.force_artifact", {
+              runId: run.id.value,
+              step: step + 1,
+              path: fa.path,
+              reason: fa.reason,
+            })]);
+          }
         }
         return { doom };
       },

@@ -32,7 +32,8 @@ import {
 import { judgeSoftZpd3, judgeZpd3Proof } from "../application/autonomy/zpdProof.ts";
 import { parseSoftZpdHarness } from "../application/autonomy/softZpdHarness.ts";
 import { AutonomyScheduler } from "../application/autonomy/AutonomyScheduler.ts";
-import { isSoftFailClass } from "../application/context/expectationMatrix.ts";
+import { parseExpectationMatrix } from "../application/context/expectationMatrix.ts";
+import { chooseZpdDepth } from "../application/autonomy/zpdDepth.ts";
 import { loadMcpConfig, listRemoteMcpUrls, mcpExposureMap } from "../application/mcp/mcpConfig.ts";
 import { CompositeOracle } from "../infrastructure/oracle/CompositeOracle.ts";
 import type { OraclePort } from "../application/ports.ts";
@@ -736,7 +737,15 @@ export class Kernel {
         const evidence = done.transcript
           .map((item) => `${item.kind}: ${item.text}`)
           .join("\n");
-        if (isSoftFailClass(failClass)) {
+        // Adaptive ZPD depth: soft vs full chosen per task, not per failClass prefix.
+        // Soft path requires an oracle; full path falls back to ZPD-3 transcript proof.
+        const depth = chooseZpdDepth({
+          failClass,
+          goal,
+          hasExpectationsMatrix: parseExpectationMatrix(goal) !== null,
+          hasOracle: this.oracle !== null,
+        });
+        if (depth === "soft") {
           const harness = parseSoftZpdHarness(evidence, failClass);
           const soft = harness
             ? judgeSoftZpd3(this.oracle, harness)
