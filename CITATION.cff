@@ -1,0 +1,35 @@
+cff-version: 1.2.0
+message: "If you use this software or the accompanying preprint, please cite it as below."
+title: "Barney: Individuation as Engineering — Immutable Core, Executable Verification, and Portable Mechanisms for Guarded Body Growth"
+type: software
+authors:
+  - given-names: "Sergey"
+    family-names: "Show"
+    alias: "sergey-show"
+repository-code: "https://github.com/sergey-show/barney"
+url: "https://github.com/sergey-show/barney"
+abstract: >-
+  Barney is a self-developing LLM agent with an immutable Immune Core and a
+  Plastic Body that grows through executable verification (ZPD-3 proofs),
+  an experience-write law opened by prediction error, and a Four-Hand
+  transfer protocol measuring body-causal transfer (ΔS). The kernel is
+  immutable; the body lives in ~/.barney.
+keywords:
+  - llm-agent
+  - self-development
+  - executable-verification
+  - prediction-error
+  - four-hand-protocol
+license: MIT
+version: 0.3.0
+date-released: "2026-11-24"
+preferred-citation:
+  type: article
+  title: "Barney: Individuation as Engineering — Immutable Core, Executable Verification, and Portable Mechanisms for Guarded Body Growth"
+  authors:
+    - given-names: "Sergey"
+      family-names: "Chugay"
+  year: 2026
+  month: 11
+  url: "https://github.com/sergey-show/barney"
+  notes: "Preprint, November 2026."
