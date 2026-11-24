@@ -259,6 +259,7 @@ import {
   selectSubtaskFastPath,
 } from "../experience/subtaskIndex.ts";
 import { decideForceArtifact, decideForceArtifactPostReview, forceArtifactNudge } from "../autonomy/forceArtifact.ts";
+import { StaleTracker, staleProgressNudge } from "../autonomy/idleWatchdog.ts";
 import {
   annotateProcedureDeopt,
   planStepLocalDeopt,
@@ -303,6 +304,8 @@ import { ShellLspDiagnostics } from "../../infrastructure/lsp/ShellLspDiagnostic
 import { createDefaultToolRegistry, parseMcpToolName, type ToolRegistry } from "../tools/ToolRegistry.ts";
 
 const MAX_TOOL_ROUNDS = DEFAULT_AGENT_LOOP.maxSteps;
+/** Idle watchdog: steps without artifact-evidence progress before re-prompt. */
+const STALE_WINDOW_STEPS = 4;
 const WRITE_TOOLS = FILE_TOOLS.filter((tool) => tool.name === "fs_write" || tool.name === "fs_list");
 
 type PsycheState = {
@@ -1877,6 +1880,8 @@ export class DriveSolve {
     let usd = 0;
     const askedOutside = new Set<string>();
     let forceArtifactSent = false;
+    const staleTracker = new StaleTracker(STALE_WINDOW_STEPS);
+    let staleWarned = false;
 
     const looped = await runAgentToolLoop<ChatResult>({
       config: { maxSteps: MAX_TOOL_ROUNDS, maxKeepWriting: DEFAULT_AGENT_LOOP.maxKeepWriting },
@@ -2099,6 +2104,27 @@ export class DriveSolve {
           run.append("user", `[steer] ${steer}`);
           this.events.publish([event("run.steer_injected", { runId: run.id.value })]);
         }
+        // B.2: idle watchdog — track artifact-evidence progress across steps.
+        // If the signature is frozen for STALE_WINDOW_STEPS, inject a re-prompt
+        // nudge so the agent stops re-reading and writes/verifies. One nudge
+        // per act round (staleWarned guard); reset on the next act round.
+        const evidenceNow = artifactEvidence(run);
+        const stepIdx = staleTracker.note(evidenceNow);
+        if (!staleWarned) {
+          const sv = staleTracker.verdict(stepIdx);
+          if (sv.stale) {
+            staleWarned = true;
+            const nudge = staleProgressNudge(sv);
+            convo.push({ role: "user", content: nudge });
+            run.append("system", `stale_watchdog: ${sv.stepsStale} steps · ${sv.reason}`);
+            this.events.publish([event("run.stale_watchdog", {
+              runId: run.id.value,
+              step: step + 1,
+              stepsStale: sv.stepsStale,
+              reason: sv.reason,
+            })]);
+          }
+        }
         // Force-Artifact: past the midpoint of the tool-step budget, if the user
         // asked for a deliverable file that is still not on disk, nudge the agent
         // to produce a minimal verifiable artifact now — before budget runs out.
@@ -2107,7 +2133,7 @@ export class DriveSolve {
             step,
             maxSteps: MAX_TOOL_ROUNDS,
             goal: run.goal,
-            evidence: artifactEvidence(run),
+            evidence: evidenceNow,
           });
           if (fa.force) {
             forceArtifactSent = true;
