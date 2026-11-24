@@ -1,0 +1,12 @@
+{
+  "task_id": "house-harness-flag",
+  "status": "pass",
+  "infra_fail": false,
+  "failure_kind": "general",
+  "tokens": 229826,
+  "usd": 0.459652,
+  "duration_ms": 136445,
+  "steps": 47,
+  "reply_chars": 570,
+  "wrote_artifact": true
+}

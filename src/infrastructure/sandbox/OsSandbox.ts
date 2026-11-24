@@ -1,3 +1,4 @@
+import { realpathSync } from "node:fs";
 import { platform } from "node:os";
 
 export type SandboxProfile = "workspace_write" | "read_only" | "full";
@@ -11,16 +12,51 @@ export type SandboxSpec = {
   profile?: SandboxProfile;
 };
 
+/**
+ * Paths that must be writable inside the macOS seatbelt profile.
+ *
+ * On Darwin, `/var` is a symlink to `/private/var`. `sandbox-exec` matches
+ * `subpath` literally — allowing only `/var/folders/...` denies writes that
+ * resolve through `/private/var/folders/...` (EPERM on `node` / `rm`).
+ * Always include both the given cwd and its realpath (+ /var ↔ /private/var).
+ */
+export function darwinWriteSubpaths(cwd: string): string[] {
+  const paths = new Set<string>();
+  const add = (raw: string) => {
+    const p = raw.replace(/\/+$/, "") || "/";
+    if (p) paths.add(p);
+  };
+  add(cwd);
+  try {
+    add(realpathSync(cwd));
+  } catch {
+    /* cwd may not exist yet at wrap time */
+  }
+  if (cwd.startsWith("/var/")) add(`/private${cwd}`);
+  if (cwd.startsWith("/private/var/")) add(cwd.slice("/private".length));
+  // Also alias any realpath variants already collected.
+  for (const p of [...paths]) {
+    if (p.startsWith("/var/")) paths.add(`/private${p}`);
+    if (p.startsWith("/private/var/")) paths.add(p.slice("/private".length));
+  }
+  return [...paths];
+}
+
+function escapeSeatbeltPath(path: string): string {
+  return path.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
 export function wrapSandboxed(spec: SandboxSpec): { command: string; args: string[]; profile: SandboxProfile } {
   const profile = spec.profile ?? "workspace_write";
   if (profile === "full") {
     return { command: spec.command, args: spec.args, profile };
   }
   if (platform() === "darwin") {
-    const cwd = spec.cwd.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
     const writeRule = profile === "read_only"
       ? `(deny file-write*)`
-      : `(allow file-write* (subpath "${cwd}"))`;
+      : darwinWriteSubpaths(spec.cwd)
+        .map((p) => `(allow file-write* (subpath "${escapeSeatbeltPath(p)}"))`)
+        .join("\n");
     const sandboxProfile = `(version 1)
 (deny default)
 (allow process-exec)

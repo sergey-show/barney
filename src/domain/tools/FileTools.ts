@@ -166,7 +166,7 @@ export const FILE_TOOLS: ToolSpec[] = [
   },
   {
     name: "fs_remove",
-    description: "Delete a file or empty directory in the worktree. Cannot delete the worktree root.",
+    description: "Delete a file or directory (recursive) in the worktree. Cannot delete the worktree root.",
     parameters: {
       type: "object",
       properties: { path: { type: "string", description: "Relative path" } },

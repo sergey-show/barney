@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { NodeWorkspace } from "./NodeWorkspace.ts";
@@ -106,6 +106,13 @@ const appWs = new NodeWorkspace(appRoot, (text) => text);
 await appWs.write("out/report.txt", "inside-jail");
 if ((await appWs.read("out/report.txt")) !== "inside-jail") {
   throw new Error("relative path should resolve inside the worktree root");
+}
+
+mkdirSync(join(appRoot, "junk", "build"), { recursive: true });
+writeFileSync(join(appRoot, "junk", "build", "decoy.txt"), "x");
+await appWs.remove("junk/build");
+if (existsSync(join(appRoot, "junk", "build"))) {
+  throw new Error("fs_remove should recursively delete directories");
 }
 
 {

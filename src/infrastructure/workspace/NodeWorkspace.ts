@@ -207,7 +207,9 @@ export class NodeWorkspace implements WorkspacePort {
   async remove(rel: string): Promise<string> {
     const abs = this.resolveSafe(rel);
     if (resolve(abs) === resolve(this.root)) throw new Error("cannot remove worktree root");
-    rmSync(abs, { recursive: false, force: false });
+    // Directories (e.g. junk/build) must go recursively; files stay non-recursive.
+    const isDir = existsSync(abs) && statSync(abs).isDirectory();
+    rmSync(abs, { recursive: isDir, force: false });
     return `removed ${rel}`;
   }
 

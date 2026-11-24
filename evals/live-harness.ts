@@ -26,6 +26,7 @@ import { MemoryNote } from "../src/domain/memory/MemoryNote.ts";
 import { LlmProvider } from "../src/domain/provider/LlmProvider.ts";
 import type { Run } from "../src/domain/run/Run.ts";
 import { harborSolvePolicy, parseHarborModel } from "./harbor/run.ts";
+import { buildScorecard } from "./harbor/scorecard.ts";
 
 const FLAG = "HARVEST-OK-27";
 const GOAL = [
@@ -148,6 +149,7 @@ async function main(): Promise<void> {
     worktreePath,
   });
 
+  const startedAt = Date.now();
   let run: Run;
   try {
     run = await ports.driveSolve.execute({
@@ -159,6 +161,7 @@ async function main(): Promise<void> {
   } finally {
     off();
   }
+  const durationMs = Date.now() - startedAt;
 
   for (const item of run.transcript) {
     if (item.kind === "system" && /risk_review:/.test(item.text)) riskLines.push(item.text);
@@ -176,6 +179,21 @@ async function main(): Promise<void> {
   const worldState = ports.driveSolve.worldState(run.id.value);
   const policyNote = await kernel.memories.get(`policy/exec/${agent.id.value}`);
   const ledgerNote = await kernel.memories.get(`self/ledger/${agent.id.value}`);
+
+  const deliveryMarkers = {
+    forceArtifact: run.transcript.filter((item) => item.kind === "system" && /force_artifact/.test(item.text)).map((item) => item.text),
+    staleWatchdog: run.transcript.filter((item) => item.kind === "system" && /stale_watchdog/.test(item.text)).map((item) => item.text),
+    doneGate: run.transcript.filter((item) => item.kind === "system" && /done_gate:/.test(item.text)).map((item) => item.text),
+  };
+  const scorecard = buildScorecard({
+    task_id: "house-harness-flag",
+    status: flagOk && buildGone && seedOk && harvestOk && approvalHit ? "done" : (run.status === "aborted" ? "aborted" : "failed"),
+    transcript: run.transcript.map((item) => ({ kind: item.kind, text: item.text })),
+    tokens: run.budget.tokensUsed,
+    usd: run.budget.usdUsed,
+    duration_ms: durationMs,
+    failureKind: flagOk ? undefined : "missing-artifact",
+  });
 
   const report = {
     caseId: "house-harness-flag",
@@ -196,6 +214,8 @@ async function main(): Promise<void> {
       execPolicyPersisted: Boolean(policyNote),
       selfLedgerPersisted: Boolean(ledgerNote),
     },
+    deliveryMarkers,
+    scorecard,
     approvals,
     riskLines,
     worldState: worldState ?? null,
@@ -208,8 +228,11 @@ async function main(): Promise<void> {
 
   const reportPath = join(outDir, "harness-report.json");
   writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`);
+  writeFileSync(join(outDir, "scorecard.json"), `${JSON.stringify(scorecard, null, 2)}\n`);
+  writeFileSync(join(outDir, "transcript.jsonl"), run.transcript.map((item) => JSON.stringify({ kind: item.kind, text: item.text })).join("\n") + "\n");
   process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
   log(`wrote ${reportPath}`);
+  log(`wrote ${join(outDir, "scorecard.json")}`);
 
   const pass = flagOk && buildGone && seedOk && harvestOk && approvalHit;
   if (!pass) {

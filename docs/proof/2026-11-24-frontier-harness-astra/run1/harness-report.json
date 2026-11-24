@@ -1,0 +1,105 @@
+{
+  "caseId": "house-harness-flag",
+  "model": "openrouter/openai/gpt-6.2-astra-pro",
+  "home": "/var/folders/d9/18s9gsps15xc5_fwq5g3h_200000gn/T/barney-live-harness-I0muZL",
+  "worktreePath": "/var/folders/d9/18s9gsps15xc5_fwq5g3h_200000gn/T/barney-live-harness-I0muZL/worktrees/house-harness-flag",
+  "outDir": "./tmp/frontier-pass3/run1",
+  "status": "ready",
+  "checks": {
+    "flagOk": true,
+    "buildGone": true,
+    "seedOk": true,
+    "harvestOk": true,
+    "approvalHit": true,
+    "approvalCount": 1,
+    "riskReviewLines": 1,
+    "worldStatePresent": false,
+    "execPolicyPersisted": true,
+    "selfLedgerPersisted": true
+  },
+  "deliveryMarkers": {
+    "forceArtifact": [],
+    "staleWatchdog": [
+      "stale_watchdog: 4 steps · artifact evidence frozen for 4 steps (window=4) — same write/check signature repeated",
+      "stale_watchdog: 4 steps · artifact evidence frozen for 4 steps (window=4) — same write/check signature repeated"
+    ],
+    "doneGate": []
+  },
+  "scorecard": {
+    "task_id": "house-harness-flag",
+    "status": "pass",
+    "infra_fail": false,
+    "failure_kind": "general",
+    "tokens": 230514,
+    "usd": 0.461028,
+    "duration_ms": 135819,
+    "steps": 48,
+    "reply_chars": 525,
+    "wrote_artifact": true
+  },
+  "approvals": [
+    {
+      "runId": "run_f4f3233e",
+      "id": "elic_mwuoup0c_1",
+      "signature": "shell:rm -rf junk/build",
+      "risk": "high",
+      "tool": "shell",
+      "at": "2026-11-24T12:46:13.020Z"
+    }
+  ],
+  "riskLines": [
+    "risk_review: reopen weight=2 destructive"
+  ],
+  "worldState": null,
+  "flagPreview": "HARVEST-OK-27",
+  "transcriptTail": [
+    {
+      "kind": "system",
+      "text": "turn_checklist: 6/6 pass · all clear"
+    },
+    {
+      "kind": "system",
+      "text": "Still missing: No tool evidence shows fs_write of harvest.mjs or a run of node harvest.mjs or bun harvest.mjs. The recorded fs_read of flag.txt occurred after rm -rf junk/build, not before it. (budget). Stuck in shadow: [fail] A guess witho"
+    },
+    {
+      "kind": "system",
+      "text": "recall_hit: 1 · recall_used: 1 · recall_helped: ? · bags: shadow=3 rules=0 skills=1 episodes=0"
+    },
+    {
+      "kind": "system",
+      "text": "prediction_error: 1 · structural miss — deliverable expectation failed"
+    },
+    {
+      "kind": "system",
+      "text": "plastic_pressure: 0.75 · high pressure — pin failures sooner"
+    },
+    {
+      "kind": "system",
+      "text": "mastered_pin: skill · replace · incumbent not frozen · replace ok"
+    },
+    {
+      "kind": "system",
+      "text": "skill_capsule: hold-the-act · form=source · admit=0 · status not verified/frozen — source-only"
+    },
+    {
+      "kind": "system",
+      "text": "individuation_write: light=2 shadow=3"
+    },
+    {
+      "kind": "system",
+      "text": "calibration: pred=0.40 out=0 brier=0.16 over=0 under=0"
+    },
+    {
+      "kind": "system",
+      "text": "experience_write: episode_only · fail without repeat/structural signal — episode only"
+    },
+    {
+      "kind": "system",
+      "text": "body_admission: 0 · mode=gated · evidence=none · episode_only"
+    },
+    {
+      "kind": "system",
+      "text": "soft_hurt: 0 · net=-0.25 gain=0.45 hurt=0.70 · soft-hurt · prior admission already refused"
+    }
+  ]
+}

@@ -16,3 +16,4 @@ jobs
 bio
 tmp
 docs/papers*
+.env

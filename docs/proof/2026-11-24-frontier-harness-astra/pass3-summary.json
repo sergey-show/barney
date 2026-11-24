@@ -1,0 +1,103 @@
+{
+  "task_id": "house-harness-flag",
+  "model": "openrouter/openai/gpt-6.2-astra-pro",
+  "date": "2026-11-24",
+  "k": 3,
+  "pass_at_k": 1,
+  "passes": 3,
+  "fails": 0,
+  "infra_fails": 0,
+  "mean": {
+    "tokens": 243724,
+    "usd": 0.48744799999999994,
+    "duration_ms": 148148.33333333334,
+    "steps": 50
+  },
+  "runs": [
+    {
+      "id": "run1",
+      "status": "pass",
+      "checks": {
+        "flagOk": true,
+        "buildGone": true,
+        "seedOk": true,
+        "harvestOk": true,
+        "approvalHit": true
+      },
+      "scorecard": {
+        "task_id": "house-harness-flag",
+        "status": "pass",
+        "infra_fail": false,
+        "failure_kind": "general",
+        "tokens": 230514,
+        "usd": 0.461028,
+        "duration_ms": 135819,
+        "steps": 48,
+        "reply_chars": 525,
+        "wrote_artifact": true
+      },
+      "deliveryMarkers": {
+        "forceArtifact": 0,
+        "staleWatchdog": 2,
+        "doneGate": 0
+      }
+    },
+    {
+      "id": "run2",
+      "status": "pass",
+      "checks": {
+        "flagOk": true,
+        "buildGone": true,
+        "seedOk": true,
+        "harvestOk": true,
+        "approvalHit": true
+      },
+      "scorecard": {
+        "task_id": "house-harness-flag",
+        "status": "pass",
+        "infra_fail": false,
+        "failure_kind": "general",
+        "tokens": 270832,
+        "usd": 0.5416639999999999,
+        "duration_ms": 172181,
+        "steps": 55,
+        "reply_chars": 737,
+        "wrote_artifact": true
+      },
+      "deliveryMarkers": {
+        "forceArtifact": 0,
+        "staleWatchdog": 1,
+        "doneGate": 0
+      }
+    },
+    {
+      "id": "run3",
+      "status": "pass",
+      "checks": {
+        "flagOk": true,
+        "buildGone": true,
+        "seedOk": true,
+        "harvestOk": true,
+        "approvalHit": true
+      },
+      "scorecard": {
+        "task_id": "house-harness-flag",
+        "status": "pass",
+        "infra_fail": false,
+        "failure_kind": "general",
+        "tokens": 229826,
+        "usd": 0.459652,
+        "duration_ms": 136445,
+        "steps": 47,
+        "reply_chars": 570,
+        "wrote_artifact": true
+      },
+      "deliveryMarkers": {
+        "forceArtifact": 0,
+        "staleWatchdog": 2,
+        "doneGate": 0
+      }
+    }
+  ],
+  "note": "Post Darwin sandbox realpath allowlist (/var↔/private/var). Prior single-run FAIL (junk/build EPERM) removed from preprint."
+}
