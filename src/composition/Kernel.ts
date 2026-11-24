@@ -45,6 +45,11 @@ import {
   graftProvenanceNote,
   type ExternalCapsule,
 } from "../application/autonomy/capsuleGraft.ts";
+import {
+  buildDomainSubBodies,
+  formatDomainSubBodiesHint,
+  gapsFromDomainSubBodies,
+} from "../application/autonomy/domainSubBodies.ts";
 import { loadMcpConfig, listRemoteMcpUrls, mcpExposureMap } from "../application/mcp/mcpConfig.ts";
 import { CompositeOracle } from "../infrastructure/oracle/CompositeOracle.ts";
 import type { OraclePort } from "../application/ports.ts";
@@ -700,6 +705,17 @@ export class Kernel {
       title: "Self ledger (Light/Shadow)",
       body: formatSelfLedger(ledger),
       tags: ["self", "individuation", "ledger", "plasticity"],
+      sourceAgentId: agentId,
+    }));
+    // Domain sub-bodies (P.2): cluster skills by domain, score each cluster,
+    // persist the sub-body map so individuation can report per-domain bands.
+    const subBodies = buildDomainSubBodies(skillRecs);
+    const subBodyGaps = gapsFromDomainSubBodies(subBodies);
+    await this.memories.save(new MemoryNote({
+      key: slugKey(`capability/domains/${new Date().toISOString().slice(0, 13)}`),
+      title: "Domain sub-bodies",
+      body: JSON.stringify({ subBodies, gaps: subBodyGaps, hint: formatDomainSubBodiesHint(subBodies) }, null, 2),
+      tags: ["capability", "domains", "sub-bodies", "individuation", ...(subBodyGaps.length ? ["drill-target"] : [])],
       sourceAgentId: agentId,
     }));
     const samostNote = await this.memories.get(samostKey(agentId));
