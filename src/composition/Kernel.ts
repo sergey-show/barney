@@ -34,6 +34,12 @@ import { parseSoftZpdHarness } from "../application/autonomy/softZpdHarness.ts";
 import { AutonomyScheduler } from "../application/autonomy/AutonomyScheduler.ts";
 import { parseExpectationMatrix } from "../application/context/expectationMatrix.ts";
 import { chooseZpdDepth } from "../application/autonomy/zpdDepth.ts";
+import {
+  buildAdversarialTriggers,
+  judgeFuzzOutcome,
+  applyFuzzVerdict,
+  FUZZ_COOLDOWN_MS,
+} from "../application/autonomy/adversarialFuzz.ts";
 import { loadMcpConfig, listRemoteMcpUrls, mcpExposureMap } from "../application/mcp/mcpConfig.ts";
 import { CompositeOracle } from "../infrastructure/oracle/CompositeOracle.ts";
 import type { OraclePort } from "../application/ports.ts";
@@ -184,6 +190,8 @@ export class Kernel {
   private readonly research = new CompositeResearch(new Context7FirstResearch(), new DuckDuckGoSearch());
   /** Session grants for fs_* paths outside the worktree (prefix → allowed). */
   private readonly outsideGrants = new Map<string, Set<string>>();
+  /** Per-agent adversarial-fuzz cooldown state: agentId → (skillName → lastFuzzedMs). */
+  private readonly fuzzState = new Map<string, Map<string, number>>();
 
   constructor(home = join(homedir(), ".barney")) {
     this.home = home;
@@ -382,6 +390,9 @@ export class Kernel {
       pendingSelfRun: !operatorBusy && pending
         ? { agendaId: pending.id, goal: pending.goal, failClass: pending.failClass }
         : null,
+      frozenSkills: skillRecs.filter((rec) => rec.status === "frozen"),
+      fuzzLastAt: this.fuzzLastAt(agent.id.value),
+      fuzzCooldownMs: FUZZ_COOLDOWN_MS,
     });
     if (work.item === "none") return null;
     const designed = await this.memories.get(designKey(agent.id.value));
@@ -493,6 +504,8 @@ export class Kernel {
       });
     } else if (work.item === "plastic_sleep") {
       await this.runPlasticSleep(agent.id.value, skillRecs, recent);
+    } else if (work.item === "adversarial_fuzz") {
+      await this.runAdversarialFuzz(agent.id.value, work.skillName, skillRecs);
     }
     if (
       work.item === "seed_samost"
@@ -502,6 +515,7 @@ export class Kernel {
       || work.item === "self_run"
       || work.item === "plastic_sleep"
       || work.item === "inner_think"
+      || work.item === "adversarial_fuzz"
     ) {
       await this.become(agent.id.value, `become: idle ${work.item}`);
     }
@@ -694,6 +708,45 @@ export class Kernel {
         sourceAgentId: agentId,
       }));
     }
+  }
+
+  /** Per-skill last-fuzzed timestamps, persisted across ticks. */
+  private fuzzLastAt(agentId: string): Map<string, number> {
+    const raw = this.fuzzState.get(agentId);
+    return raw ? new Map(raw) : new Map();
+  }
+
+  private async runAdversarialFuzz(
+    agentId: string,
+    skillName: string,
+    skillRecs: ReturnType<typeof parseSkillBody>[],
+  ): Promise<void> {
+    // Cooldown is tracked per-skill in this.fuzzState, not via AutonomyScheduler.
+    const rec = skillRecs.find((item) => item.name === skillName && item.status === "frozen");
+    if (!rec) return; // skill was demoted/removed between tick and dispatch
+    const variants = buildAdversarialTriggers(rec);
+    if (!variants.length) return;
+    const verdict = judgeFuzzOutcome({ rec, variants, skills: skillRecs });
+    const next = applyFuzzVerdict(rec, verdict);
+    // Persist the updated skill body.
+    await this.memories.save(new MemoryNote({
+      key: skillBodyKey(rec.name),
+      title: `Body: ${rec.name}`,
+      body: JSON.stringify(next),
+      tags: ["body", "skill", next.status, "adversarial", "fuzz", verdict.outcome],
+      sourceAgentId: agentId,
+    }));
+    // Record last-fuzzed timestamp so cooldown applies.
+    const state = this.fuzzLastAt(agentId);
+    state.set(rec.name, Date.now());
+    this.fuzzState.set(agentId, state);
+    await this.memories.save(new MemoryNote({
+      key: slugKey(`autonomy/fuzz/${new Date().toISOString().slice(0, 13)}`),
+      title: `Adversarial fuzz: ${rec.name}`,
+      body: `${verdict.outcome} · ${verdict.reason}`,
+      tags: ["autonomy", "adversarial", "fuzz", verdict.outcome, rec.name],
+      sourceAgentId: agentId,
+    }));
   }
 
   private async runAutonomyDrill(

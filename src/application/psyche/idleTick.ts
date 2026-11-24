@@ -8,10 +8,12 @@ import {
   INNER_THINK_IDLE_MS,
   INNER_THINK_WAITING_COOLDOWN_MS,
 } from "./innerThink.ts";
+import { selectFuzzTarget } from "../autonomy/adversarialFuzz.ts";
 
 export const LONG_IDLE_MS = 10 * 60_000;
 export const STUDY_COOLDOWN_MS = 15 * 60_000;
 export const SELF_RUN_IDLE_MS = 10 * 60_000;
+export const ADVERSARIAL_FUZZ_IDLE_MS = 12 * 60_000;
 
 export type IdleItem =
   | { item: "seed_samost" }
@@ -22,6 +24,7 @@ export type IdleItem =
   | { item: "inner_think"; reason: "waiting" | "idle" }
   | { item: "self_run"; agendaId: string; goal: string; failClass: string }
   | { item: "study"; topic: string }
+  | { item: "adversarial_fuzz"; skillName: string }
   | { item: "none" };
 
 export function nextIdleWork(input: {
@@ -41,6 +44,12 @@ export function nextIdleWork(input: {
   /** Session parked with an armed wake — think while waiting, not forever. */
   waitingOnWake?: boolean;
   pendingSelfRun?: { agendaId: string; goal: string; failClass: string } | null;
+  /** Frozen skill bodies available for adversarial fuzzing. */
+  frozenSkills?: import("../context/bodyStability.ts").SkillBodyRecord[];
+  /** Per-skill last-fuzzed timestamps (ms). */
+  fuzzLastAt?: Map<string, number>;
+  fuzzCooldownMs?: number;
+  fuzzIdleMs?: number;
 }): IdleItem {
   if (!input.samostPresent) return { item: "seed_samost" };
 
@@ -109,6 +118,21 @@ export function nextIdleWork(input: {
     && hasMaterial
   ) {
     return { item: "inner_think", reason: "idle" };
+  }
+
+  // Adversarial ZPD fuzz: probe a frozen skill against trigger variants.
+  // Runs last (lowest idle priority) and only after inner_think has fired,
+  // so fuzzing never crowds out reflection. Scoped to the skill's own
+  // capsule domain — see adversarialFuzz.ts.
+  const fuzzIdle = input.fuzzIdleMs ?? ADVERSARIAL_FUZZ_IDLE_MS;
+  if (idleMs >= fuzzIdle && (input.frozenSkills?.length ?? 0) > 0) {
+    const target = selectFuzzTarget({
+      skills: input.frozenSkills ?? [],
+      nowMs: Date.now(),
+      lastFuzzedAt: input.fuzzLastAt,
+      cooldownMs: input.fuzzCooldownMs,
+    });
+    if (target) return { item: "adversarial_fuzz", skillName: target.name };
   }
 
   return { item: "none" };
