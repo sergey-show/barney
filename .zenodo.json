@@ -1,0 +1,32 @@
+{
+  "title": "Barney: Individuation as Engineering — Immutable Core, Executable Verification, and Portable Mechanisms for Guarded Body Growth",
+  "description": "Barney is a self-developing LLM agent with an immutable Immune Core and a Plastic Body that grows through executable verification (ZPD-3 proofs), an experience-write law opened by prediction error, and a Four-Hand transfer protocol measuring body-causal transfer (ΔS). The kernel is immutable; the body lives in ~/.barney. This preprint accompanies the v0.4.0 code release and contains the Russian and English PDFs of the paper.",
+  "creators": [
+    {
+      "name": "Sergey Chugay",
+      "affiliation": "Independent Researcher"
+    }
+  ],
+  "keywords": [
+    "llm-agent",
+    "self-development",
+    "jungian-individuation",
+    "executable-verification",
+    "prediction-error",
+    "four-hand-protocol",
+    "preprint"
+  ],
+  "license": "MIT",
+  "access_right": "open",
+  "upload_type": "publication",
+  "publication_type": "preprint",
+  "version": "0.4.0",
+  "language": "eng",
+  "related_identifiers": [
+    {
+      "identifier": "https://github.com/sergey-show/barney",
+      "relation": "isSupplementTo",
+      "resource_type": "software"
+    }
+  ]
+}
