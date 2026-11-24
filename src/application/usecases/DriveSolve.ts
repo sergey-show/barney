@@ -260,6 +260,7 @@ import {
 } from "../experience/subtaskIndex.ts";
 import { decideForceArtifact, decideForceArtifactPostReview, forceArtifactNudge } from "../autonomy/forceArtifact.ts";
 import { StaleTracker, staleProgressNudge } from "../autonomy/idleWatchdog.ts";
+import { doneGate } from "../autonomy/doneGate.ts";
 import {
   annotateProcedureDeopt,
   planStepLocalDeopt,
@@ -1178,6 +1179,35 @@ export class DriveSolve {
             summary: risk.summary,
             missing: risk.summary,
           };
+        }
+        // B.3: done-gate — post-review discipline for sanitize/regex classes.
+        // Fires only on pass; blocks done if a gate fails and routes to persist.
+        // (Allowlist gate is handled by executeTools permission checks — a write
+        // outside worktree without a grant is already blocked there; done-gate
+        // focuses on sanitize/regex verify discipline that permission cannot catch.)
+        if (review.verdict === "pass") {
+          const gate = doneGate({
+            goal: run.goal,
+            evidence: artifactEvidence(run),
+            reviewVerdict: review.verdict,
+            worktreePath: run.worktreePath,
+            outsideGrants: new Set(), // allowlist gate is a no-op here; see comment above
+            failClass: failureClass({ kind: review.failureKind, aborted: false }),
+          });
+          if (!gate.allow) {
+            run.append("system", `done_gate: ${gate.gate} · ${gate.reason}`);
+            this.events.publish([event("run.done_gate", {
+              runId: run.id.value,
+              gate: gate.gate,
+              reason: gate.reason,
+            })]);
+            review = {
+              ...review,
+              verdict: "fail",
+              missing: gate.reason,
+              failureKind: gate.gate === "sanitize" ? "masked-deliverable" : gate.gate === "regex_test" ? "unrun-program" : review.failureKind,
+            };
+          }
         }
       }
       if (gated.ok === false || review.verdict !== "pass") {
