@@ -5,6 +5,7 @@
  */
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { appendFile } from "node:fs/promises";
 import { MemoryNote } from "../../src/domain/memory/MemoryNote.ts";
 import { LlmProvider } from "../../src/domain/provider/LlmProvider.ts";
 import { canonDraft, formatDesignNote } from "../../src/application/psyche/design.ts";
@@ -13,6 +14,7 @@ import { EnsureDefaultAgent } from "../../src/application/usecases/EnsureDefault
 import { Kernel } from "../../src/composition/Kernel.ts";
 import type { Run } from "../../src/domain/run/Run.ts";
 import type { StartRun } from "../../src/application/usecases/StartRun.ts";
+import { buildScorecard } from "./scorecard.ts";
 import type { DriveSolve } from "../../src/application/usecases/DriveSolve.ts";
 
 export type HarborModel = {
@@ -88,7 +90,7 @@ function internals(kernel: Kernel): KernelInternals {
 async function main(): Promise<void> {
   // Harbor tasks often target host OS paths (/etc, …). Auto-approve only in this probe.
   process.env.BARNEY_AUTO_APPROVE_OUTSIDE ??= "1";
-  const { instruction, modelSpec, home } = parseArgs(process.argv.slice(2));
+  const { instruction, modelSpec, home, scorecardOut } = parseArgs(process.argv.slice(2));
   const kernel = new Kernel(home);
   const ports = internals(kernel);
   const agent = await new EnsureDefaultAgent(kernel.agents).execute();
@@ -112,6 +114,7 @@ async function main(): Promise<void> {
   if (timeoutMs > 0) {
     process.stderr.write(`harbor: AbortSignal.timeout(${timeoutMs}ms)\n`);
   }
+  const started = Date.now();
   const finished = await ports.driveSolve.execute({
     runId: created.id.value,
     message: instruction,
@@ -127,16 +130,40 @@ async function main(): Promise<void> {
     usd: finished.budget.usdUsed,
     worktree: finished.worktreePath,
   })}\n`);
+  // B.5: if --scorecard <path> given, write a JSON scorecard entry for this run.
+  if (scorecardOut) {
+    const entry = buildScorecard({
+      task_id: instruction.slice(0, 80),
+      status: finished.status,
+      transcript: finished.transcript.map((item) => ({ kind: item.kind, text: item.text })),
+      tokens: finished.budget.tokensUsed,
+      usd: finished.budget.usdUsed,
+      duration_ms: Date.now() - started,
+    });
+    const line = JSON.stringify(entry) + "\n";
+    if (scorecardOut === "-") {
+      process.stdout.write(line);
+    } else {
+      await appendFile(scorecardOut, line);
+      process.stderr.write(`harbor: scorecard appended to ${scorecardOut}\n`);
+    }
+  }
 }
 
-export function parseArgs(argv: string[]): { instruction: string; modelSpec: string | undefined; home: string } {
+export function parseArgs(argv: string[]): {
+  instruction: string;
+  modelSpec: string | undefined;
+  home: string;
+  scorecardOut: string | undefined;
+} {
   let modelSpec = process.env.BARNEY_MODEL;
   let home = process.env.BARNEY_HOME || join(homedir(), ".barney");
+  let scorecardOut: string | undefined;
   const rest: string[] = [];
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i] ?? "";
     if (arg === "--help" || arg === "-h") {
-      process.stdout.write("bun evals/harbor/run.ts --model provider/model -- <instruction>\n");
+      process.stdout.write("bun evals/harbor/run.ts --model provider/model [--scorecard out.jsonl|-] -- <instruction>\n");
       process.exit(0);
     }
     if (arg === "--model" || arg === "-m") {
@@ -151,6 +178,14 @@ export function parseArgs(argv: string[]): { instruction: string; modelSpec: str
       home = argv[++i] ?? home;
       continue;
     }
+    if (arg === "--scorecard") {
+      scorecardOut = argv[++i] ?? "-";
+      continue;
+    }
+    if (arg.startsWith("--scorecard=")) {
+      scorecardOut = arg.slice("--scorecard=".length) || "-";
+      continue;
+    }
     if (arg === "--") {
       rest.push(...argv.slice(i + 1));
       break;
@@ -158,8 +193,8 @@ export function parseArgs(argv: string[]): { instruction: string; modelSpec: str
     rest.push(arg);
   }
   const instruction = rest.join(" ").trim();
-  if (!instruction) throw new Error("usage: bun evals/harbor/run.ts --model provider/model -- <instruction>");
-  return { instruction, modelSpec, home };
+  if (!instruction) throw new Error("usage: bun evals/harbor/run.ts --model provider/model [--scorecard out.jsonl|-] -- <instruction>");
+  return { instruction, modelSpec, home, scorecardOut };
 }
 
 /** Wall-clock AbortSignal + optional maxAttempts hint for Harbor forceFull solves. */
